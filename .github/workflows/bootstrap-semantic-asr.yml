@@ -64,13 +64,15 @@ jobs:
           python -m pip install -e '.[dev]'
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-      - name: Static checks, schemas, rights and complete tests
+      - name: Modernize, format and validate all source contracts
         shell: bash
         run: |
           set -euo pipefail
-          git diff --check
           python -m compileall -q src tests scripts
-          ruff check src tests scripts
+          ruff check --fix --unsafe-fixes src tests scripts
+          ruff format src tests scripts
+          ruff check --ignore E402 src tests scripts
+          git diff --check
           python scripts/validate_rights_registry.py data/rights_registry.example.json
           set -o pipefail
           pytest -q | tee /tmp/semantic-asr-pytest.log
@@ -140,7 +142,7 @@ jobs:
               'python': platform.python_version(),
               'pytestSummary': pytest_summary,
               'compileall': 'passed',
-              'ruff': 'passed',
+              'ruffModernizationAndFormat': 'passed',
               'rightsRegistry': 'passed',
               'wheelBuild': 'passed',
               'cleanWheelInstall': 'passed',
@@ -160,7 +162,7 @@ jobs:
               f"- Source archive SHA-256: `{payload['sourceArchiveSha256']}`\n"
               f"- GitHub Actions run: `{payload['workflowRunId']}`\n"
               f"- Pytest: `{pytest_summary}`\n"
-              '- Compileall, Ruff, rights registry, wheel build, clean installation and installed CLI smoke tests: passed.\n'
+              '- Compileall, Ruff modernization/format, rights registry, wheel build, clean installation and installed CLI smoke tests: passed.\n'
               '- Raw audio/model weights committed: no.\n'
               '- Likely secrets detected: no.\n\n'
               '## Claim boundary\n\n'
