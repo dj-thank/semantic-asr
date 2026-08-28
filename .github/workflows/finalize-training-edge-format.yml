@@ -9,6 +9,7 @@ on:
 permissions:
   contents: write
 
+# The first commit installs this workflow; this follow-up push executes it.
 concurrency:
   group: semantic-asr-final-training-edge-format
   cancel-in-progress: false
