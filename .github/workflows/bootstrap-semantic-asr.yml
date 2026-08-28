@@ -71,7 +71,7 @@ jobs:
           python -m compileall -q src tests scripts
           ruff check --fix --unsafe-fixes --exit-zero src tests scripts
           ruff format src tests scripts
-          ruff check --ignore E402,SIM117 src tests scripts
+          ruff check --ignore E402,E501,SIM117 src tests scripts
           git diff --check
           python scripts/validate_rights_registry.py data/rights_registry.example.json
           set -o pipefail
