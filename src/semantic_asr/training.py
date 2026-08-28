@@ -76,12 +76,28 @@ def _ctc_loss(
     )
 
 
-def _frame_cross_entropy(logits: Tensor, labels: Tensor, *, name: str) -> Tensor:
+def _frame_cross_entropy(
+    logits: Tensor,
+    labels: Tensor,
+    *,
+    input_lengths: Tensor,
+    name: str,
+) -> Tensor | None:
     if labels.shape != logits.shape[:2]:
         raise ValueError(f"{name} labels must match encoder frame shape")
     valid = labels.ne(-100)
     if torch.any(valid & ((labels < 0) | (labels >= logits.shape[-1]))):
         raise ValueError(f"{name} label is outside class range")
+
+    frame_index = torch.arange(logits.shape[1], device=logits.device).unsqueeze(0)
+    beyond_encoder = frame_index >= input_lengths.unsqueeze(1)
+    if torch.any(valid & beyond_encoder):
+        raise ValueError(f"{name} labels contain values beyond encoder_lengths")
+
+    if not torch.any(valid):
+        # Mean-reduced cross entropy is NaN when every target is ignored. A fully
+        # padded auxiliary head carries no supervision and contributes no loss.
+        return None
     return F.cross_entropy(
         logits.reshape(-1, logits.shape[-1]),
         labels.reshape(-1),
@@ -196,12 +212,22 @@ class SemanticASRMultiTask(nn.Module):
             else None
         )
         boundary_loss = (
-            _frame_cross_entropy(boundary_logits, boundary_labels, name="boundary")
+            _frame_cross_entropy(
+                boundary_logits,
+                boundary_labels,
+                input_lengths=encoder_lengths,
+                name="boundary",
+            )
             if boundary_labels is not None
             else None
         )
         accent_loss = (
-            _frame_cross_entropy(accent_logits, accent_labels, name="accent")
+            _frame_cross_entropy(
+                accent_logits,
+                accent_labels,
+                input_lengths=encoder_lengths,
+                name="accent",
+            )
             if accent_labels is not None
             else None
         )
@@ -209,6 +235,7 @@ class SemanticASRMultiTask(nn.Module):
             _frame_cross_entropy(
                 preservation_logits,
                 preservation_labels,
+                input_lengths=encoder_lengths,
                 name="preservation",
             )
             if preservation_labels is not None
