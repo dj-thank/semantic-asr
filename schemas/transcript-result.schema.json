@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantic-asr.invalid/schemas/transcript-result.schema.json",
+  "title": "Semantic ASR long-form result",
+  "type": "object",
+  "required": [
+    "source_name",
+    "source_audio_sha256",
+    "duration_ms",
+    "observed_text",
+    "normalized_text",
+    "segments",
+    "evidence_sha256",
+    "diagnostics"
+  ],
+  "properties": {
+    "source_name": { "type": "string", "minLength": 1 },
+    "source_audio_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "duration_ms": { "type": "integer", "minimum": 1 },
+    "observed_text": { "type": "string" },
+    "normalized_text": { "type": "string" },
+    "evidence_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["window", "observed", "normalized", "diagnostics"],
+        "properties": {
+          "window": {
+            "type": "object",
+            "required": ["index", "start_ms", "end_ms"],
+            "properties": {
+              "index": { "type": "integer", "minimum": 0 },
+              "start_ms": { "type": "integer", "minimum": 0 },
+              "end_ms": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "observed": {
+            "type": "object",
+            "required": ["text", "selected_candidate_id", "evidence_sha256", "decision"],
+            "properties": {
+              "text": { "type": "string" },
+              "selected_candidate_id": { "type": "string" },
+              "evidence_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "decision": { "enum": ["accepted", "provisional"] }
+            },
+            "additionalProperties": true
+          },
+          "normalized": {
+            "type": "object",
+            "required": ["text", "observed_evidence_sha256", "mode"],
+            "properties": {
+              "text": { "type": "string" },
+              "observed_evidence_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "mode": { "enum": ["deterministic", "rank-only", "guarded-rewrite"] },
+              "semantic_change_warnings": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": true
+          },
+          "diagnostics": { "type": "object" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "diagnostics": { "type": "object" },
+    "contract": { "type": "object" }
+  },
+  "additionalProperties": true
+}

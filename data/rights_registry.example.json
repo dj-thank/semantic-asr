@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "1.0.0",
+  "assets": [
+    {
+      "assetId": "jmdict-current",
+      "sourceName": "JMdict",
+      "sourceUrl": "https://www.edrdg.org/jmdict/j_jmdict.html",
+      "version": "REPLACE_WITH_EXACT_SNAPSHOT",
+      "licenseName": "REVIEW_EXACT_TERMS",
+      "licenseUrl": "https://www.edrdg.org/edrdg/licence.html",
+      "train": "review",
+      "deriveFeatures": "review",
+      "redistributeRaw": "deny",
+      "exportSpeakerId": "deny",
+      "attribution": "Electronic Dictionary Research and Development Group",
+      "reviewedAt": "2026-08-29",
+      "notes": "Pin an exact snapshot and complete legal review before use."
+    },
+    {
+      "assetId": "common-voice-ja-release",
+      "sourceName": "Mozilla Common Voice Japanese",
+      "sourceUrl": "https://commonvoice.mozilla.org/",
+      "version": "REPLACE_WITH_EXACT_RELEASE",
+      "licenseName": "REVIEW_RELEASE_CARD",
+      "licenseUrl": "https://commonvoice.mozilla.org/en/datasets",
+      "train": "review",
+      "deriveFeatures": "review",
+      "redistributeRaw": "deny",
+      "exportSpeakerId": "deny",
+      "attribution": "Mozilla Common Voice contributors",
+      "reviewedAt": "2026-08-29",
+      "notes": "Client IDs must be HMAC-pseudonymized before local indexing."
+    },
+    {
+      "assetId": "reazonspeech-release",
+      "sourceName": "ReazonSpeech",
+      "sourceUrl": "https://github.com/reazon-research/ReazonSpeech",
+      "version": "REPLACE_WITH_EXACT_RELEASE",
+      "licenseName": "REVIEW_EXACT_ASSET_LICENSE",
+      "licenseUrl": "https://github.com/reazon-research/ReazonSpeech",
+      "train": "review",
+      "deriveFeatures": "review",
+      "redistributeRaw": "deny",
+      "exportSpeakerId": "deny",
+      "attribution": "Reazon Human Interaction Lab",
+      "reviewedAt": "2026-08-29",
+      "notes": "Do not infer one licence for every component or source programme."
+    }
+  ]
+}
