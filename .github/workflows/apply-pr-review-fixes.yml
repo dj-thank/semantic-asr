@@ -27,7 +27,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Apply deterministic review fixes
-        run: python scripts/apply_pr_review_fixes_v2.py
+        run: python scripts/apply_pr_review_fixes_v3.py
       - name: Install and validate
         run: |
           python -m pip install --upgrade pip setuptools wheel
