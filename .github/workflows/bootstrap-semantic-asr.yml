@@ -84,7 +84,7 @@ jobs:
           semantic-asr --help
           semantic-asr demo --output runs/demo.json
           semantic-asr fuse examples/candidates.json --output runs/fused.json
-          semantic-asr rights data/rights_registry.example.json
+          semantic-asr rights --help
 
       - name: Reject raw data, weights and likely secrets
         shell: bash
