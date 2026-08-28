@@ -18,7 +18,7 @@ jobs:
     if: ${{ !contains(github.event.head_commit.message || '', '[semantic-asr-foundation]') }}
     runs-on: ubuntu-latest
     env:
-      SOURCE_ARCHIVE_SHA256: 8687f0ab78ae996e158fb5a045d3a2792fce621ac469b7888173ddf42ef6489
+      SOURCE_ARCHIVE_SHA256: 8687f0ab78ae996e158fb5a045d3a2792fce621ac469b7888173ddf42ef6489b
       BOOTSTRAP_SOURCE_COMMIT: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
