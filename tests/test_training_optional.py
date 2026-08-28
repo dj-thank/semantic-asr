@@ -60,3 +60,41 @@ def test_ctc_blank_and_padding_are_rejected() -> None:
             input_features=features,
             mora_labels=torch.tensor([[1, -100, 2]]),
         )
+
+
+def test_all_ignored_frame_labels_do_not_create_nan_loss() -> None:
+    model = SemanticASRMultiTask(
+        FakeEncoder(4),
+        hidden_size=4,
+        mora_vocab_size=6,
+        phone_vocab_size=7,
+    )
+    ignored = torch.full((1, 4), -100, dtype=torch.long)
+    output = model(
+        input_features=torch.randn(1, 4, 4),
+        boundary_labels=ignored,
+        accent_labels=ignored,
+        preservation_labels=ignored,
+    )
+    assert output.loss is None
+    assert output.boundary_loss is None
+    assert output.accent_loss is None
+    assert output.preservation_loss is None
+
+
+def test_frame_labels_beyond_encoder_length_fail_closed() -> None:
+    model = SemanticASRMultiTask(
+        FakeEncoder(4),
+        hidden_size=4,
+        mora_vocab_size=6,
+        phone_vocab_size=7,
+    )
+    with pytest.raises(
+        ValueError,
+        match="boundary labels contain values beyond encoder_lengths",
+    ):
+        model(
+            input_features=torch.randn(1, 4, 4),
+            encoder_lengths=torch.tensor([2]),
+            boundary_labels=torch.tensor([[0, 1, 0, -100]]),
+        )
