@@ -1,0 +1,50 @@
+name: Finalize Semantic ASR training edge fix
+
+on:
+  push:
+    branches:
+      - codex/semantic-asr-foundation-v0.1.0
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: semantic-asr-final-training-edge-format
+  cancel-in-progress: false
+
+jobs:
+  format-test-and-commit:
+    if: ${{ !contains(github.event.head_commit.message || '', '[final-training-edge]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/semantic-asr-foundation-v0.1.0
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install tools and CPU PyTorch
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e '.[dev]'
+      - name: Format and validate final edge-case fix
+        run: |
+          ruff format src/semantic_asr/training.py tests/test_training_optional.py
+          ruff check --fix --unsafe-fixes src/semantic_asr/training.py tests/test_training_optional.py
+          ruff format --check src tests scripts
+          ruff check --ignore E402,E501,SIM117 src tests scripts
+          python -m compileall -q src tests scripts
+          git diff --check
+          pytest -q
+      - name: Commit only after every regression passes
+        run: |
+          rm -f .github/workflows/finalize-training-edge-format.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m '[final-training-edge] Safely ignore fully padded auxiliary heads'
+          git push origin HEAD:codex/semantic-asr-foundation-v0.1.0
