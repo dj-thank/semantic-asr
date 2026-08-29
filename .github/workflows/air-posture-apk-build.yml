@@ -38,7 +38,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/air-posture-src"
-          tar -xzf tools/air-posture-build/source.tgz -C "$RUNNER_TEMP/air-posture-src"
+          base64 --decode tools/air-posture-build/source.tgz.b64 > "$RUNNER_TEMP/air-posture-src/source.tgz"
+          tar -tzf "$RUNNER_TEMP/air-posture-src/source.tgz" >/dev/null
+          tar -xzf "$RUNNER_TEMP/air-posture-src/source.tgz" -C "$RUNNER_TEMP/air-posture-src"
           test -f "$RUNNER_TEMP/air-posture-src/fitbit-air-posture/settings.gradle.kts"
 
       - name: Unit tests and debug APK
