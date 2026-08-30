@@ -1,50 +1,91 @@
-name: Semantic ASR final formatter
+name: Semantic ASR CI
 
 on:
+  pull_request:
   push:
     branches:
-      - codex/semantic-asr-foundation-v0.1.0
+      - main
   workflow_dispatch:
+  workflow_call:
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  PYTHONUTF8: "1"
 
 concurrency:
-  group: semantic-asr-final-formatter
-  cancel-in-progress: false
+  group: semantic-asr-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  format-test-and-commit:
-    if: ${{ !contains(github.event.head_commit.message || '', '[ruff-finalized]') }}
-    runs-on: ubuntu-latest
+  core:
+    name: Core (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: codex/semantic-asr-foundation-v0.1.0
-          fetch-depth: 0
+          persist-credentials: false
+      - name: Record the checked source revision
+        run: git show -s --format='HEAD=%H%nTREE=%T' HEAD
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install base validation environment
+        run: python -m pip install -e '.[dev]'
+      - name: Require the dependency-free test path
+        run: python -c "import importlib.util; assert importlib.util.find_spec('torch') is None"
+      - name: Check formatting without modifying source
+        run: python -m ruff format --check src tests scripts
+      - name: Check lint without modifying source
+        run: python -m ruff check src tests scripts
+      - name: Compile
+        run: python -m compileall -q src tests scripts
+      - name: Run base tests
+        run: python -m pytest -q
+      - name: Run the model-free demo
+        run: semantic-asr demo --output runs/demo.json
+      - name: Build a wheel
+        run: python -m build --wheel
+      - name: Verify tracked source stayed unchanged
+        run: git diff --exit-code
+
+  training-cpu:
+    name: Optional training (CPU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Record the checked source revision
+        run: git show -s --format='HEAD=%H%nTREE=%T' HEAD
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install full validation environment
+      - name: Install CPU-only training test dependencies
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'torch>=2.4' --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -e '.[dev]'
-      - name: Format and validate
+      - name: Require PyTorch and run real auxiliary-head tests
         run: |
-          ruff format src tests scripts
-          ruff check --fix --unsafe-fixes src tests scripts
-          ruff format --check src tests scripts
-          ruff check --ignore E402,E501,SIM117 src tests scripts
-          python -m compileall -q src tests scripts
-          git diff --check
-          pytest -q
-      - name: Commit the exact formatted result
-        run: |
-          rm -f .github/workflows/finalize-training-edge-format.yml
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m '[ruff-finalized] Format and validate final training edge fix'
-          git push origin HEAD:codex/semantic-asr-foundation-v0.1.0
+          python -c "import torch; print(torch.__version__); assert torch.empty(0).device.type == 'cpu'"
+          python -m pytest -q tests/test_training_optional.py
+      - name: Verify tracked source stayed unchanged
+        run: git diff --exit-code

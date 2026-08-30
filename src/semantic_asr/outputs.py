@@ -38,7 +38,8 @@ def render_vtt(result: LongformResult, *, normalized: bool = True) -> str:
         text = segment.normalized.text if normalized else segment.observed.text
         output.extend(
             [
-                f"{_timecode(segment.window.start_ms, vtt=True)} --> {_timecode(segment.window.end_ms, vtt=True)}",
+                f"{_timecode(segment.window.start_ms, vtt=True)} --> "
+                f"{_timecode(segment.window.end_ms, vtt=True)}",
                 text.strip(),
                 "",
             ]

@@ -10,12 +10,19 @@ Before opening a pull request:
 
 ```bash
 python -m pip install -e '.[dev]'
-python -m compileall -q src tests
-ruff check src tests
-pytest -q
+python -m compileall -q src tests scripts
+python -m ruff format --check src tests scripts
+python -m ruff check src tests scripts
+python -m pytest -q
 semantic-asr demo --output runs/demo.json
 python -m build --wheel
 ```
+
+The base environment intentionally has no PyTorch and skips the optional training module.
+Also validate the auxiliary heads in a separate CPU environment with `torch>=2.4` installed:
+`python -m pytest -q tests/test_training_optional.py`.
+CI checks Linux/Python 3.11 and 3.12, Windows/Python 3.12, and the CPU training path.
+Workflows validate the event revision without formatting, committing, or pushing source changes.
 
 Requirements:
 

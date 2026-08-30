@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 import apply_pr_review_fixes_v2 as review
@@ -12,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def patch_semantic_lattice() -> None:
     path = ROOT / "src/semantic_asr/semantic_lattice.py"
     text = path.read_text(encoding="utf-8")
-    old = '''def _candidate_slice(
+    old = """def _candidate_slice(
     pivot: Sequence[str], candidate: Sequence[str], start: int, end: int
 ) -> tuple[str, ...]:
     matcher = SequenceMatcher(a=list(pivot), b=list(candidate), autojunk=False)
@@ -23,7 +22,7 @@ def patch_semantic_lattice() -> None:
         if overlaps or insertion_at_boundary:
             output.extend(candidate[j1:j2])
     return tuple(output)
-'''
+"""
     new = '''def _candidate_slice(
     pivot: Sequence[str], candidate: Sequence[str], start: int, end: int
 ) -> tuple[str, ...]:

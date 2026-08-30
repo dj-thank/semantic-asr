@@ -1,11 +1,11 @@
+from importlib import import_module
 from types import SimpleNamespace
 
 import pytest
 
 torch = pytest.importorskip("torch")
-from torch import nn
-
-from semantic_asr.training import SemanticASRMultiTask
+nn = torch.nn
+SemanticASRMultiTask = import_module("semantic_asr.training").SemanticASRMultiTask
 
 
 class FakeEncoder(nn.Module):

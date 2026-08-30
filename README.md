@@ -377,13 +377,20 @@ learner error
 ## 検証
 
 ```bash
-python -m compileall -q src tests
-pytest -q
+python -m compileall -q src tests scripts
+python -m ruff format --check src tests scripts
+python -m ruff check src tests scripts
+python -m pytest -q
 semantic-asr demo --output runs/demo.json
 python -m build --wheel
 ```
 
 現在のmodel-freeテストは、モーラ、改変検出、校正、融合、Semantic Lattice、証拠計画、キャッシュ、長時間処理、出力、教師安全境界、評価指標、PyTorch補助ヘッドを検証します。
+
+基本環境ではPyTorchを入れず、補助ヘッドのテストは意図的にskipします。別のCPU環境へ
+`torch>=2.4`を導入し、`python -m pytest -q tests/test_training_optional.py`で実行してください。
+CIはLinux/Python 3.11・3.12、Windows/Python 3.12、CPU補助ヘッドを分けて検証し、
+ソースの自動整形・commit・pushは行いません。実音声やモデル重みはこの検証に不要です。
 
 ### 主張しないもの
 
