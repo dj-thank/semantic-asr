@@ -118,10 +118,14 @@ class EvidenceCache:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(self.path, timeout=30)
-        self.connection.execute("PRAGMA journal_mode=WAL")
-        self.connection.execute("PRAGMA synchronous=NORMAL")
-        self.connection.execute("PRAGMA busy_timeout=30000")
-        self._migrate()
+        try:
+            self.connection.execute("PRAGMA journal_mode=WAL")
+            self.connection.execute("PRAGMA synchronous=NORMAL")
+            self.connection.execute("PRAGMA busy_timeout=30000")
+            self._migrate()
+        except BaseException:
+            self.connection.close()
+            raise
 
     def _migrate(self) -> None:
         self.connection.executescript(

@@ -46,11 +46,13 @@ def test_candidate_roundtrip_preserves_all_evidence() -> None:
         mora_units=(MoraUnit(0, "キョ"), MoraUnit(1, "ウ")),
         metadata={"adapter": "fake", "sourceSupport": ["fake"]},
     )
-    with tempfile.TemporaryDirectory() as directory:
-        with EvidenceCache(Path(directory) / "cache.sqlite3") as cache:
-            cache.put_candidates(make_key(), [candidate])
-            assert cache.get_candidates(make_key()) == [candidate]
-            assert cache.count("base") == 1
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        EvidenceCache(Path(directory) / "cache.sqlite3") as cache,
+    ):
+        cache.put_candidates(make_key(), [candidate])
+        assert cache.get_candidates(make_key()) == [candidate]
+        assert cache.count("base") == 1
 
 
 def test_cache_key_changes_with_context_hotwords_and_calibration() -> None:
@@ -71,10 +73,12 @@ def test_teacher_abstention_roundtrip() -> None:
         model="local-qwen",
         protocol="ollama",
     )
-    with tempfile.TemporaryDirectory() as directory:
-        with EvidenceCache(Path(directory) / "cache.sqlite3") as cache:
-            cache.put_teacher(make_key(namespace="teacher"), entry)
-            assert cache.get_teacher(make_key(namespace="teacher")) == entry
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        EvidenceCache(Path(directory) / "cache.sqlite3") as cache,
+    ):
+        cache.put_teacher(make_key(namespace="teacher"), entry)
+        assert cache.get_teacher(make_key(namespace="teacher")) == entry
 
 
 def test_unknown_cache_schema_fails_closed() -> None:
@@ -87,3 +91,41 @@ def test_unknown_cache_schema_fails_closed() -> None:
         connection.close()
         with pytest.raises(RuntimeError):
             EvidenceCache(path)
+
+
+@pytest.mark.parametrize("failure_stage", ["pragma", "migration"])
+def test_cache_initialization_failure_closes_connection(
+    tmp_path, monkeypatch, failure_stage
+) -> None:
+    connections = []
+
+    class TrackedConnection(sqlite3.Connection):
+        def execute(self, sql, *args, **kwargs):
+            if failure_stage == "pragma" and sql == "PRAGMA journal_mode=WAL":
+                raise sqlite3.OperationalError("synthetic pragma failure")
+            return super().execute(sql, *args, **kwargs)
+
+    original_connect = sqlite3.connect
+
+    def tracked_connect(*args, **kwargs):
+        connection = original_connect(*args, factory=TrackedConnection, **kwargs)
+        connections.append(connection)
+        return connection
+
+    def reject_migration(self):
+        raise RuntimeError("synthetic migration failure")
+
+    monkeypatch.setattr(sqlite3, "connect", tracked_connect)
+    if failure_stage == "migration":
+        monkeypatch.setattr(EvidenceCache, "_migrate", reject_migration)
+
+    expected_error = sqlite3.OperationalError if failure_stage == "pragma" else RuntimeError
+    try:
+        with pytest.raises(expected_error, match=f"synthetic {failure_stage} failure"):
+            EvidenceCache(tmp_path / "rejected.sqlite3")
+        assert len(connections) == 1
+        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+            connections[0].execute("SELECT 1")
+    finally:
+        for connection in connections:
+            connection.close()
