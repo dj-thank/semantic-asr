@@ -9,6 +9,7 @@ import pytest
 from semantic_asr.adapters import DecodeRequest
 from semantic_asr.advanced_adapters import AdaptiveRerankingAdapter
 from semantic_asr.cached_lm import HashedLMProbabilityCache
+from semantic_asr.calibration import CalibrationProfile
 from semantic_asr.contracts import CandidateEvidence
 from semantic_asr.ranker_training import (
     RankerTrainingConfig,
@@ -94,7 +95,9 @@ def test_hashed_probability_cache_backoff_and_roundtrip() -> None:
             path,
             key=b"0123456789abcdef",
         )
-        assert restored.lookup([1, 2], 3).log_probability == pytest.approx(exact.log_probability)
+        assert restored.lookup([1, 2], 3).log_probability == pytest.approx(
+            exact.log_probability
+        )
 
 
 class _FakeBase:
@@ -150,7 +153,7 @@ class _TextRanker:
         }
 
 
-def test_adaptive_reranking_adapter_injects_calibrated_language_evidence() -> None:
+def test_uncalibrated_reranker_can_reorder_but_not_enter_fusion() -> None:
     adapter = AdaptiveRerankingAdapter(
         _FakeBase(),
         _TextRanker(),
@@ -158,7 +161,33 @@ def test_adaptive_reranking_adapter_injects_calibrated_language_evidence() -> No
     )
     output = adapter.decode(DecodeRequest("unused.wav", hypotheses=2))
     assert 2 <= len(output) <= 3
-    assert output[0].lexical is not None
-    assert output[0].metadata["rerankerSource"] == "text-ranker"
+    assert output[0].text == "明日は行きません"
+    assert output[0].lexical is None
+    assert output[0].metadata["rerankerEvidenceInjected"] is False
     assert output[0].metadata["adaptiveK"]["k"] == len(output)
-    assert output[0].metadata["evidenceScores"][0]["kind"] == "logit"
+    scores = output[0].metadata["evidenceScores"]
+    assert len(scores) == 1
+    assert scores[0]["kind"] == "logit"
+    assert scores[0]["calibrated"] is False
+
+
+def test_heldout_calibrated_reranker_may_enter_lexical_fusion() -> None:
+    profile = CalibrationProfile(
+        name="fixture-heldout-logit",
+        input_kind="logit",
+        temperature=1.0,
+        version="test",
+    )
+    adapter = AdaptiveRerankingAdapter(
+        _FakeBase(),
+        _TextRanker(),
+        maximum_hypotheses=6,
+        calibration_profile=profile,
+    )
+    output = adapter.decode(DecodeRequest("unused.wav", hypotheses=2))
+    assert output[0].lexical is not None
+    assert output[0].metadata["rerankerEvidenceInjected"] is True
+    scores = output[0].metadata["evidenceScores"]
+    assert [row["kind"] for row in scores] == ["logit", "probability"]
+    assert scores[1]["calibrated"] is True
+    assert scores[1]["calibrationDigest"] == profile.digest
