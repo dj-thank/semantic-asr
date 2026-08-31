@@ -1,0 +1,76 @@
+name: Finalize Semantic ASR v0.2 branch
+
+on:
+  push:
+    branches:
+      - codex/semantic-asr-v0.2-research-stack
+    paths:
+      - .github/workflows/v02-finalize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Allow the branch-scoped formatter to settle
+        run: sleep 60
+
+      - name: Check out latest implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: codex/semantic-asr-v0.2-research-stack
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install validation tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install 'pytest>=8,<9' 'ruff==0.12.12' 'jsonschema>=4,<5'
+
+      - name: Apply deterministic branch metadata and review fixes
+        run: python scripts/finalize_v02_branch.py
+
+      - name: Apply final safe lint fixes and formatting
+        run: |
+          ruff check . --fix
+          ruff format .
+
+      - name: Validate finalized tree
+        run: |
+          ruff check .
+          ruff format --check .
+          python -m compileall -q src tests scripts examples
+          pytest -q
+          python scripts/validate_research_registry.py
+          python scripts/validate_v02_manifest.py examples/v02-experiment-manifest.json
+          python examples/v02_cpu_demo.py
+          python scripts/train_reranker_v2.py \
+            examples/v02-ranking-groups.jsonl \
+            --output .finalize-artifacts/reranker.json \
+            --epochs 80 \
+            --seed 17
+
+      - name: Remove the temporary branch autofix workflow
+        run: rm -f .github/workflows/v02-autofix.yml
+
+      - name: Commit and push the validated final tree
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No finalization changes required.'
+            exit 0
+          fi
+          git config user.name 'semantic-asr-ci'
+          git config user.email '204638875+dj-thank@users.noreply.github.com'
+          git add --all
+          git commit -m 'chore: finalize validated Semantic ASR v0.2 research stack'
+          git pull --rebase origin codex/semantic-asr-v0.2-research-stack
+          git push origin HEAD:codex/semantic-asr-v0.2-research-stack
