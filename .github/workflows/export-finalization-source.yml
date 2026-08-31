@@ -1,0 +1,27 @@
+name: Export finalization source
+
+on:
+  push:
+    branches:
+      - codex/semantic-asr-v0.2-finalization
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Create exact source archive
+        run: tar --exclude=.git -czf semantic-asr-source.tar.gz .
+      - name: Upload exact source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-asr-finalization-source
+          path: semantic-asr-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
