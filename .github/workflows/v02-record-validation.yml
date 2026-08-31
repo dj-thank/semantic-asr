@@ -1,0 +1,142 @@
+name: Record Semantic ASR v0.2 validation
+
+on:
+  workflow_run:
+    workflows:
+      - Semantic ASR v0.2 CI
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+concurrency:
+  group: semantic-asr-v02-validation-record
+  cancel-in-progress: true
+
+jobs:
+  record:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'codex/semantic-asr-v0.2-research-stack' &&
+      !startsWith(github.event.workflow_run.head_commit.message, 'ci: record Semantic ASR v0.2 validation')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out latest implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: codex/semantic-asr-v0.2-research-stack
+          fetch-depth: 0
+
+      - name: Record only when the green run tested current HEAD
+        id: current
+        shell: bash
+        run: |
+          current_sha="$(git rev-parse HEAD)"
+          tested_sha='${{ github.event.workflow_run.head_sha }}'
+          echo "current_sha=${current_sha}" >> "$GITHUB_OUTPUT"
+          if [[ "$current_sha" != "$tested_sha" ]]; then
+            echo "Current HEAD ${current_sha} moved beyond tested SHA ${tested_sha}; waiting for the newer CI run."
+            echo 'record=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'record=true' >> "$GITHUB_OUTPUT"
+
+      - name: Write validation evidence
+        if: steps.current.outputs.record == 'true'
+        shell: bash
+        env:
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          CREATED_AT: ${{ github.event.workflow_run.created_at }}
+          UPDATED_AT: ${{ github.event.workflow_run.updated_at }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          payload = {
+              "schemaVersion": 1,
+              "branch": "codex/semantic-asr-v0.2-research-stack",
+              "testedCommit": os.environ["TESTED_SHA"],
+              "workflow": "Semantic ASR v0.2 CI",
+              "workflowRunId": int(os.environ["RUN_ID"]),
+              "workflowRunNumber": int(os.environ["RUN_NUMBER"]),
+              "workflowRunUrl": os.environ["RUN_URL"],
+              "createdAt": os.environ["CREATED_AT"],
+              "completedAt": os.environ["UPDATED_AT"],
+              "conclusion": "success",
+              "validated": [
+                  "Ruff lint and format",
+                  "Python 3.11 model-free tests",
+                  "Python 3.12 model-free tests",
+                  "compileall",
+                  "research attribution registry",
+                  "CPU-only v0.2 demonstration",
+                  "constrained reranker training smoke",
+                  "source and wheel build",
+                  "clean wheel installation",
+                  "repository hygiene",
+                  "CPU PyTorch v0.1/v0.2 optional training tests",
+              ],
+              "claimBoundary": (
+                  "CI validates code, deterministic algorithms, packaging and CPU training "
+                  "smokes; it does not establish real-model Japanese ASR accuracy improvement."
+              ),
+          }
+          canonical = json.dumps(
+              payload,
+              ensure_ascii=False,
+              sort_keys=True,
+              separators=(",", ":"),
+              allow_nan=False,
+          )
+          payload["evidenceDigest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+          Path("VALIDATION_V0.2.json").write_text(
+              json.dumps(
+                  payload,
+                  ensure_ascii=False,
+                  indent=2,
+                  sort_keys=True,
+                  allow_nan=False,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          markdown = f"""# Semantic ASR v0.2 validation
+
+- Branch: `{payload['branch']}`
+- Tested commit: `{payload['testedCommit']}`
+- Workflow: {payload['workflow']}
+- Run: {payload['workflowRunUrl']}
+- Conclusion: **success**
+- Evidence digest: `{payload['evidenceDigest']}`
+
+## Validated gates
+
+""" + "\n".join(f"- {item}" for item in payload["validated"]) + f"""
+
+## Claim boundary
+
+{payload['claimBoundary']}
+"""
+          Path("VALIDATION_V0.2.md").write_text(markdown, encoding="utf-8")
+          PY
+
+      - name: Commit validation evidence
+        if: steps.current.outputs.record == 'true'
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'Validation evidence is already current.'
+            exit 0
+          fi
+          git config user.name 'semantic-asr-ci'
+          git config user.email '204638875+dj-thank@users.noreply.github.com'
+          git add VALIDATION_V0.2.json VALIDATION_V0.2.md
+          git commit -m 'ci: record Semantic ASR v0.2 validation'
+          git push origin HEAD:codex/semantic-asr-v0.2-research-stack
