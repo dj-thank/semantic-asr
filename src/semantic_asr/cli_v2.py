@@ -13,16 +13,31 @@ from .advanced_adapters import (
     AdaptiveRerankingAdapter,
     PathPreservingFasterWhisperAdapter,
 )
+from .benchmark import load_benchmark_jsonl, run_benchmark, write_benchmark_report
 from .cache import EvidenceCache
 from .cached_lm import HashedLMProbabilityCache, import_teacher_rows
 from .calibration import CalibrationProfile
 from .cascade import CascadeConfig, run_candidate_cascade
 from .cli import main as legacy_main
 from .contracts import CandidateEvidence
+from .distillation import (
+    MultiTeacherConfig,
+    aggregate_teacher_judgments,
+    candidate_set_digest,
+    consensus_to_ranker_example,
+    judgment_from_row,
+)
 from .evidence_router import RouterState
 from .longform import SemanticASRTranscriber
 from .outputs import write_outputs
+from .pipeline import effort_profile
 from .planner import EvidenceBudget
+from .ranker_calibration import (
+    RankerCalibrationProfile,
+    fit_ranker_calibration,
+    load_calibration_samples,
+    write_calibration_result,
+)
 from .ranker_training import (
     RankerTrainingConfig,
     load_jsonl_examples,
@@ -39,7 +54,10 @@ from .synthetic import synthetic_ranker_example
 from .teachers import OllamaRanker, OpenAICompatibleRanker
 
 _ADVANCED_COMMANDS = {
+    "benchmark",
+    "calibrate-ranker",
     "cascade",
+    "distill-teachers",
     "train-ranker",
     "synthetic-data",
     "lm-cache-build",
@@ -59,7 +77,9 @@ def _candidate(row: dict[str, Any]) -> CandidateEvidence:
         "avgLogprob": "avg_logprob",
         "beamConfidence": "beam_confidence",
     }
-    return CandidateEvidence.from_dict({aliases.get(key, key): value for key, value in row.items()})
+    return CandidateEvidence.from_dict(
+        {aliases.get(key, key): value for key, value in row.items()}
+    )
 
 
 def _load_candidates(path: str | Path) -> list[CandidateEvidence]:
@@ -88,11 +108,19 @@ def _load_linear_profile(path: str | Path) -> LinearRankerProfile:
     return LinearRankerProfile.from_dict(row)
 
 
-def _load_calibration(path: str | Path | None) -> CalibrationProfile | None:
+def _load_calibration(
+    path: str | Path | None,
+) -> CalibrationProfile | RankerCalibrationProfile | None:
     if path is None:
         return None
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     row = dict(payload.get("profile", payload))
+    if payload.get("schemaVersion") == "ranker-calibration-v1" or {
+        "slope",
+        "intercept",
+        "calibration_manifest_sha256",
+    }.issubset(row):
+        return RankerCalibrationProfile.from_dict(row)
     row.pop("digest", None)
     return CalibrationProfile(**row)
 
@@ -110,9 +138,13 @@ def _load_router_state(path: str | Path | None) -> RouterState:
         },
         reward_sum={
             str(key): float(value)
-            for key, value in dict(payload.get("rewardSum", payload.get("reward_sum", {}))).items()
+            for key, value in dict(
+                payload.get("rewardSum", payload.get("reward_sum", {}))
+            ).items()
         },
-        total_selections=int(payload.get("totalSelections", payload.get("total_selections", 0))),
+        total_selections=int(
+            payload.get("totalSelections", payload.get("total_selections", 0))
+        ),
         version=str(payload.get("version", "1")),
     )
 
@@ -121,7 +153,9 @@ def _hotwords(args: argparse.Namespace) -> tuple[str, ...]:
     values: list[str] = []
     if args.hotwords:
         values.extend(
-            value.strip() for value in args.hotwords.replace("、", ",").split(",") if value.strip()
+            value.strip()
+            for value in args.hotwords.replace("、", ",").split(",")
+            if value.strip()
         )
     if args.hotwords_file:
         text = Path(args.hotwords_file).read_text(encoding="utf-8")
@@ -182,6 +216,164 @@ def command_train_ranker(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_calibrate_ranker(args: argparse.Namespace) -> int:
+    samples = load_calibration_samples(args.input)
+    result = fit_ranker_calibration(
+        samples,
+        name=args.name,
+        source_ranker=args.source_ranker,
+        l2=args.l2,
+        maximum_iterations=args.maximum_iterations,
+        minimum_samples=args.minimum_samples,
+        minimum_groups=args.minimum_groups,
+    )
+    write_calibration_result(result, args.output)
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "output": str(Path(args.output)),
+                "samples": result.profile.sample_count,
+                "groups": result.profile.group_count,
+                "before": asdict(result.before),
+                "after": asdict(result.after),
+                "profileDigest": result.profile.digest,
+                "converged": result.converged,
+                "iterations": result.iterations,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def command_benchmark(args: argparse.Namespace) -> int:
+    records = load_benchmark_jsonl(args.input)
+    ks = tuple(
+        int(value.strip()) for value in args.ks.split(",") if value.strip()
+    )
+    report = run_benchmark(
+        records,
+        ks=ks,
+        bootstrap_iterations=args.bootstrap_iterations,
+        seed=args.seed,
+        require_test_split=not args.allow_non_test,
+    )
+    write_benchmark_report(report, args.output)
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "output": str(Path(args.output)),
+                "samples": report.sample_count,
+                "groups": report.group_count,
+                "baselineCER": report.baseline_cer,
+                "cascadeCER": report.cascade_cer,
+                "mbrCER": report.mbr_cer,
+                "oracleCERAtK": report.oracle_cer_at_k,
+                "cascadeImprovement": asdict(report.cascade_improvement),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def command_distill_teachers(args: argparse.Namespace) -> int:
+    accepted: list[str] = []
+    rejected: list[str] = []
+    config = MultiTeacherConfig(
+        temperature=args.temperature,
+        minimum_active_teachers=args.minimum_active_teachers,
+        maximum_teacher_share=args.maximum_teacher_share,
+        maximum_disagreement=args.maximum_disagreement,
+    )
+    for line_number, line in enumerate(
+        Path(args.input).read_text(encoding="utf-8").splitlines(), 1
+    ):
+        if not line.strip():
+            continue
+        payload = json.loads(line)
+        if not isinstance(payload, dict):
+            raise ValueError(f"distillation row {line_number} must be an object")
+        raw_candidates = payload.get("candidates")
+        raw_judgments = payload.get("judgments")
+        if not isinstance(raw_candidates, list) or not isinstance(raw_judgments, list):
+            raise ValueError(
+                f"distillation row {line_number} requires candidates and judgments arrays"
+            )
+        candidates = [_candidate(dict(row)) for row in raw_candidates]
+        digest = candidate_set_digest(candidates)
+        judgments = [
+            judgment_from_row(dict(row), candidate_set_sha256=digest)
+            for row in raw_judgments
+        ]
+        consensus = aggregate_teacher_judgments(
+            candidates,
+            judgments,
+            config=config,
+        )
+        common = {
+            "exampleId": str(
+                payload.get("exampleId") or payload.get("example_id") or line_number
+            ),
+            "context": str(payload.get("context") or ""),
+            "candidateSetSha256": digest,
+            "teacherConsensus": asdict(consensus),
+        }
+        if not consensus.usable_for_distillation:
+            rejected.append(
+                json.dumps(common, ensure_ascii=False, separators=(",", ":"))
+            )
+            continue
+        example = consensus_to_ranker_example(
+            example_id=common["exampleId"],
+            candidates=candidates,
+            consensus=consensus,
+            context=common["context"],
+        )
+        accepted.append(
+            json.dumps(
+                {
+                    **common,
+                    "candidates": [candidate.as_dict() for candidate in candidates],
+                    "losses": example.losses,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        ("\n".join(accepted) + "\n") if accepted else "",
+        encoding="utf-8",
+    )
+    if args.rejected_output:
+        rejected_output = Path(args.rejected_output)
+        rejected_output.parent.mkdir(parents=True, exist_ok=True)
+        rejected_output.write_text(
+            ("\n".join(rejected) + "\n") if rejected else "",
+            encoding="utf-8",
+        )
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "accepted": len(accepted),
+                "rejected": len(rejected),
+                "output": str(output),
+                "rejectedOutput": args.rejected_output,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def command_synthetic_data(args: argparse.Namespace) -> int:
     references = [
         line.strip()
@@ -206,7 +398,9 @@ def command_synthetic_data(args: argparse.Namespace) -> int:
                 {
                     "exampleId": example.example_id,
                     "context": example.context,
-                    "candidates": [candidate.as_dict() for candidate in example.candidates],
+                    "candidates": [
+                        candidate.as_dict() for candidate in example.candidates
+                    ],
                     "losses": example.losses,
                 },
                 ensure_ascii=False,
@@ -314,6 +508,24 @@ def command_transcribe_v2(args: argparse.Namespace) -> int:
     source = Path(args.audio).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(source)
+    policy = effort_profile(args.effort)
+    maximum_hypotheses = args.maximum_hypotheses or policy.maximum_candidates
+    evidence_budget_ms = (
+        args.evidence_budget_ms
+        if args.evidence_budget_ms is not None
+        else policy.evidence_budget_ms
+    )
+    max_evidence_actions = (
+        args.max_evidence_actions
+        if args.max_evidence_actions is not None
+        else policy.maximum_evidence_actions
+    )
+    qwen_second_ear = (
+        args.qwen_second_ear
+        if args.qwen_second_ear is not None
+        else policy.enable_second_ear
+    )
+
     base = PathPreservingFasterWhisperAdapter(
         model=args.model,
         device=args.device,
@@ -327,7 +539,7 @@ def command_transcribe_v2(args: argparse.Namespace) -> int:
         base = AdaptiveRerankingAdapter(
             base,
             ranker,
-            maximum_hypotheses=args.maximum_hypotheses,
+            maximum_hypotheses=maximum_hypotheses,
             calibration_profile=_load_calibration(args.ranker_calibration),
             lexical_blend=args.ranker_lexical_blend,
         )
@@ -338,7 +550,7 @@ def command_transcribe_v2(args: argparse.Namespace) -> int:
             device_map=args.qwen_device_map,
             return_timestamps=args.qwen_timestamps,
         )
-        if args.qwen_second_ear
+        if qwen_second_ear
         else None
     )
     aligner = (
@@ -355,12 +567,14 @@ def command_transcribe_v2(args: argparse.Namespace) -> int:
         if args.teacher_protocol == "ollama":
             teacher = OllamaRanker(
                 model=args.teacher_model,
-                endpoint=args.teacher_endpoint or "http://127.0.0.1:11434/api/chat",
+                endpoint=args.teacher_endpoint
+                or "http://127.0.0.1:11434/api/chat",
             )
         else:
             teacher = OpenAICompatibleRanker(
                 model=args.teacher_model,
-                endpoint=args.teacher_endpoint or "http://127.0.0.1:8000/v1/chat/completions",
+                endpoint=args.teacher_endpoint
+                or "http://127.0.0.1:8000/v1/chat/completions",
             )
     cache = None if args.no_cache else EvidenceCache(args.cache)
     try:
@@ -371,8 +585,8 @@ def command_transcribe_v2(args: argparse.Namespace) -> int:
             teacher=teacher,
             cache=cache,
             evidence_budget=EvidenceBudget(
-                total_cost_ms=args.evidence_budget_ms,
-                max_actions=args.max_evidence_actions,
+                total_cost_ms=evidence_budget_ms,
+                max_actions=max_evidence_actions,
             ),
             balanced_router=args.evidence_router == "balanced",
             router_state=_load_router_state(args.router_state),
@@ -406,6 +620,11 @@ def command_transcribe_v2(args: argparse.Namespace) -> int:
             {
                 "status": "ok",
                 "runtime": "v0.2-path-pool-adaptive-reranking",
+                "effort": asdict(policy),
+                "resolvedMaximumHypotheses": maximum_hypotheses,
+                "resolvedEvidenceBudgetMs": evidence_budget_ms,
+                "resolvedMaximumEvidenceActions": max_evidence_actions,
+                "resolvedQwenSecondEar": qwen_second_ear,
                 "outputs": outputs,
                 "diagnostics": result.diagnostics,
             },
@@ -447,6 +666,40 @@ def build_advanced_parser() -> argparse.ArgumentParser:
     train.add_argument("--seed", type=int, default=17)
     train.set_defaults(func=command_train_ranker)
 
+    calibrate = commands.add_parser("calibrate-ranker")
+    calibrate.add_argument("input")
+    calibrate.add_argument("--output", required=True)
+    calibrate.add_argument("--name", default="semantic-asr-ranker-calibration-v0.2")
+    calibrate.add_argument("--source-ranker", required=True)
+    calibrate.add_argument("--l2", type=float, default=0.001)
+    calibrate.add_argument("--maximum-iterations", type=int, default=100)
+    calibrate.add_argument("--minimum-samples", type=int, default=8)
+    calibrate.add_argument("--minimum-groups", type=int, default=2)
+    calibrate.set_defaults(func=command_calibrate_ranker)
+
+    benchmark = commands.add_parser("benchmark")
+    benchmark.add_argument("input")
+    benchmark.add_argument("--output", required=True)
+    benchmark.add_argument("--ks", default="1,3,5,8,12,16,25,50")
+    benchmark.add_argument("--bootstrap-iterations", type=int, default=2000)
+    benchmark.add_argument("--seed", type=int, default=17)
+    benchmark.add_argument(
+        "--allow-non-test",
+        action="store_true",
+        help="Development only; final reports must use a locked test split.",
+    )
+    benchmark.set_defaults(func=command_benchmark)
+
+    distill = commands.add_parser("distill-teachers")
+    distill.add_argument("input")
+    distill.add_argument("--output", required=True)
+    distill.add_argument("--rejected-output")
+    distill.add_argument("--temperature", type=float, default=1.0)
+    distill.add_argument("--minimum-active-teachers", type=int, default=1)
+    distill.add_argument("--maximum-teacher-share", type=float, default=0.60)
+    distill.add_argument("--maximum-disagreement", type=float, default=0.42)
+    distill.set_defaults(func=command_distill_teachers)
+
     synthetic = commands.add_parser("synthetic-data")
     synthetic.add_argument("input")
     synthetic.add_argument("--output", required=True)
@@ -480,7 +733,12 @@ def build_advanced_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("--compute-type", default="default")
     transcribe.add_argument("--window-ms", type=int, default=28_000)
     transcribe.add_argument("--overlap-ms", type=int, default=1_200)
-    transcribe.add_argument("--maximum-hypotheses", type=int, default=12)
+    transcribe.add_argument(
+        "--effort",
+        choices=["ultra-light", "cpu-quality", "edge-gpu", "research"],
+        default="cpu-quality",
+    )
+    transcribe.add_argument("--maximum-hypotheses", type=int)
     transcribe.add_argument("--patience", type=float, default=1.4)
     transcribe.add_argument("--repetition-penalty", type=float, default=1.0)
     transcribe.add_argument("--no-repeat-ngram-size", type=int, default=0)
@@ -502,15 +760,19 @@ def build_advanced_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("--context", default="")
     transcribe.add_argument("--cache", default=".semantic-asr/evidence-cache-v2.sqlite3")
     transcribe.add_argument("--no-cache", action="store_true")
-    transcribe.add_argument("--evidence-budget-ms", type=int, default=12_000)
-    transcribe.add_argument("--max-evidence-actions", type=int, default=8)
+    transcribe.add_argument("--evidence-budget-ms", type=int)
+    transcribe.add_argument("--max-evidence-actions", type=int)
     transcribe.add_argument(
         "--evidence-router",
         choices=["legacy", "balanced"],
         default="balanced",
     )
     transcribe.add_argument("--router-state")
-    transcribe.add_argument("--qwen-second-ear", action="store_true")
+    transcribe.add_argument(
+        "--qwen-second-ear",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
     transcribe.add_argument("--qwen-model", default="Qwen/Qwen3-ASR-0.6B")
     transcribe.add_argument("--qwen-device-map", default="cuda:0")
     transcribe.add_argument("--qwen-dtype", default="float16")
