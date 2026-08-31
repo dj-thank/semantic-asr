@@ -1,0 +1,45 @@
+name: Merge exact Semantic ASR v0.2 release head
+
+on:
+  workflow_run:
+    workflows:
+      - Semantic ASR v0.2 release gate
+    types:
+      - completed
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'codex/semantic-asr-v0.2-adaptive-reranking'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge only the exact validated PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr="$(gh api "repos/${REPOSITORY}/pulls/5")"
+          test "$(jq -r '.state' <<<"${pr}")" = open
+          test "$(jq -r '.draft' <<<"${pr}")" = false
+          test "$(jq -r '.head.ref' <<<"${pr}")" = codex/semantic-asr-v0.2-adaptive-reranking
+          test "$(jq -r '.base.ref' <<<"${pr}")" = main
+          test "$(jq -r '.head.sha' <<<"${pr}")" = "${VALIDATED_SHA}"
+          mergeable="$(jq -r '.mergeable' <<<"${pr}")"
+          test "${mergeable}" = true
+
+          gh api --method PUT \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${REPOSITORY}/pulls/5/merge" \
+            -f merge_method=squash \
+            -f sha="${VALIDATED_SHA}" \
+            -f commit_title='Semantic ASR v0.2: adaptive calibrated reranking and acoustic verification' \
+            -f commit_message='Exact head validated on Linux/Windows, Python 3.11/3.12, CPU PyTorch, clean wheel installation and public CLI.'
