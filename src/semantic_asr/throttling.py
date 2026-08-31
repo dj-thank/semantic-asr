@@ -33,11 +33,7 @@ class RuntimePressure:
         battery = 1.0 if self.battery_saver else 0.0
         return min(
             1.0,
-            0.34 * latency
-            + 0.26 * memory
-            + 0.18 * queue
-            + 0.16 * thermal
-            + 0.06 * battery,
+            0.34 * latency + 0.26 * memory + 0.18 * queue + 0.16 * thermal + 0.06 * battery,
         )
 
 

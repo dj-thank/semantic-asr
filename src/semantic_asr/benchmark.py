@@ -120,15 +120,11 @@ def verify_split_isolation(records: Sequence[BenchmarkUtterance]) -> None:
             indices["near-duplicate"][record.near_duplicate_id].add(record.split)
     for kind, rows in indices.items():
         leaking = {
-            identifier: sorted(splits)
-            for identifier, splits in rows.items()
-            if len(splits) > 1
+            identifier: sorted(splits) for identifier, splits in rows.items() if len(splits) > 1
         }
         if leaking:
             first_id = sorted(leaking)[0]
-            raise ValueError(
-                f"{kind} leakage across splits: {first_id} -> {leaking[first_id]}"
-            )
+            raise ValueError(f"{kind} leakage across splits: {first_id} -> {leaking[first_id]}")
 
 
 def _ordered_candidates(record: BenchmarkUtterance) -> list[CandidateEvidence]:
@@ -168,7 +164,7 @@ def evaluate_utterance(
         ordered,
         cascade_config=cascade_config or CascadeConfig(selection_policy="fusion"),
     )
-    by_id = {candidate.candidate_id: candidate for candidate in decision.ranked}
+    by_id = {candidate.candidate.candidate_id: candidate for candidate in decision.ranked}
     cascade_candidate = by_id[decision.selected_candidate_id].candidate
     mbr_candidate = next(
         candidate
@@ -301,9 +297,7 @@ def run_benchmark(
         oracle_cer_at_k=oracle,
         rank_regret=fmean(row.rank_regret for row in rows),
         mean_adaptive_k=fmean(row.adaptive_k for row in rows),
-        additional_evidence_rate=fmean(
-            float(row.requires_additional_evidence) for row in rows
-        ),
+        additional_evidence_rate=fmean(float(row.requires_additional_evidence) for row in rows),
         cascade_improvement=paired_group_bootstrap(
             rows,
             left=lambda row: row.baseline_cer,
@@ -356,9 +350,7 @@ def benchmark_utterance_from_row(
 
 def load_benchmark_jsonl(path: str | Path) -> list[BenchmarkUtterance]:
     output: list[BenchmarkUtterance] = []
-    for line_number, line in enumerate(
-        Path(path).read_text(encoding="utf-8").splitlines(), 1
-    ):
+    for line_number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
         payload = json.loads(line)

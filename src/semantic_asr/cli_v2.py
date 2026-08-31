@@ -77,9 +77,7 @@ def _candidate(row: dict[str, Any]) -> CandidateEvidence:
         "avgLogprob": "avg_logprob",
         "beamConfidence": "beam_confidence",
     }
-    return CandidateEvidence.from_dict(
-        {aliases.get(key, key): value for key, value in row.items()}
-    )
+    return CandidateEvidence.from_dict({aliases.get(key, key): value for key, value in row.items()})
 
 
 def _load_candidates(path: str | Path) -> list[CandidateEvidence]:
@@ -138,13 +136,9 @@ def _load_router_state(path: str | Path | None) -> RouterState:
         },
         reward_sum={
             str(key): float(value)
-            for key, value in dict(
-                payload.get("rewardSum", payload.get("reward_sum", {}))
-            ).items()
+            for key, value in dict(payload.get("rewardSum", payload.get("reward_sum", {}))).items()
         },
-        total_selections=int(
-            payload.get("totalSelections", payload.get("total_selections", 0))
-        ),
+        total_selections=int(payload.get("totalSelections", payload.get("total_selections", 0))),
         version=str(payload.get("version", "1")),
     )
 
@@ -153,9 +147,7 @@ def _hotwords(args: argparse.Namespace) -> tuple[str, ...]:
     values: list[str] = []
     if args.hotwords:
         values.extend(
-            value.strip()
-            for value in args.hotwords.replace("、", ",").split(",")
-            if value.strip()
+            value.strip() for value in args.hotwords.replace("、", ",").split(",") if value.strip()
         )
     if args.hotwords_file:
         text = Path(args.hotwords_file).read_text(encoding="utf-8")
@@ -250,9 +242,7 @@ def command_calibrate_ranker(args: argparse.Namespace) -> int:
 
 def command_benchmark(args: argparse.Namespace) -> int:
     records = load_benchmark_jsonl(args.input)
-    ks = tuple(
-        int(value.strip()) for value in args.ks.split(",") if value.strip()
-    )
+    ks = tuple(int(value.strip()) for value in args.ks.split(",") if value.strip())
     report = run_benchmark(
         records,
         ks=ks,
@@ -307,8 +297,7 @@ def command_distill_teachers(args: argparse.Namespace) -> int:
         candidates = [_candidate(dict(row)) for row in raw_candidates]
         digest = candidate_set_digest(candidates)
         judgments = [
-            judgment_from_row(dict(row), candidate_set_sha256=digest)
-            for row in raw_judgments
+            judgment_from_row(dict(row), candidate_set_sha256=digest) for row in raw_judgments
         ]
         consensus = aggregate_teacher_judgments(
             candidates,
@@ -316,17 +305,13 @@ def command_distill_teachers(args: argparse.Namespace) -> int:
             config=config,
         )
         common = {
-            "exampleId": str(
-                payload.get("exampleId") or payload.get("example_id") or line_number
-            ),
+            "exampleId": str(payload.get("exampleId") or payload.get("example_id") or line_number),
             "context": str(payload.get("context") or ""),
             "candidateSetSha256": digest,
             "teacherConsensus": asdict(consensus),
         }
         if not consensus.usable_for_distillation:
-            rejected.append(
-                json.dumps(common, ensure_ascii=False, separators=(",", ":"))
-            )
+            rejected.append(json.dumps(common, ensure_ascii=False, separators=(",", ":")))
             continue
         example = consensus_to_ranker_example(
             example_id=common["exampleId"],
@@ -398,9 +383,7 @@ def command_synthetic_data(args: argparse.Namespace) -> int:
                 {
                     "exampleId": example.example_id,
                     "context": example.context,
-                    "candidates": [
-                        candidate.as_dict() for candidate in example.candidates
-                    ],
+                    "candidates": [candidate.as_dict() for candidate in example.candidates],
                     "losses": example.losses,
                 },
                 ensure_ascii=False,
@@ -521,9 +504,7 @@ def command_transcribe_v2(args: argparse.Namespace) -> int:
         else policy.maximum_evidence_actions
     )
     qwen_second_ear = (
-        args.qwen_second_ear
-        if args.qwen_second_ear is not None
-        else policy.enable_second_ear
+        args.qwen_second_ear if args.qwen_second_ear is not None else policy.enable_second_ear
     )
 
     base = PathPreservingFasterWhisperAdapter(
@@ -567,14 +548,12 @@ def command_transcribe_v2(args: argparse.Namespace) -> int:
         if args.teacher_protocol == "ollama":
             teacher = OllamaRanker(
                 model=args.teacher_model,
-                endpoint=args.teacher_endpoint
-                or "http://127.0.0.1:11434/api/chat",
+                endpoint=args.teacher_endpoint or "http://127.0.0.1:11434/api/chat",
             )
         else:
             teacher = OpenAICompatibleRanker(
                 model=args.teacher_model,
-                endpoint=args.teacher_endpoint
-                or "http://127.0.0.1:8000/v1/chat/completions",
+                endpoint=args.teacher_endpoint or "http://127.0.0.1:8000/v1/chat/completions",
             )
     cache = None if args.no_cache else EvidenceCache(args.cache)
     try:

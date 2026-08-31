@@ -193,8 +193,7 @@ def evaluate_deployment_candidate(
             reasons.append("missing-calibration-digest")
         elif (
             baseline.artifact.calibration_digest
-            and baseline.artifact.calibration_digest
-            != candidate.artifact.calibration_digest
+            and baseline.artifact.calibration_digest != candidate.artifact.calibration_digest
         ):
             reasons.append("calibration-digest-mismatch")
 
@@ -205,19 +204,14 @@ def evaluate_deployment_candidate(
         - candidate_metrics.candidate_top1_accuracy,
         "pairwiseAccuracyDrop": baseline_metrics.pairwise_accuracy
         - candidate_metrics.pairwise_accuracy,
-        "semanticLossIncrease": candidate_metrics.semantic_loss
-        - baseline_metrics.semantic_loss,
+        "semanticLossIncrease": candidate_metrics.semantic_loss - baseline_metrics.semantic_loss,
         "criticalErrorIncrease": candidate_metrics.critical_error_rate
         - baseline_metrics.critical_error_rate,
         "calibrationErrorIncrease": candidate_metrics.calibration_error
         - baseline_metrics.calibration_error,
         "aurcIncrease": candidate_metrics.aurc - baseline_metrics.aurc,
-        "rtfRatio": _ratio(
-            candidate_metrics.real_time_factor, baseline_metrics.real_time_factor
-        ),
-        "memoryRatio": _ratio(
-            candidate_metrics.peak_memory_mb, baseline_metrics.peak_memory_mb
-        ),
+        "rtfRatio": _ratio(candidate_metrics.real_time_factor, baseline_metrics.real_time_factor),
+        "memoryRatio": _ratio(candidate_metrics.peak_memory_mb, baseline_metrics.peak_memory_mb),
         "artifactSizeRatio": _ratio(
             candidate_metrics.artifact_size_mb, baseline_metrics.artifact_size_mb
         ),
@@ -264,10 +258,7 @@ def evaluate_deployment_candidate(
         reasons.append("memory-regression")
     if deltas["artifactSizeRatio"] > policy.maximum_artifact_size_ratio + 1e-12:
         reasons.append("artifact-size-regression")
-    if (
-        candidate_metrics.deterministic_replay_rate
-        < policy.minimum_deterministic_replay_rate
-    ):
+    if candidate_metrics.deterministic_replay_rate < policy.minimum_deterministic_replay_rate:
         reasons.append("deterministic-replay-regression")
 
     policy_digest = hashlib.sha256(

@@ -103,8 +103,7 @@ class TeacherConsensus:
 def _softmax(scores: Sequence[float], temperature: float) -> list[float]:
     maximum = max(scores)
     exponentials = [
-        math.exp(max(-80.0, min(80.0, (score - maximum) / temperature)))
-        for score in scores
+        math.exp(max(-80.0, min(80.0, (score - maximum) / temperature))) for score in scores
     ]
     total = sum(exponentials) or 1.0
     return [value / total for value in exponentials]
@@ -152,9 +151,7 @@ def _jensen_shannon(distributions: Sequence[Sequence[float]]) -> float:
     return min(1.0, max(0.0, raw / math.log(max(2, len(mixture)))))
 
 
-def _bounded_weights(
-    raw_weights: Mapping[str, float], maximum_share: float
-) -> dict[str, float]:
+def _bounded_weights(raw_weights: Mapping[str, float], maximum_share: float) -> dict[str, float]:
     if not raw_weights:
         return {}
     weights = {name: max(0.0, float(value)) for name, value in raw_weights.items()}
@@ -175,9 +172,7 @@ def _bounded_weights(
         remaining_total = sum(weights[name] for name in remaining_names) or 1.0
         weights = {
             name: (
-                maximum_share
-                if name in over
-                else remaining_mass * weights[name] / remaining_total
+                maximum_share if name in over else remaining_mass * weights[name] / remaining_total
             )
             for name in weights
         }
@@ -271,9 +266,7 @@ def consensus_to_ranker_example(
     if consensus.candidate_set_sha256 != digest:
         raise ValueError("teacher consensus does not match the candidate set")
     if not consensus.usable_for_distillation:
-        raise ValueError(
-            "teacher consensus is not usable: " + ",".join(consensus.reasons)
-        )
+        raise ValueError("teacher consensus is not usable: " + ",".join(consensus.reasons))
     losses = {
         candidate.candidate_id: -math.log(
             max(
@@ -299,12 +292,8 @@ def judgment_from_row(
         raise ValueError("teacher judgment row requires a scores object")
     return TeacherJudgment(
         teacher=str(row.get("teacher") or ""),
-        teacher_revision=(
-            str(row["teacherRevision"]) if row.get("teacherRevision") else None
-        ),
-        candidate_set_sha256=str(
-            row.get("candidateSetSha256") or candidate_set_sha256 or ""
-        ),
+        teacher_revision=(str(row["teacherRevision"]) if row.get("teacherRevision") else None),
+        candidate_set_sha256=str(row.get("candidateSetSha256") or candidate_set_sha256 or ""),
         scores={str(key): float(value) for key, value in scores.items()},
         score_kind=str(row.get("scoreKind") or "preference"),
         reliability=float(row.get("reliability", 1.0)),

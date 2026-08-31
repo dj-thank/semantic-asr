@@ -32,7 +32,7 @@ def test_mora_ngram_and_subword_tokenization() -> None:
     assert "ッ" in mora
     assert "キョ" in mora
     subwords = tokenize_ngram_text("Qwen3-ASRで東京へ行く", "subword")
-    assert any("東京" == token for token in subwords)
+    assert any(token == "東京" for token in subwords)
     assert any(token.startswith("qwen") for token in subwords)
 
 

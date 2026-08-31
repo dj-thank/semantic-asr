@@ -55,9 +55,10 @@ def test_ranker_calibration_cli_writes_runtime_profile() -> None:
         assert payload["schemaVersion"] == "ranker-calibration-v1"
         assert payload["profile"]["sample_count"] == 8
         assert payload["profile"]["group_count"] == 4
-        assert payload["after"]["negative_log_likelihood"] < payload["before"][
-            "negative_log_likelihood"
-        ]
+        assert (
+            payload["after"]["negative_log_likelihood"]
+            < payload["before"]["negative_log_likelihood"]
+        )
 
 
 def test_benchmark_cli_writes_group_bootstrap_report() -> None:
@@ -122,9 +123,7 @@ def test_benchmark_cli_writes_group_bootstrap_report() -> None:
         payload = json.loads(target.read_text(encoding="utf-8"))
         assert payload["sample_count"] == 2
         assert payload["group_count"] == 2
-        assert float(payload["oracle_cer_at_k"]["2"]) <= float(
-            payload["oracle_cer_at_k"]["1"]
-        )
+        assert float(payload["oracle_cer_at_k"]["2"]) <= float(payload["oracle_cer_at_k"]["1"])
 
 
 def test_teacher_distillation_cli_preserves_candidate_set() -> None:

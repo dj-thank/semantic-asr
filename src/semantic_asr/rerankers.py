@@ -42,6 +42,33 @@ FEATURE_NAMES: tuple[str, ...] = (
 )
 
 
+LEGACY_FEATURE_ALIASES: dict[str, str] = {
+    "rank_fraction": "relative_rank",
+    "logprob": "avg_logprob",
+    "length": "log_text_length",
+    "critical_count": "critical_unit_count",
+}
+
+
+def _canonical_feature_mapping(
+    values: Mapping[str, Any],
+    *,
+    field_name: str,
+) -> dict[str, float]:
+    output: dict[str, float] = {}
+    sources: dict[str, str] = {}
+    for raw_name, raw_value in values.items():
+        name = LEGACY_FEATURE_ALIASES.get(str(raw_name), str(raw_name))
+        if name in output:
+            raise ValueError(
+                f"{field_name} defines both {sources[name]!r} and {raw_name!r} "
+                f"for canonical feature {name!r}"
+            )
+        output[name] = float(raw_value)
+        sources[name] = str(raw_name)
+    return output
+
+
 def _finite(value: float | None, default: float = 0.0) -> float:
     if value is None or not math.isfinite(float(value)):
         return default
@@ -137,17 +164,20 @@ class LinearRankerProfile:
     def from_dict(cls, row: Mapping[str, Any]) -> LinearRankerProfile:
         values = dict(row)
         values.pop("digest", None)
-        values["weights"] = {
-            str(name): float(value) for name, value in dict(values["weights"]).items()
-        }
+        values["weights"] = _canonical_feature_mapping(
+            dict(values["weights"]),
+            field_name="weights",
+        )
         if values.get("feature_mean") is not None:
-            values["feature_mean"] = {
-                str(name): float(value) for name, value in dict(values["feature_mean"]).items()
-            }
+            values["feature_mean"] = _canonical_feature_mapping(
+                dict(values["feature_mean"]),
+                field_name="feature_mean",
+            )
         if values.get("feature_scale") is not None:
-            values["feature_scale"] = {
-                str(name): float(value) for name, value in dict(values["feature_scale"]).items()
-            }
+            values["feature_scale"] = _canonical_feature_mapping(
+                dict(values["feature_scale"]),
+                field_name="feature_scale",
+            )
         return cls(**values)
 
 

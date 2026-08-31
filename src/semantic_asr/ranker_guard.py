@@ -96,8 +96,7 @@ class AcousticGuardedRanker:
             raise ValueError("inner ranker returned a non-finite score")
         ranker_preference = _softmax(raw, self.config.ranker_temperature)
         acoustic_values = {
-            candidate.candidate_id: _candidate_acoustic_value(candidate)
-            for candidate in candidates
+            candidate.candidate_id: _candidate_acoustic_value(candidate) for candidate in candidates
         }
         acoustic_mass = _softmax(acoustic_values, self.config.acoustic_temperature)
         guarded: dict[str, float] = {}

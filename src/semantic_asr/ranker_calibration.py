@@ -142,8 +142,7 @@ def _objective(
     l2: float,
 ) -> float:
     probabilities = [
-        _clip_probability(_sigmoid(slope * score + intercept))
-        for score in normalized_scores
+        _clip_probability(_sigmoid(slope * score + intercept)) for score in normalized_scores
     ]
     nll = -sum(
         label * math.log(probability) + (1.0 - label) * math.log(1.0 - probability)
@@ -197,16 +196,13 @@ def fit_ranker_calibration(
         gradient_slope = (
             sum(
                 (probability - label) * score
-                for probability, label, score in zip(
-                    probabilities, labels, normalized, strict=True
-                )
+                for probability, label, score in zip(probabilities, labels, normalized, strict=True)
             )
             / len(labels)
             + l2 * slope
         )
         gradient_intercept = sum(
-            probability - label
-            for probability, label in zip(probabilities, labels, strict=True)
+            probability - label for probability, label in zip(probabilities, labels, strict=True)
         ) / len(labels)
         hessian_ss = (
             sum(weight * score * score for weight, score in zip(weights, normalized, strict=True))
@@ -287,9 +283,7 @@ def fit_ranker_calibration(
     return RankerCalibrationResult(
         profile=profile,
         before=_metrics(before_probabilities, labels_bool),
-        after=_metrics(
-            [float(probability) for probability in after_probabilities], labels_bool
-        ),
+        after=_metrics([float(probability) for probability in after_probabilities], labels_bool),
         iterations=iterations,
         converged=converged,
     )
@@ -313,9 +307,7 @@ def calibration_sample_from_row(
 
 def load_calibration_samples(path: str | Path) -> list[RankerCalibrationSample]:
     output: list[RankerCalibrationSample] = []
-    for line_number, line in enumerate(
-        Path(path).read_text(encoding="utf-8").splitlines(), 1
-    ):
+    for line_number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
         payload = json.loads(line)
@@ -327,9 +319,7 @@ def load_calibration_samples(path: str | Path) -> list[RankerCalibrationSample]:
     return output
 
 
-def write_calibration_result(
-    result: RankerCalibrationResult, path: str | Path
-) -> None:
+def write_calibration_result(result: RankerCalibrationResult, path: str | Path) -> None:
     payload = {
         "schemaVersion": "ranker-calibration-v1",
         "profile": result.profile.as_dict(),

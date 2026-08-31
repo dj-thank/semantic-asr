@@ -58,8 +58,7 @@ class ListwiseTrainingResult:
 def _softmax(values: Sequence[float], temperature: float) -> list[float]:
     maximum = max(values)
     exponentials = [
-        math.exp(max(-80.0, min(80.0, (value - maximum) / temperature)))
-        for value in values
+        math.exp(max(-80.0, min(80.0, (value - maximum) / temperature))) for value in values
     ]
     total = sum(exponentials) or 1.0
     return [value / total for value in exponentials]
@@ -89,8 +88,7 @@ def _statistics(
                 rows[name].append(features[name])
     means = {name: fmean(values) for name, values in rows.items()}
     scales = {
-        name: max(1e-6, pstdev(values) if len(values) > 1 else 1.0)
-        for name, values in rows.items()
+        name: max(1e-6, pstdev(values) if len(values) > 1 else 1.0) for name, values in rows.items()
     }
     return means, scales
 
@@ -106,10 +104,7 @@ def _vectors(
     for candidate in example.candidates:
         features = candidate_features(candidate, context=example.context)
         output.append(
-            tuple(
-                (features[name] - means[name]) / scales[name]
-                for name in feature_names
-            )
+            tuple((features[name] - means[name]) / scales[name] for name in feature_names)
         )
     return output
 
@@ -138,8 +133,7 @@ def _metrics(
         probabilities = _softmax(score_values, temperature)
         losses = [example.losses[candidate.candidate_id] for candidate in example.candidates]
         expected = sum(
-            probability * loss
-            for probability, loss in zip(probabilities, losses, strict=True)
+            probability * loss for probability, loss in zip(probabilities, losses, strict=True)
         )
         selected_index = max(range(len(score_values)), key=lambda index: score_values[index])
         oracle = min(losses)
@@ -196,13 +190,9 @@ def train_listwise_semantic_mwer(
             example_vectors = vectors[example_index]
             score_values = _scores(example_vectors, weights)
             probabilities = _softmax(score_values, config.temperature)
-            losses = [
-                example.losses[candidate.candidate_id]
-                for candidate in example.candidates
-            ]
+            losses = [example.losses[candidate.candidate_id] for candidate in example.candidates]
             expected = sum(
-                probability * loss
-                for probability, loss in zip(probabilities, losses, strict=True)
+                probability * loss for probability, loss in zip(probabilities, losses, strict=True)
             )
             epoch_expected.append(expected)
             gradient = [0.0] * len(weights)
@@ -244,9 +234,7 @@ def train_listwise_semantic_mwer(
     )
 
 
-def write_listwise_training_result(
-    result: ListwiseTrainingResult, path: str | Path
-) -> None:
+def write_listwise_training_result(result: ListwiseTrainingResult, path: str | Path) -> None:
     payload = {
         "schemaVersion": "listwise-semantic-mwer-v1",
         "profile": result.profile.as_dict(),

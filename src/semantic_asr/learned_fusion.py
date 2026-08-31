@@ -129,16 +129,13 @@ class LearnedFusionResult:
 def _softmax(values: Sequence[float], temperature: float) -> list[float]:
     maximum = max(values)
     exponentials = [
-        math.exp(max(-80.0, min(80.0, (value - maximum) / temperature)))
-        for value in values
+        math.exp(max(-80.0, min(80.0, (value - maximum) / temperature))) for value in values
     ]
     total = sum(exponentials) or 1.0
     return [value / total for value in exponentials]
 
 
-def _project_weights(
-    values: Mapping[str, float], *, acoustic_floor: float
-) -> dict[str, float]:
+def _project_weights(values: Mapping[str, float], *, acoustic_floor: float) -> dict[str, float]:
     output = {stream: max(0.0, float(values.get(stream, 0.0))) for stream in STREAMS}
     total = sum(output.values())
     if total <= 0:
@@ -183,9 +180,7 @@ def _feature(candidate: CandidateEvidence, stream: str) -> float:
     return 0.0 if value is None else float(value)
 
 
-def _scores(
-    example: FusionTrainingExample, weights: Mapping[str, float]
-) -> list[float]:
+def _scores(example: FusionTrainingExample, weights: Mapping[str, float]) -> list[float]:
     return [
         sum(weights[stream] * _feature(candidate, stream) for stream in STREAMS)
         for candidate in example.candidates
@@ -207,9 +202,7 @@ def _metrics(
         losses.append(
             -sum(
                 target[candidate.candidate_id] * math.log(probability + 1e-12)
-                for candidate, probability in zip(
-                    example.candidates, probabilities, strict=True
-                )
+                for candidate, probability in zip(example.candidates, probabilities, strict=True)
             )
         )
         selected = example.candidates[
@@ -281,21 +274,14 @@ def train_constrained_fusion(
                 )
             )
             gradient = {stream: 0.0 for stream in STREAMS}
-            for candidate, probability in zip(
-                example.candidates, probabilities, strict=True
-            ):
+            for candidate, probability in zip(example.candidates, probabilities, strict=True):
                 error = probability - target[candidate.candidate_id]
                 for stream in STREAMS:
-                    gradient[stream] += (
-                        error * _feature(candidate, stream) / config.temperature
-                    )
+                    gradient[stream] += error * _feature(candidate, stream) / config.temperature
             proposed = {
                 stream: weights[stream]
                 - learning_rate
-                * (
-                    gradient[stream]
-                    + config.l2_to_initial * (weights[stream] - initial[stream])
-                )
+                * (gradient[stream] + config.l2_to_initial * (weights[stream] - initial[stream]))
                 for stream in STREAMS
             }
             weights = _project_weights(

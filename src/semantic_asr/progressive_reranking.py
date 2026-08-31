@@ -183,9 +183,7 @@ def progressive_rerank(
         return ProgressiveRerankDecision(
             selected_candidate_id=selected.candidate_id,
             selected_text=selected.text,
-            preference_distribution={
-                candidate.candidate_id: uniform for candidate in candidates
-            },
+            preference_distribution={candidate.candidate_id: uniform for candidate in candidates},
             stages=(),
             used_budget_ms=0,
             early_exit=False,

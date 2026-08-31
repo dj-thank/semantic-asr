@@ -16,7 +16,7 @@ from .evaluation import (
     edit_distance,
     normalize_characters,
 )
-from .japanese import mora_sequence
+from .japanese import mora_sequence, optional_reading
 
 LossFunction = Callable[[CandidateEvidence, CandidateEvidence], float]
 
@@ -108,9 +108,11 @@ def surface_loss(left: CandidateEvidence, right: CandidateEvidence) -> float:
 def _candidate_mora(candidate: CandidateEvidence) -> list[str]:
     if candidate.mora_units:
         return [unit.kana for unit in candidate.mora_units]
-    if candidate.reading:
-        return mora_sequence(candidate.reading)
-    return mora_sequence(candidate.text)
+    reading = candidate.reading or optional_reading(
+        candidate.text,
+        use_pyopenjtalk=False,
+    )
+    return mora_sequence(reading) if reading else []
 
 
 def mora_loss(left: CandidateEvidence, right: CandidateEvidence) -> float:

@@ -78,9 +78,7 @@ def command_partition_manifest(args: argparse.Namespace) -> int:
             split: len({record.group_id for record in records if record.split == split})
             for split in counts
         },
-        "files": {
-            split: str(output_dir / f"{split}.jsonl") for split in counts
-        },
+        "files": {split: str(output_dir / f"{split}.jsonl") for split in counts},
     }
     (output_dir / "partition.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
@@ -129,9 +127,7 @@ def command_apply_ranker(args: argparse.Namespace) -> int:
                 "output": str(Path(args.output)),
                 "samples": len(output),
                 "ranker": ranker.name,
-                "calibrationDigest": (
-                    calibration.digest if calibration is not None else None
-                ),
+                "calibrationDigest": (calibration.digest if calibration is not None else None),
                 "evidenceInjected": calibration is not None,
             },
             ensure_ascii=False,

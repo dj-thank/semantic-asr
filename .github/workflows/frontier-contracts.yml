@@ -44,10 +44,9 @@ jobs:
       - name: Run frontier contract tests
         run: |
           python -m pytest -q \
-            tests/test_v02_adaptive_mbr.py \
             tests/test_v02_benchmark.py \
             tests/test_v02_calibration.py \
-            tests/test_v02_candidate_pool.py \
+            tests/test_v02_candidate_mbr.py \
             tests/test_v02_cli.py \
             tests/test_v02_deployment_gate.py \
             tests/test_v02_distillation.py \
@@ -62,6 +61,7 @@ jobs:
             tests/test_v02_pipeline.py \
             tests/test_v02_progressive_reranking.py \
             tests/test_v02_ranker.py \
+            tests/test_v02_ranker_dataset.py \
             tests/test_v02_router.py \
             tests/test_v02_throttling.py
 

@@ -153,10 +153,7 @@ def learn_then_test_k(
                 empirical_risk=empirical,
                 upper_confidence_bound=upper,
                 mean_cost_ms=fmean(float(row.cost_ms) for row in rows),
-                accepted=(
-                    len(losses) >= config.minimum_groups
-                    and upper <= config.target_risk
-                ),
+                accepted=(len(losses) >= config.minimum_groups and upper <= config.target_risk),
             )
         )
 
@@ -207,14 +204,10 @@ def pareto_frontier(points: Sequence[ParetoPoint]) -> tuple[ParetoPoint, ...]:
     )
 
 
-def risk_observation_from_row(
-    row: Mapping[str, Any], *, line_number: int
-) -> RiskObservation:
+def risk_observation_from_row(row: Mapping[str, Any], *, line_number: int) -> RiskObservation:
     split = str(row.get("split") or "calibration")
     if split != "calibration":
-        raise ValueError(
-            f"risk-control row {line_number} belongs to forbidden split {split!r}"
-        )
+        raise ValueError(f"risk-control row {line_number} belongs to forbidden split {split!r}")
     return RiskObservation(
         sample_id=str(row.get("sampleId") or row.get("sample_id") or line_number),
         group_id=str(row.get("groupId") or row.get("group_id") or ""),
@@ -226,9 +219,7 @@ def risk_observation_from_row(
 
 def load_risk_observations(path: str | Path) -> list[RiskObservation]:
     output: list[RiskObservation] = []
-    for line_number, line in enumerate(
-        Path(path).read_text(encoding="utf-8").splitlines(), 1
-    ):
+    for line_number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
         payload = json.loads(line)

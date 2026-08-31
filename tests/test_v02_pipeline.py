@@ -4,8 +4,8 @@ import pytest
 
 from semantic_asr.pipeline import (
     ArtifactEnvelope,
-    FunctionStage,
     FunctionalPipeline,
+    FunctionStage,
     PipelineContext,
     StageSpec,
     effort_profile,
@@ -93,9 +93,7 @@ def test_optional_identity_stage_can_be_skipped_under_budget() -> None:
     assert not state.stopped
     assert state.artifact.sha256 == initial.sha256
     assert state.history == ()
-    assert state.stop_reasons == (
-        "skipped-optional-stage-budget:expensive-reranker",
-    )
+    assert state.stop_reasons == ("skipped-optional-stage-budget:expensive-reranker",)
 
 
 def test_required_stage_stops_before_exceeding_budget() -> None:

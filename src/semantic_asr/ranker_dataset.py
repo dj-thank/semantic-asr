@@ -35,9 +35,7 @@ def ranker_example_from_row(
 ) -> RankerExample:
     split = str(row.get("split") or "train")
     if require_train_split and split != "train":
-        raise ValueError(
-            f"ranker training row {line_number} belongs to forbidden split {split!r}"
-        )
+        raise ValueError(f"ranker training row {line_number} belongs to forbidden split {split!r}")
     raw_candidates = row.get("candidates")
     if not isinstance(raw_candidates, list):
         raise ValueError(f"ranker row {line_number} has no candidates array")
@@ -58,9 +56,7 @@ def ranker_example_from_row(
     else:
         reference_text = str(row.get("reference") or "").strip()
         if not reference_text:
-            raise ValueError(
-                f"ranker row {line_number} requires losses or a reference transcript"
-            )
+            raise ValueError(f"ranker row {line_number} requires losses or a reference transcript")
         reference = CandidateEvidence(
             candidate_id=f"reference:{line_number}",
             text=reference_text,
@@ -85,9 +81,7 @@ def load_ranker_examples(
     require_train_split: bool = True,
 ) -> list[RankerExample]:
     output: list[RankerExample] = []
-    for line_number, line in enumerate(
-        Path(path).read_text(encoding="utf-8").splitlines(), 1
-    ):
+    for line_number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
         payload = json.loads(line)

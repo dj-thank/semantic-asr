@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
@@ -61,8 +61,7 @@ def build_calibration_samples(
                     sample_id=f"{record.sample_id}:{candidate.candidate_id}",
                     group_id=record.group_id,
                     score=scores[candidate.candidate_id],
-                    correct=losses[candidate.candidate_id]
-                    <= oracle_loss + oracle_tolerance,
+                    correct=losses[candidate.candidate_id] <= oracle_loss + oracle_tolerance,
                 )
             )
     return output
@@ -82,14 +81,16 @@ def rerank_record(
         record.candidates,
         key=lambda candidate: (-scores[candidate.candidate_id], candidate.candidate_id),
     )
+    reranker_rank = {candidate.candidate_id: rank for rank, candidate in enumerate(ordered, 1)}
     reranked: list[CandidateEvidence] = []
-    for rank, candidate in enumerate(ordered, 1):
+    for candidate in record.candidates:
         raw_score = scores[candidate.candidate_id]
         calibrated = calibration.transform(raw_score) if calibration is not None else None
         metadata = dict(candidate.metadata)
         metadata.update(
             {
                 "originalRank": candidate.rank,
+                "offlineRerankerRank": reranker_rank[candidate.candidate_id],
                 "offlineReranker": ranker.name,
                 "offlineRerankerRawScore": raw_score,
                 "offlineRerankerCalibrationDigest": (
@@ -104,14 +105,11 @@ def rerank_record(
             lexical = (
                 float(calibrated)
                 if lexical is None
-                else (1.0 - lexical_blend) * float(lexical)
-                + lexical_blend * float(calibrated)
+                else (1.0 - lexical_blend) * float(lexical) + lexical_blend * float(calibrated)
             )
         reranked.append(
             replace(
                 candidate,
-                rank=rank,
-                hypothesis_count=len(ordered),
                 lexical=lexical,
                 metadata=metadata,
             )
@@ -146,9 +144,7 @@ def rerank_records(
     ]
 
 
-def write_calibration_samples(
-    samples: Sequence[RankerCalibrationSample], path: str | Path
-) -> None:
+def write_calibration_samples(samples: Sequence[RankerCalibrationSample], path: str | Path) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
@@ -171,9 +167,7 @@ def write_calibration_samples(
     )
 
 
-def write_reranked_benchmark(
-    records: Sequence[BenchmarkUtterance], path: str | Path
-) -> None:
+def write_reranked_benchmark(records: Sequence[BenchmarkUtterance], path: str | Path) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     rows = []

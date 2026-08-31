@@ -241,7 +241,9 @@ def command_throttle_policy(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="semantic-asr",
-        description="Semantic ASR frontier training, deployment, and real-audio experiment commands.",
+        description=(
+            "Semantic ASR frontier training, deployment, and real-audio experiment commands."
+        ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
 

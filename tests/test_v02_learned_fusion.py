@@ -74,9 +74,7 @@ def test_constrained_fusion_improves_training_cross_entropy() -> None:
     assert result.after.cross_entropy < result.before.cross_entropy
     assert result.after.top1_accuracy >= result.before.top1_accuracy
     assert sum(result.profile.weights.values()) == pytest.approx(1.0)
-    acoustic_weight = sum(
-        result.profile.weights[stream] for stream in ACOUSTIC_FAMILY
-    )
+    acoustic_weight = sum(result.profile.weights[stream] for stream in ACOUSTIC_FAMILY)
     assert acoustic_weight >= 0.72
     runtime = result.profile.to_fusion_config()
     assert runtime.priors == result.profile.weights

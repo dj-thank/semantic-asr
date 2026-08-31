@@ -91,9 +91,10 @@ def test_frontier_listwise_and_fusion_training_write_profiles() -> None:
         )
         ranker_profile = json.loads(ranker_output.read_text(encoding="utf-8"))
         assert ranker_profile["schemaVersion"] == "listwise-semantic-mwer-v1"
-        assert ranker_profile["after"]["mean_expected_loss"] < ranker_profile["before"][
-            "mean_expected_loss"
-        ]
+        assert (
+            ranker_profile["after"]["mean_expected_loss"]
+            < ranker_profile["before"]["mean_expected_loss"]
+        )
 
         fusion_data = root / "fusion.jsonl"
         fusion_rows = []

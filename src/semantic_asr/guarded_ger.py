@@ -162,8 +162,7 @@ def evaluate_ger_proposal(
     joint = _joint_score(evidence)
     threshold = min(
         1.0,
-        config.minimum_joint_score
-        + (config.critical_change_extra if critical_change else 0.0),
+        config.minimum_joint_score + (config.critical_change_extra if critical_change else 0.0),
     )
     reasons: list[str] = []
     if not evidence.calibrated:
