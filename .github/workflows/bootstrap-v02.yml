@@ -1,0 +1,71 @@
+name: Bootstrap Semantic ASR v0.2 frontier
+
+on:
+  push:
+    branches:
+      - codex/semantic-asr-v0.2-frontier
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/semantic-asr-v0.2-frontier
+          fetch-depth: 0
+      - name: Verify and apply reviewed source payload
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64
+          import hashlib
+          import io
+          import shutil
+          import tarfile
+          from pathlib import Path
+
+          encoded = "".join(
+              path.read_text(encoding="ascii")
+              for path in sorted(Path(".bootstrap-v02").glob("chunk-*"))
+          )
+          archive = base64.b64decode("".join(encoded.split()))
+          expected = "845795ca6147e05a2fa00dc0513b2ee792f1448fb9b223951adddd625d91331e"
+          actual = hashlib.sha256(archive).hexdigest()
+          if actual != expected:
+              raise SystemExit(f"v0.2 payload SHA-256 mismatch: {actual}")
+
+          destination = Path("/tmp/semantic-asr-v02")
+          shutil.rmtree(destination, ignore_errors=True)
+          destination.mkdir(parents=True)
+          with tarfile.open(fileobj=io.BytesIO(archive), mode="r:xz") as bundle:
+              members = bundle.getmembers()
+              for member in members:
+                  path = Path(member.name)
+                  if path.is_absolute() or ".." in path.parts or member.issym() or member.islnk():
+                      raise SystemExit(f"unsafe payload member: {member.name}")
+              bundle.extractall(destination, members=members, filter="data")
+
+          for item in destination.iterdir():
+              target = Path(item.name)
+              if item.is_dir():
+                  shutil.copytree(item, target, dirs_exist_ok=True)
+              else:
+                  shutil.copy2(item, target)
+
+          shutil.rmtree(".bootstrap-v02")
+          Path(".github/workflows/bootstrap-v02.yml").unlink(missing_ok=True)
+          PY
+      - name: Commit atomic v0.2 source tree
+        shell: bash
+        run: |
+          git config user.name "semantic-asr-frontier-bot"
+          git config user.email "204638875+dj-thank@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Semantic ASR v0.2: adaptive risk-controlled reranking frontier"
+          git push origin HEAD:codex/semantic-asr-v0.2-frontier
