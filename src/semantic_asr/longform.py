@@ -11,7 +11,13 @@ from typing import Any, Protocol
 
 from .adapters import ASRAdapter, DecodeRequest
 from .cache import CacheKey, EvidenceCache, TeacherCacheEntry
+from .candidate_pool import merge_candidate_pools
 from .contracts import CandidateEvidence, NormalizedTranscript, ObservedTranscript, sha256_json
+from .evidence_router import (
+    QuantileBalancedRouterConfig,
+    RouterState,
+    route_evidence_actions,
+)
 from .fusion import FusionConfig, evidence_summary, fuse_candidates
 from .japanese import deterministic_normalize, join_japanese_fragments
 from .planner import EvidenceAction, EvidenceBudget, plan_evidence
@@ -169,43 +175,11 @@ def _scoped_candidates(
     return output
 
 
-def _strength(candidate: CandidateEvidence) -> tuple[float, float, float]:
-    return (
-        float(candidate.acoustic) if candidate.acoustic is not None else -1e9,
-        float(candidate.mora) if candidate.mora is not None else -1e9,
-        float(candidate.avg_logprob) if candidate.avg_logprob is not None else -1e9,
-    )
-
-
 def merge_candidates(
     primary: Iterable[CandidateEvidence],
     additional: Iterable[CandidateEvidence],
 ) -> list[CandidateEvidence]:
-    by_text: dict[str, CandidateEvidence] = {}
-    sources: dict[str, set[str]] = {}
-    for candidate in [*primary, *additional]:
-        sources.setdefault(candidate.text, set()).update(candidate.source_support)
-        current = by_text.get(candidate.text)
-        if current is None or _strength(candidate) > _strength(current):
-            by_text[candidate.text] = candidate
-    output: list[CandidateEvidence] = []
-    for index, text in enumerate(sorted(by_text), 1):
-        candidate = by_text[text]
-        metadata = dict(candidate.metadata)
-        metadata["sourceSupport"] = sorted(sources[text])
-        cross_model = candidate.cross_model
-        if len(sources[text]) >= 2:
-            consensus = min(1.0, 0.62 + 0.12 * (len(sources[text]) - 2))
-            cross_model = consensus if cross_model is None else max(cross_model, consensus)
-        output.append(
-            replace(
-                candidate,
-                candidate_id=f"merged:{index:04d}",
-                cross_model=cross_model,
-                metadata=metadata,
-            )
-        )
-    return output
+    return merge_candidate_pools(primary, additional, id_prefix="merged")
 
 
 def _lattice_context(lattice: SemanticLattice) -> tuple[str, str]:
@@ -231,6 +205,9 @@ class SemanticASRTranscriber:
         fusion_config: FusionConfig | None = None,
         teacher_policy: DelayedTeacherPolicy | None = None,
         evidence_budget: EvidenceBudget | None = None,
+        balanced_router: bool = False,
+        router_state: RouterState | None = None,
+        router_config: QuantileBalancedRouterConfig | None = None,
         evidence_enricher: Callable[[CandidateEvidence], CandidateEvidence] | None = None,
         window_ms: int = 28_000,
         overlap_ms: int = 1_200,
@@ -243,6 +220,9 @@ class SemanticASRTranscriber:
         self.fusion_config = fusion_config or FusionConfig()
         self.teacher_policy = teacher_policy or DelayedTeacherPolicy()
         self.evidence_budget = evidence_budget or EvidenceBudget()
+        self.balanced_router = bool(balanced_router)
+        self.router_state = router_state or RouterState()
+        self.router_config = router_config or QuantileBalancedRouterConfig()
         self.evidence_enricher = evidence_enricher
         self.window_ms = window_ms
         self.overlap_ms = overlap_ms
@@ -431,6 +411,32 @@ class SemanticASRTranscriber:
                 if enabled
             ),
         )
+        routing_diagnostics: dict[str, Any] = {"enabled": False}
+        if self.balanced_router and (plan.selected or plan.rejected):
+            routed = route_evidence_actions(
+                (*plan.selected, *plan.rejected),
+                budget=self.evidence_budget,
+                state=self.router_state,
+                config=self.router_config,
+            )
+            plan = routed.plan
+            routing_diagnostics = {
+                "enabled": True,
+                "stateDigest": routed.state_digest,
+                "selected": [
+                    {
+                        "actionId": row.action.action_id,
+                        "kind": row.action.kind,
+                        "routingScore": row.routing_score,
+                        "loadBalanceBonus": row.load_balance_bonus,
+                        "empiricalRewardBonus": row.empirical_reward_bonus,
+                        "semanticBonus": row.semantic_bonus,
+                        "redundancyPenalty": row.redundancy_penalty,
+                    }
+                    for row in routed.selected
+                ],
+                "rejectedCount": len(routed.rejected),
+            }
 
         additional: list[CandidateEvidence] = []
         alignment_rows: list[dict[str, Any]] = []
@@ -524,15 +530,6 @@ class SemanticASRTranscriber:
             )
             if teacher_cache_hit:
                 cache_hits.append("local-teacher")
-            if teacher_result is not None and not teacher_result.abstained:
-                candidates = [
-                    replace(
-                        candidate,
-                        teacher=teacher_result.probabilities.get(candidate.candidate_id),
-                    )
-                    for candidate in candidates
-                ]
-                ranked = fuse_candidates(candidates, self.fusion_config)
 
         uncertainty_spans = [
             {
@@ -598,7 +595,9 @@ class SemanticASRTranscriber:
             "evidenceBudgetUsedMs": plan.used_ms,
             "plannedInformationGain": plan.expected_information_gain,
             "evidenceStoppingReason": plan.stopping_reason,
+            "evidenceRouting": routing_diagnostics,
             "teacherUsed": teacher_result is not None,
+            "teacherAffectsObserved": False,
             "teacherAbstained": (teacher_result.abstained if teacher_result is not None else None),
             "teacherCacheHit": teacher_cache_hit,
             "forcedAlignment": alignment_rows,

@@ -19,6 +19,7 @@ from .calibration import CalibrationProfile
 from .cascade import CascadeConfig, run_candidate_cascade
 from .cli import main as legacy_main
 from .contracts import CandidateEvidence
+from .evidence_router import RouterState
 from .longform import SemanticASRTranscriber
 from .outputs import write_outputs
 from .planner import EvidenceBudget
@@ -94,6 +95,26 @@ def _load_calibration(path: str | Path | None) -> CalibrationProfile | None:
     row = dict(payload.get("profile", payload))
     row.pop("digest", None)
     return CalibrationProfile(**row)
+
+
+def _load_router_state(path: str | Path | None) -> RouterState:
+    if path is None:
+        return RouterState()
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return RouterState(
+        selection_count={
+            str(key): int(value)
+            for key, value in dict(
+                payload.get("selectionCount", payload.get("selection_count", {}))
+            ).items()
+        },
+        reward_sum={
+            str(key): float(value)
+            for key, value in dict(payload.get("rewardSum", payload.get("reward_sum", {}))).items()
+        },
+        total_selections=int(payload.get("totalSelections", payload.get("total_selections", 0))),
+        version=str(payload.get("version", "1")),
+    )
 
 
 def _hotwords(args: argparse.Namespace) -> tuple[str, ...]:
@@ -353,6 +374,8 @@ def command_transcribe_v2(args: argparse.Namespace) -> int:
                 total_cost_ms=args.evidence_budget_ms,
                 max_actions=args.max_evidence_actions,
             ),
+            balanced_router=args.evidence_router == "balanced",
+            router_state=_load_router_state(args.router_state),
             window_ms=args.window_ms,
             overlap_ms=args.overlap_ms,
         )
@@ -481,6 +504,12 @@ def build_advanced_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("--no-cache", action="store_true")
     transcribe.add_argument("--evidence-budget-ms", type=int, default=12_000)
     transcribe.add_argument("--max-evidence-actions", type=int, default=8)
+    transcribe.add_argument(
+        "--evidence-router",
+        choices=["legacy", "balanced"],
+        default="balanced",
+    )
+    transcribe.add_argument("--router-state")
     transcribe.add_argument("--qwen-second-ear", action="store_true")
     transcribe.add_argument("--qwen-model", default="Qwen/Qwen3-ASR-0.6B")
     transcribe.add_argument("--qwen-device-map", default="cuda:0")
