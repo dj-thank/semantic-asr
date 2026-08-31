@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use Semantic ASR in research, please cite this repository."
+title: "Semantic ASR: Evidence-Preserving Japanese Speech Recognition"
+type: software
+authors:
+  - family-names: Moriwaki
+    given-names: Shota
+repository-code: "https://github.com/dj-thank/semantic-asr"
+version: 0.1.0
+date-released: 2026-08-29
+license: Apache-2.0

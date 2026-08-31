@@ -1,0 +1,13 @@
+name: Legacy training validation (manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Preserve this workflow's entry point without a second automatic writer.
+# Manual invocations perform the same real, check-only validation as CI.
+jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml

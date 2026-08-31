@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantic-asr.invalid/schemas/rights-registry.schema.json",
+  "title": "Semantic ASR rights registry",
+  "type": "object",
+  "required": ["assets"],
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "assetId",
+          "sourceName",
+          "sourceUrl",
+          "version",
+          "licenseName",
+          "licenseUrl",
+          "train",
+          "deriveFeatures",
+          "redistributeRaw",
+          "exportSpeakerId",
+          "attribution",
+          "reviewedAt"
+        ],
+        "properties": {
+          "assetId": { "type": "string", "minLength": 1 },
+          "sourceName": { "type": "string", "minLength": 1 },
+          "sourceUrl": { "type": "string", "format": "uri" },
+          "version": { "type": "string", "minLength": 1 },
+          "licenseName": { "type": "string", "minLength": 1 },
+          "licenseUrl": { "type": "string", "format": "uri" },
+          "train": { "$ref": "#/$defs/state" },
+          "deriveFeatures": { "$ref": "#/$defs/state" },
+          "redistributeRaw": { "$ref": "#/$defs/state" },
+          "exportSpeakerId": { "$ref": "#/$defs/state" },
+          "attribution": { "type": "string" },
+          "reviewedAt": { "type": "string" },
+          "notes": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "state": { "enum": ["allow", "deny", "review"] }
+  },
+  "additionalProperties": false
+}
