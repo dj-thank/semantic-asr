@@ -27,19 +27,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p .source
+          mkdir -p source-snapshot
           tar \
             --exclude=.git \
-            --exclude=.source \
-            -czf .source/semantic-asr-source.tar.gz .
-          sha256sum .source/semantic-asr-source.tar.gz \
-            > .source/semantic-asr-source.sha256
-          printf '%s\n' "${GITHUB_SHA}" > .source/source-commit.txt
+            --exclude=source-snapshot \
+            -czf source-snapshot/semantic-asr-source.tar.gz .
+          sha256sum source-snapshot/semantic-asr-source.tar.gz \
+            > source-snapshot/semantic-asr-source.sha256
+          printf '%s\n' "${GITHUB_SHA}" > source-snapshot/source-commit.txt
 
       - name: Upload source snapshot
         uses: actions/upload-artifact@v4
         with:
           name: semantic-asr-source
-          path: .source/
+          path: source-snapshot/
           if-no-files-found: error
           retention-days: 3
