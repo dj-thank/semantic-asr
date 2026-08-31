@@ -117,6 +117,35 @@ jobs:
       - name: Install validation dependencies
         run: python -m pip install -e '.[dev]'
 
+      - name: Normalize concurrent implementation lint anchors
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          ngram = Path('src/semantic_asr/ngram.py')
+          text = ngram.read_text(encoding='utf-8')
+          old = '            source = candidate.reading if self.mode == "mora" and candidate.reading else candidate.text\n'
+          new = (
+              '            source = (\n'
+              '                candidate.reading\n'
+              '                if self.mode == "mora" and candidate.reading\n'
+              '                else candidate.text\n'
+              '            )\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit('ngram lint anchor mismatch')
+          ngram.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+
+          pipeline = Path('src/semantic_asr/pipeline.py')
+          text = pipeline.read_text(encoding='utf-8')
+          old = '        for left, right in zip(self.stages, self.stages[1:]):\n'
+          new = '        for left, right in zip(self.stages, self.stages[1:], strict=False):\n'
+          if text.count(old) != 1:
+              raise SystemExit('pipeline lint anchor mismatch')
+          pipeline.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+          PY
+
       - name: Format and lint
         run: |
           ruff check --fix .
