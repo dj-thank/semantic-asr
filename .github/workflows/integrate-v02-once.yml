@@ -6,21 +6,16 @@ on:
       - codex/semantic-asr-v0.2-integrated
     paths:
       - .github/workflows/integrate-v02-once.yml
-  pull_request:
-    branches:
-      - main
-    types: [opened, reopened, synchronize]
 
 permissions:
   contents: write
 
 concurrency:
   group: semantic-asr-v02-integration
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   integrate:
-    if: github.event_name == 'push' || github.head_ref == 'codex/semantic-asr-v0.2-integrated'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -86,7 +81,10 @@ jobs:
             .github/workflows/v02-record-validation.yml \
             .github/workflows/v02-merge-after-final.yml \
             .github/workflows/v02-release-merge.yml \
-            .github/workflows/v02-release-verified-merge.yml
+            .github/workflows/v02-release-verified-merge.yml \
+            scripts/apply_pr_review_fixes.py \
+            scripts/apply_pr_review_fixes_v2.py \
+            scripts/finalize_v02_branch.py
 
       - name: Record the integration boundary
         shell: bash
@@ -120,13 +118,55 @@ jobs:
           fail closed.
           EOF
 
+      - name: Normalize lint policy for data registries
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          pyproject = Path("pyproject.toml")
+          text = pyproject.read_text(encoding="utf-8")
+          for stale in (
+              '"scripts/apply_pr_review_fixes.py" = ["E501"]\n',
+              '"scripts/apply_pr_review_fixes_v2.py" = ["E501"]\n',
+          ):
+              text = text.replace(stale, "")
+          entry = '"src/semantic_asr/research_registry.py" = ["E501"]'
+          if entry not in text:
+              anchor = "[tool.ruff.lint.per-file-ignores]\n"
+              addition = (
+                  "# Source titles and falsification statements are immutable registry data.\n"
+                  f"{entry}\n"
+              )
+              if anchor not in text:
+                  raise RuntimeError("missing Ruff per-file-ignore section")
+              text = text.replace(anchor, anchor + addition, 1)
+          pyproject.write_text(text, encoding="utf-8")
+
+          frontier_cli = Path("src/semantic_asr/frontier_cli.py")
+          cli_text = frontier_cli.read_text(encoding="utf-8")
+          old = (
+              '        description="Semantic ASR frontier training, deployment, '
+              'and real-audio experiment commands.",'
+          )
+          new = (
+              "        description=(\n"
+              '            "Semantic ASR frontier training, deployment, and real-audio "\n'
+              '            "experiment commands."\n'
+              "        ),"
+          )
+          if old in cli_text:
+              cli_text = cli_text.replace(old, new, 1)
+          frontier_cli.write_text(cli_text, encoding="utf-8")
+          PY
+
       - name: Canonically format and repair safe lint findings
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check 'ruff==0.16.5'
           python -m ruff format src tests scripts
-          python -m ruff check --fix src tests scripts
+          python -m ruff check --fix --unsafe-fixes src tests scripts
           python -m compileall -q src tests scripts
 
       - name: Remove this one-shot workflow and commit the merge
