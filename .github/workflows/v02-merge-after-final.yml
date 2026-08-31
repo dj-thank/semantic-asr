@@ -1,0 +1,73 @@
+name: Merge Semantic ASR v0.2 after final gate
+
+on:
+  workflow_run:
+    workflows:
+      - Semantic ASR v0.2 final gate
+    types:
+      - completed
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: read
+
+jobs:
+  merge-exact-validated-head:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'codex/semantic-asr-v0.2-adaptive-reranking'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify PR and exact validated head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr_json="$(gh api "repos/${REPOSITORY}/pulls/5")"
+          state="$(jq -r '.state' <<<"${pr_json}")"
+          draft="$(jq -r '.draft' <<<"${pr_json}")"
+          head_ref="$(jq -r '.head.ref' <<<"${pr_json}")"
+          head_sha="$(jq -r '.head.sha' <<<"${pr_json}")"
+          base_ref="$(jq -r '.base.ref' <<<"${pr_json}")"
+          mergeable_state="$(jq -r '.mergeable_state' <<<"${pr_json}")"
+
+          test "${state}" = open
+          test "${draft}" = false
+          test "${head_ref}" = codex/semantic-asr-v0.2-adaptive-reranking
+          test "${base_ref}" = main
+          test "${head_sha}" = "${VALIDATED_SHA}"
+          case "${mergeable_state}" in
+            clean|has_hooks|unstable) ;;
+            *) echo "Refusing merge: mergeable_state=${mergeable_state}" >&2; exit 1 ;;
+          esac
+
+          runs="$(gh api --paginate \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${REPOSITORY}/actions/runs?head_sha=${VALIDATED_SHA}&per_page=100")"
+          failures="$(jq '[.workflow_runs[] | select(.status == "completed" and (.conclusion | IN("failure", "cancelled", "timed_out", "action_required", "stale")))] | length' <<<"${runs}")"
+          in_progress="$(jq '[.workflow_runs[] | select(.status != "completed")] | length' <<<"${runs}")"
+          test "${failures}" -eq 0
+          test "${in_progress}" -eq 0
+
+      - name: Squash merge exact validated head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api \
+            --method PUT \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${REPOSITORY}/pulls/5/merge" \
+            -f merge_method=squash \
+            -f sha="${VALIDATED_SHA}" \
+            -f commit_title='Semantic ASR v0.2: adaptive calibrated reranking and acoustic verification' \
+            -f commit_message='Merge the exact head validated by the cross-platform v0.2 final gate.'
