@@ -157,8 +157,12 @@ class FunctionStage:
                 f"stage {self.spec.name} expects {self.spec.input_kind}, got {artifact.kind}"
             )
         payload, actual_cost_ms, diagnostics = self.function(artifact, context)
-        if actual_cost_ms < 0 or not math.isfinite(float(actual_cost_ms)):
-            raise ValueError("stage function returned an invalid cost")
+        if (
+            actual_cost_ms < 0
+            or not math.isfinite(float(actual_cost_ms))
+            or int(actual_cost_ms) != actual_cost_ms
+        ):
+            raise ValueError("stage function returned an invalid integer millisecond cost")
         output = ArtifactEnvelope.create(
             kind=self.spec.output_kind,
             payload=payload,
@@ -272,23 +276,27 @@ class FunctionalPipeline:
         for stage in self.stages:
             estimated_total = state.used_budget_ms + stage.spec.estimated_cost_ms
             if estimated_total > context.total_budget_ms:
-                if stage.spec.optional:
+                if stage.spec.optional and stage.spec.input_kind == stage.spec.output_kind:
                     state = PipelineState(
                         artifact=state.artifact,
                         history=state.history,
                         used_budget_ms=state.used_budget_ms,
-                        stopped=True,
+                        stopped=False,
                         stop_reasons=state.stop_reasons
-                        + (f"optional-stage-budget:{stage.spec.name}",),
+                        + (f"skipped-optional-stage-budget:{stage.spec.name}",),
                     )
                     continue
+                reason = (
+                    "optional-stage-contract-budget"
+                    if stage.spec.optional
+                    else "required-stage-budget"
+                )
                 return PipelineState(
                     artifact=state.artifact,
                     history=state.history,
                     used_budget_ms=state.used_budget_ms,
                     stopped=True,
-                    stop_reasons=state.stop_reasons
-                    + (f"required-stage-budget:{stage.spec.name}",),
+                    stop_reasons=state.stop_reasons + (f"{reason}:{stage.spec.name}",),
                 )
             execution = stage(state.artifact, context)
             used = state.used_budget_ms + execution.actual_cost_ms
