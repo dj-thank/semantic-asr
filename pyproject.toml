@@ -38,6 +38,12 @@ rerank = [
   "torch>=2.4",
   "transformers>=5,<6",
 ]
+kenlm = [
+  "kenlm>=0.2.0",
+]
+japanese = [
+  "pyopenjtalk>=0.4",
+]
 dev = [
   "build>=1.2",
   "jsonschema>=4.20",
