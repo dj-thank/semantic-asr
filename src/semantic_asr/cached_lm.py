@@ -112,9 +112,7 @@ class HashedLMProbabilityCache:
             teacher_revision=teacher_revision,
             sample_count=int(sample_count),
         )
-        self._entries[
-            (entry.context_order, entry.context_digest, entry.target_token_id)
-        ] = entry
+        self._entries[(entry.context_order, entry.context_digest, entry.target_token_id)] = entry
         return entry
 
     def put_log_probability(
@@ -139,9 +137,7 @@ class HashedLMProbabilityCache:
             teacher_revision=teacher_revision,
             sample_count=int(sample_count),
         )
-        self._entries[
-            (entry.context_order, entry.context_digest, entry.target_token_id)
-        ] = entry
+        self._entries[(entry.context_order, entry.context_digest, entry.target_token_id)] = entry
         return entry
 
     def lookup(
@@ -158,8 +154,7 @@ class HashedLMProbabilityCache:
                 continue
             backoff_steps = maximum - order
             return CacheLookup(
-                log_probability=entry.log_probability
-                - self.backoff_penalty * backoff_steps,
+                log_probability=entry.log_probability - self.backoff_penalty * backoff_steps,
                 matched_order=order,
                 exact=backoff_steps == 0,
                 teacher=entry.teacher,
@@ -234,9 +229,9 @@ class HashedLMProbabilityCache:
         )
         for raw in payload.get("entries", []):
             entry = CachedProbability(**raw)
-            cache._entries[
-                (entry.context_order, entry.context_digest, entry.target_token_id)
-            ] = entry
+            cache._entries[(entry.context_order, entry.context_digest, entry.target_token_id)] = (
+                entry
+            )
         return cache
 
     def __len__(self) -> int:

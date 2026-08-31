@@ -129,9 +129,7 @@ class QuerySelectedAcousticVerifier(nn.Module):
         encoded, _state = self.mora_encoder(embedded)
         mask_value = mask.unsqueeze(-1).to(dtype=encoded.dtype)
         pooled = (encoded * mask_value).sum(dim=1) / lengths.unsqueeze(-1)
-        return pooled.reshape(batch, candidates, -1), mask.reshape(
-            batch, candidates, length
-        )
+        return pooled.reshape(batch, candidates, -1), mask.reshape(batch, candidates, length)
 
     def forward(
         self,
@@ -156,9 +154,7 @@ class QuerySelectedAcousticVerifier(nn.Module):
             candidate_mora_ids, candidate_mask
         )
         if acoustic_mask is None:
-            frame_mask = torch.ones(
-                (batch, frames), dtype=torch.bool, device=acoustic.device
-            )
+            frame_mask = torch.ones((batch, frames), dtype=torch.bool, device=acoustic.device)
         else:
             if acoustic_mask.shape != (batch, frames):
                 raise ValueError("acoustic_mask must be [batch, frames]")
@@ -209,9 +205,7 @@ class QuerySelectedAcousticVerifier(nn.Module):
         mora_branch = self.mora_branch(candidate)
         gate_input = torch.cat([selected, global_expanded, candidate], dim=-1)
         gates = F.softmax(self.gate(gate_input), dim=-1)
-        stacked = torch.stack(
-            [selected_branch, context_branch, mora_branch], dim=-2
-        )
+        stacked = torch.stack([selected_branch, context_branch, mora_branch], dim=-2)
         mixed = (stacked * gates.unsqueeze(-1)).sum(dim=-2)
         logits = self.output(mixed).squeeze(-1)
 

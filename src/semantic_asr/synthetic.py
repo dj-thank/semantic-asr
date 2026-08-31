@@ -89,11 +89,7 @@ def generate_hard_negatives(
         original = int(digit_match.group(0))
         for delta in (1, -1, 10):
             replacement = str((original + delta) % 10)
-            text = (
-                reference[: digit_match.start()]
-                + replacement
-                + reference[digit_match.end() :]
-            )
+            text = reference[: digit_match.start()] + replacement + reference[digit_match.end() :]
             if text not in seen:
                 seen.add(text)
                 output.append(
@@ -175,8 +171,7 @@ def synthetic_ranker_example(
                 preservation=max(
                     0.05,
                     0.90
-                    - (0.55 if corruption.kind == "filler-delete" else 0.20)
-                    * corruption.severity,
+                    - (0.55 if corruption.kind == "filler-delete" else 0.20) * corruption.severity,
                 ),
                 rank=index,
                 hypothesis_count=len(negatives) + 1,

@@ -107,11 +107,7 @@ def _route_score(
     load_bonus = config.load_balance_strength * underuse
     reward_bonus = config.reward_strength * _mean_reward(action.kind, state)
     semantic_bonus = config.semantic_priority_strength * action.semantic_criticality
-    redundancy = (
-        config.duplicate_island_penalty * per_island
-        if per_island > 0
-        else 0.0
-    )
+    redundancy = config.duplicate_island_penalty * per_island if per_island > 0 else 0.0
     score = action.utility + load_bonus + reward_bonus + semantic_bonus - redundancy
     return RoutedAction(
         action=action,
@@ -200,9 +196,7 @@ def route_evidence_actions(
         rejected=tuple(row.action for row in rejected),
         budget_ms=budget.total_cost_ms,
         used_ms=used_ms,
-        expected_information_gain=sum(
-            row.action.expected_information_gain for row in selected
-        ),
+        expected_information_gain=sum(row.action.expected_information_gain for row in selected),
         stopping_reason=stopping_reason,
     )
     return RoutingResult(
@@ -274,28 +268,18 @@ def mix_residual_branches(
 
     if maximum_active_branches < 1:
         raise ValueError("maximum_active_branches must be positive")
-    eligible = [
-        branch for branch in branches if branch.reliability >= minimum_reliability
-    ]
-    eligible.sort(
-        key=lambda branch: (-branch.reliability, branch.cost, branch.name)
-    )
+    eligible = [branch for branch in branches if branch.reliability >= minimum_reliability]
+    eligible.sort(key=lambda branch: (-branch.reliability, branch.cost, branch.name))
     active = eligible[:maximum_active_branches]
-    identifiers = sorted(
-        {candidate_id for branch in active for candidate_id in branch.scores}
-    )
+    identifiers = sorted({candidate_id for branch in active for candidate_id in branch.scores})
     if not active or not identifiers:
         return ResidualMix(scores={}, gates={}, active_branches=())
-    raw_gates = {
-        branch.name: branch.reliability / (1.0 + branch.cost)
-        for branch in active
-    }
+    raw_gates = {branch.name: branch.reliability / (1.0 + branch.cost) for branch in active}
     total = sum(raw_gates.values()) or 1.0
     gates = {name: value / total for name, value in raw_gates.items()}
     scores = {
         candidate_id: sum(
-            gates[branch.name] * branch.scores.get(candidate_id, 0.0)
-            for branch in active
+            gates[branch.name] * branch.scores.get(candidate_id, 0.0) for branch in active
         )
         for candidate_id in identifiers
     }

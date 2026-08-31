@@ -142,13 +142,11 @@ class LinearRankerProfile:
         }
         if values.get("feature_mean") is not None:
             values["feature_mean"] = {
-                str(name): float(value)
-                for name, value in dict(values["feature_mean"]).items()
+                str(name): float(value) for name, value in dict(values["feature_mean"]).items()
             }
         if values.get("feature_scale") is not None:
             values["feature_scale"] = {
-                str(name): float(value)
-                for name, value in dict(values["feature_scale"]).items()
+                str(name): float(value) for name, value in dict(values["feature_scale"]).items()
             }
         return cls(**values)
 
@@ -180,9 +178,7 @@ class LinearCandidateRanker:
             value for value in (context, consensus, contradiction) if value
         )
         return {
-            candidate.candidate_id: self._score_one(
-                candidate, context=augmented_context
-            )
+            candidate.candidate_id: self._score_one(candidate, context=augmented_context)
             for candidate in candidates
         }
 
@@ -197,8 +193,7 @@ class StaticCandidateRanker:
 
     def score(self, candidates: Sequence[CandidateEvidence], **_: Any) -> Mapping[str, float]:
         return {
-            candidate.candidate_id: self.scores[candidate.candidate_id]
-            for candidate in candidates
+            candidate.candidate_id: self.scores[candidate.candidate_id] for candidate in candidates
         }
 
 

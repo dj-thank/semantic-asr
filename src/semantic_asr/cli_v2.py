@@ -58,9 +58,7 @@ def _candidate(row: dict[str, Any]) -> CandidateEvidence:
         "avgLogprob": "avg_logprob",
         "beamConfidence": "beam_confidence",
     }
-    return CandidateEvidence.from_dict(
-        {aliases.get(key, key): value for key, value in row.items()}
-    )
+    return CandidateEvidence.from_dict({aliases.get(key, key): value for key, value in row.items()})
 
 
 def _load_candidates(path: str | Path) -> list[CandidateEvidence]:
@@ -102,9 +100,7 @@ def _hotwords(args: argparse.Namespace) -> tuple[str, ...]:
     values: list[str] = []
     if args.hotwords:
         values.extend(
-            value.strip()
-            for value in args.hotwords.replace("、", ",").split(",")
-            if value.strip()
+            value.strip() for value in args.hotwords.replace("、", ",").split(",") if value.strip()
         )
     if args.hotwords_file:
         text = Path(args.hotwords_file).read_text(encoding="utf-8")
@@ -189,9 +185,7 @@ def command_synthetic_data(args: argparse.Namespace) -> int:
                 {
                     "exampleId": example.example_id,
                     "context": example.context,
-                    "candidates": [
-                        candidate.as_dict() for candidate in example.candidates
-                    ],
+                    "candidates": [candidate.as_dict() for candidate in example.candidates],
                     "losses": example.losses,
                 },
                 ensure_ascii=False,
@@ -340,14 +334,12 @@ def command_transcribe_v2(args: argparse.Namespace) -> int:
         if args.teacher_protocol == "ollama":
             teacher = OllamaRanker(
                 model=args.teacher_model,
-                endpoint=args.teacher_endpoint
-                or "http://127.0.0.1:11434/api/chat",
+                endpoint=args.teacher_endpoint or "http://127.0.0.1:11434/api/chat",
             )
         else:
             teacher = OpenAICompatibleRanker(
                 model=args.teacher_model,
-                endpoint=args.teacher_endpoint
-                or "http://127.0.0.1:8000/v1/chat/completions",
+                endpoint=args.teacher_endpoint or "http://127.0.0.1:8000/v1/chat/completions",
             )
     cache = None if args.no_cache else EvidenceCache(args.cache)
     try:

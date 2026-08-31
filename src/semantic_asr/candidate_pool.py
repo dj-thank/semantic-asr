@@ -70,9 +70,7 @@ def _strength(candidate: CandidateEvidence) -> tuple[float, float, float, float]
 
 def _aggregate_domain(rows: list[CandidateEvidence]) -> CandidateEvidence:
     representative = max(rows, key=lambda row: (_strength(row), row.candidate_id))
-    cumulative = [
-        value for row in rows if (value := _path_cumulative_logprob(row)) is not None
-    ]
+    cumulative = [value for row in rows if (value := _path_cumulative_logprob(row)) is not None]
     metadata = dict(representative.metadata)
     metadata.update(
         {
@@ -81,9 +79,7 @@ def _aggregate_domain(rows: list[CandidateEvidence]) -> CandidateEvidence:
                 {
                     str(candidate_id)
                     for row in rows
-                    for candidate_id in row.metadata.get(
-                        "pathCandidateIds", [row.candidate_id]
-                    )
+                    for candidate_id in row.metadata.get("pathCandidateIds", [row.candidate_id])
                 }
             ),
             "pathCount": sum(int(row.metadata.get("pathCount", 1)) for row in rows),
@@ -156,12 +152,7 @@ def aggregate_surface_candidates(
         domain_rows = [_aggregate_domain(domain) for domain in by_domain.values()]
         representative = max(domain_rows, key=lambda row: (_strength(row), row.candidate_id))
         metadata = dict(representative.metadata)
-        sources = {
-            source
-            for row in surface_rows
-            for source in row.source_support
-            if source
-        }
+        sources = {source for row in surface_rows for source in row.source_support if source}
         metadata["sourceSupport"] = sorted(sources)
         metadata["scoreDomains"] = sorted(by_domain)
         metadata["surfacePathCount"] = sum(
@@ -171,9 +162,7 @@ def aggregate_surface_candidates(
             {
                 str(candidate_id)
                 for row in domain_rows
-                for candidate_id in row.metadata.get(
-                    "pathCandidateIds", [row.candidate_id]
-                )
+                for candidate_id in row.metadata.get("pathCandidateIds", [row.candidate_id])
             }
         )
         cross_model = representative.cross_model

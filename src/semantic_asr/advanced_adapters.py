@@ -70,9 +70,7 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
         if duration_seconds > 30.0:
             raise ValueError("decode request exceeds one Whisper window")
 
-        language, language_probability, language_policy = self._language(
-            waveform, request.language
-        )
+        language, language_probability, language_policy = self._language(waveform, request.language)
         tokenizer = Tokenizer(
             self.model.hf_tokenizer,
             self.model.model.is_multilingual,
@@ -87,9 +85,7 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
             features = np.expand_dims(features, 0)
         encoded = self.model.encode(features)
 
-        initial_tokens = (
-            tokenizer.encode(request.initial_prompt) if request.initial_prompt else []
-        )
+        initial_tokens = tokenizer.encode(request.initial_prompt) if request.initial_prompt else []
         hotwords = "、".join(request.hotwords) or None
         try:
             prompt = self.model.get_prompt(
@@ -100,9 +96,7 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
             )
         except TypeError:  # pragma: no cover - older faster-whisper
             try:
-                prompt = self.model.get_prompt(
-                    tokenizer, initial_tokens, True, None, hotwords
-                )
+                prompt = self.model.get_prompt(tokenizer, initial_tokens, True, None, hotwords)
             except TypeError:
                 prompt = self.model.get_prompt(tokenizer, initial_tokens, True)
 
@@ -135,21 +129,15 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
             f"patience={self.patience}|lp={self.length_penalty}"
         )
         rows: list[CandidateEvidence] = []
-        for raw_rank, (tokens, score) in enumerate(
-            zip(sequences, scores, strict=True), 1
-        ):
+        for raw_rank, (tokens, score) in enumerate(zip(sequences, scores, strict=True), 1):
             token_ids = tuple(int(token) for token in tokens)
-            text_tokens = [
-                token for token in token_ids if token < tokenizer.timestamp_begin
-            ]
+            text_tokens = [token for token in token_ids if token < tokenizer.timestamp_begin]
             text = tokenizer.decode(text_tokens).strip()
             if not text:
                 continue
             sequence_score = float(score)
             token_count = max(1, len(token_ids))
-            cumulative_logprob = sequence_score * (
-                token_count**self.length_penalty
-            )
+            cumulative_logprob = sequence_score * (token_count**self.length_penalty)
             avg_logprob = cumulative_logprob / (token_count + 1)
             rows.append(
                 CandidateEvidence(
@@ -170,9 +158,7 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
                         "language": language,
                         "languageProbability": language_probability,
                         "languagePolicy": language_policy,
-                        "noSpeechProbability": getattr(
-                            result, "no_speech_prob", None
-                        ),
+                        "noSpeechProbability": getattr(result, "no_speech_prob", None),
                         "initialPromptDigest": prompt_digest,
                         "hotwordsDigest": hotwords_digest,
                         "fasterWhisperVersion": _package_version("faster-whisper"),
@@ -218,8 +204,7 @@ def _softmax_scores(
     ]
     maximum = max(raw)
     exponentials = [
-        math.exp(max(-80.0, min(80.0, (value - maximum) / temperature)))
-        for value in raw
+        math.exp(max(-80.0, min(80.0, (value - maximum) / temperature))) for value in raw
     ]
     total = sum(exponentials) or 1.0
     return {
@@ -268,9 +253,7 @@ class AdaptiveRerankingAdapter:
         self.model_name = f"{getattr(base, 'model_name', base.name)}+{ranker.name}"
         self.maximum_hypotheses = int(maximum_hypotheses)
         self.acoustic_temperature = float(acoustic_temperature)
-        self.adaptive_config = adaptive_config or AdaptiveKConfig(
-            maximum_k=maximum_hypotheses
-        )
+        self.adaptive_config = adaptive_config or AdaptiveKConfig(maximum_k=maximum_hypotheses)
         self.calibration_profile = calibration_profile
         self.lexical_blend = float(lexical_blend)
 
@@ -283,9 +266,7 @@ class AdaptiveRerankingAdapter:
         candidates = aggregate_surface_candidates(
             self.base.decode(expanded), id_prefix="adaptive-pool"
         )
-        probabilities = _softmax_scores(
-            candidates, temperature=self.acoustic_temperature
-        )
+        probabilities = _softmax_scores(candidates, temperature=self.acoustic_temperature)
         ordered_mass = sorted(probabilities.values(), reverse=True)
         entropy = _normalized_entropy(ordered_mass)
         top = ordered_mass[0] if ordered_mass else 0.0
@@ -303,9 +284,7 @@ class AdaptiveRerankingAdapter:
             config=self.adaptive_config,
         )
         selected_ids = set(decision.selected_candidate_ids)
-        selected = [
-            candidate for candidate in candidates if candidate.candidate_id in selected_ids
-        ]
+        selected = [candidate for candidate in candidates if candidate.candidate_id in selected_ids]
         scores = dict(
             self.ranker.score(
                 selected,
@@ -315,9 +294,7 @@ class AdaptiveRerankingAdapter:
             )
         )
         if set(scores) != selected_ids:
-            raise ValueError(
-                "ranker must return exactly one score for each selected candidate"
-            )
+            raise ValueError("ranker must return exactly one score for each selected candidate")
         calibrated = calibrate_values(
             [scores[candidate.candidate_id] for candidate in selected],
             profile=self.calibration_profile,

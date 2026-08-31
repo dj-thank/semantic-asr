@@ -94,9 +94,7 @@ def test_hashed_probability_cache_backoff_and_roundtrip() -> None:
             path,
             key=b"0123456789abcdef",
         )
-        assert restored.lookup([1, 2], 3).log_probability == pytest.approx(
-            exact.log_probability
-        )
+        assert restored.lookup([1, 2], 3).log_probability == pytest.approx(exact.log_probability)
 
 
 class _FakeBase:

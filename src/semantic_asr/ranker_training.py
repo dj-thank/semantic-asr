@@ -129,8 +129,7 @@ def _feature_statistics(
                 values[name].append(features[name])
     means = {name: fmean(rows) for name, rows in values.items()}
     scales = {
-        name: max(1e-6, pstdev(rows) if len(rows) > 1 else 1.0)
-        for name, rows in values.items()
+        name: max(1e-6, pstdev(rows) if len(rows) > 1 else 1.0) for name, rows in values.items()
     }
     return means, scales
 
@@ -145,8 +144,7 @@ def _vector(
 ) -> tuple[float, ...]:
     features = candidate_features(candidate, context=context)
     return tuple(
-        (features[name] - means.get(name, 0.0)) / scales.get(name, 1.0)
-        for name in feature_names
+        (features[name] - means.get(name, 0.0)) / scales.get(name, 1.0) for name in feature_names
     )
 
 
@@ -179,9 +177,7 @@ def _pairs(
                 gap = abs(left_loss - right_loss)
                 if gap <= config.minimum_loss_gap:
                     continue
-                positive, negative = (
-                    (left, right) if left_loss < right_loss else (right, left)
-                )
+                positive, negative = (left, right) if left_loss < right_loss else (right, left)
                 pairs.append(
                     _Pair(
                         positive=vectors[positive.candidate_id],
@@ -244,9 +240,7 @@ def train_pairwise_ranker(
                 positive - negative
                 for positive, negative in zip(pair.positive, pair.negative, strict=True)
             ]
-            margin = sum(
-                weight * value for weight, value in zip(weights, difference, strict=True)
-            )
+            margin = sum(weight * value for weight, value in zip(weights, difference, strict=True))
             error = _sigmoid_negative_margin(margin)
             losses.append(pair.weight * _logistic_loss(margin))
             for feature_index, value in enumerate(difference):
@@ -287,9 +281,7 @@ def evaluate_ranker(
                 right_loss = example.losses[right.candidate_id]
                 if left_loss == right_loss:
                     continue
-                positive, negative = (
-                    (left, right) if left_loss < right_loss else (right, left)
-                )
+                positive, negative = (left, right) if left_loss < right_loss else (right, left)
                 pairs.append(
                     _Pair(
                         positive=(float(scores[positive.candidate_id]),),
@@ -342,9 +334,7 @@ def example_from_row(row: Mapping[str, Any], *, line_number: int = 0) -> RankerE
 
 def load_jsonl_examples(path: str | Path) -> list[RankerExample]:
     output: list[RankerExample] = []
-    for line_number, line in enumerate(
-        Path(path).read_text(encoding="utf-8").splitlines(), 1
-    ):
+    for line_number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
         payload = json.loads(line)

@@ -140,9 +140,7 @@ def select_adaptive_k(
         cumulative += probability
         seen_surfaces.add(candidate.text)
         enough_count = len(selected) >= target_k
-        enough_diversity = len(seen_surfaces) >= min(
-            config.minimum_diverse_surfaces, len(ordered)
-        )
+        enough_diversity = len(seen_surfaces) >= min(config.minimum_diverse_surfaces, len(ordered))
         enough_mass = cumulative >= config.posterior_mass_target
         negligible_tail = probability < config.minimum_incremental_mass
         if enough_count and enough_diversity and (enough_mass or negligible_tail):

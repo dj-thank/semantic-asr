@@ -73,11 +73,7 @@ def run_candidate_cascade(
     if not agree:
         reasons.append("fusion-mbr-disagreement")
         posterior_order = sorted(gate.posterior.values(), reverse=True)
-        fusion_margin = (
-            posterior_order[0] - posterior_order[1]
-            if len(posterior_order) > 1
-            else 1.0
-        )
+        fusion_margin = posterior_order[0] - posterior_order[1] if len(posterior_order) > 1 else 1.0
         if (
             cascade_config.selection_policy == "mbr-tiebreak"
             and fusion_margin <= cascade_config.maximum_fusion_margin_for_mbr_tiebreak
@@ -90,9 +86,7 @@ def run_candidate_cascade(
     requires = bool(
         gate.needs_relisten
         or (
-            cascade_config.disagreement_requires_evidence
-            and not agree
-            and selected_id == fusion_id
+            cascade_config.disagreement_requires_evidence and not agree and selected_id == fusion_id
         )
     )
     selected = next(candidate for candidate in pooled if candidate.candidate_id == selected_id)
