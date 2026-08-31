@@ -1,0 +1,45 @@
+name: Export Semantic ASR source snapshot
+
+on:
+  push:
+    branches:
+      - codex/semantic-asr-v0.2-adaptive-reranking
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: semantic-asr-source-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Create source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .source
+          tar \
+            --exclude=.git \
+            --exclude=.source \
+            -czf .source/semantic-asr-source.tar.gz .
+          sha256sum .source/semantic-asr-source.tar.gz \
+            > .source/semantic-asr-source.sha256
+          printf '%s\n' "${GITHUB_SHA}" > .source/source-commit.txt
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-asr-source
+          path: .source/
+          if-no-files-found: error
+          retention-days: 3
