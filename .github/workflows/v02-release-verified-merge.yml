@@ -1,0 +1,150 @@
+name: Verify and merge Semantic ASR v0.2
+
+on:
+  push:
+    branches:
+      - codex/semantic-asr-v0.2-adaptive-reranking
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: semantic-asr-v02-verified-merge
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: core ${{ matrix.os }} py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install pytest ruff build
+          python -m pip install -e .
+          python -m compileall -q src tests
+          python -m ruff check .
+          python -m ruff format --check .
+          python -m pytest -q
+
+  cpu-training:
+    name: CPU PyTorch full suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Validate optional learned paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install pytest ruff build
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
+          python -m pip install -e .
+          python -m pytest -q
+
+  wheel-cli:
+    name: clean wheel and installed CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build and smoke test public wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+          python -m venv /tmp/semantic-asr-wheel
+          /tmp/semantic-asr-wheel/bin/python -m pip install --upgrade pip
+          /tmp/semantic-asr-wheel/bin/python -m pip install dist/*.whl
+          /tmp/semantic-asr-wheel/bin/semantic-asr --help | tee cli-help.txt
+          grep -q 'research-ledger' cli-help.txt
+          /tmp/semantic-asr-wheel/bin/semantic-asr research-ledger --format json > research-ledger.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('research-ledger.json').read_text(encoding='utf-8'))
+          text = json.dumps(payload, ensure_ascii=False).lower()
+          for family in ('qwen', 'kimi', 'glm', 'lfm'):
+              if family not in text:
+                  raise SystemExit(f'missing research family: {family}')
+          PY
+
+  hygiene:
+    name: repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Reject unsafe repository content
+        shell: bash
+        run: |
+          set -euo pipefail
+          bad_files="$(git ls-files | grep -E '\.(wav|mp3|flac|m4a|ogg|pt|pth|ckpt|safetensors|gguf)$' || true)"
+          if [[ -n "${bad_files}" ]]; then
+            printf '%s\n' "${bad_files}" >&2
+            exit 1
+          fi
+          if git grep -nEI '(sk-[A-Za-z0-9_-]{20,}|hf_[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' -- . ':!*.lock' ; then
+            exit 1
+          fi
+
+  merge:
+    name: squash merge the exact validated head
+    needs: [core, cpu-training, wheel-cli, hygiene]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Revalidate PR identity and merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          VALIDATED_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr="$(gh api "repos/${REPOSITORY}/pulls/5")"
+          test "$(jq -r '.state' <<<"${pr}")" = open
+          test "$(jq -r '.draft' <<<"${pr}")" = false
+          test "$(jq -r '.head.ref' <<<"${pr}")" = codex/semantic-asr-v0.2-adaptive-reranking
+          test "$(jq -r '.base.ref' <<<"${pr}")" = main
+          test "$(jq -r '.head.sha' <<<"${pr}")" = "${VALIDATED_SHA}"
+          test "$(jq -r '.mergeable' <<<"${pr}")" = true
+          gh api --method PUT \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${REPOSITORY}/pulls/5/merge" \
+            -f merge_method=squash \
+            -f sha="${VALIDATED_SHA}" \
+            -f commit_title='Semantic ASR v0.2: adaptive calibrated reranking and acoustic verification' \
+            -f commit_message='Validated on Linux and Windows, Python 3.11 and 3.12, CPU PyTorch, clean wheel installation, public CLI and repository hygiene.'
