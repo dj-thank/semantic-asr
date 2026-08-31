@@ -17,11 +17,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Create exact source archive
-        run: tar --exclude=.git -czf semantic-asr-source.tar.gz .
+        run: tar --exclude=.git -czf "$RUNNER_TEMP/semantic-asr-source.tar.gz" .
       - name: Upload exact source archive
         uses: actions/upload-artifact@v4
         with:
           name: semantic-asr-finalization-source
-          path: semantic-asr-source.tar.gz
+          path: ${{ runner.temp }}/semantic-asr-source.tar.gz
           if-no-files-found: error
           retention-days: 1
