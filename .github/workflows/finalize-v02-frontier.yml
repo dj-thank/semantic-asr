@@ -38,6 +38,17 @@ jobs:
           echo 'd21a1caa66997c249922334f262222951928d59e04ad9b62eb2330ac85861667  /tmp/finalizer.py.xz' | sha256sum --check --strict
           mkdir -p .github/scripts
           xz --decompress --stdout /tmp/finalizer.py.xz > .github/scripts/finalize_v02_frontier.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/scripts/finalize_v02_frontier.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'from .mbr import extract_critical_units'
+          new = 'from .mbr import critical_units'
+          if text.count(old) != 2:
+              raise SystemExit('unexpected finalizer compatibility-anchor count')
+          path.write_text(text.replace(old, new), encoding='utf-8', newline='\n')
+          PY
           python -m py_compile .github/scripts/finalize_v02_frontier.py
 
       - name: Apply final audit atomically
