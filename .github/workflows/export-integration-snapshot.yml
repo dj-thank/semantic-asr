@@ -1,0 +1,37 @@
+name: Export integration snapshot
+
+on:
+  push:
+    branches:
+      - codex/semantic-asr-v0.2-integrated
+    paths:
+      - .github/workflows/export-integration-snapshot.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/semantic-asr-v0.2-integrated
+          persist-credentials: false
+      - name: Create exact source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/integration-source"
+          tar --exclude=.git --exclude=.github/workflows/export-integration-snapshot.yml \
+            -czf "$RUNNER_TEMP/integration-source/semantic-asr-integrated.tar.gz" .
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/integration-source/source-commit.txt"
+          sha256sum "$RUNNER_TEMP/integration-source/semantic-asr-integrated.tar.gz" \
+            > "$RUNNER_TEMP/integration-source/semantic-asr-integrated.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semantic-asr-integration-source
+          path: ${{ runner.temp }}/integration-source/
+          if-no-files-found: error
+          retention-days: 1
