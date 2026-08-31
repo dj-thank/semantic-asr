@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantic-asr.local/schemas/v02-evidence-score.schema.json",
+  "title": "Semantic ASR v0.2 typed evidence score",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["value", "semantics", "calibrated", "provenance"],
+  "properties": {
+    "value": {
+      "type": "number"
+    },
+    "semantics": {
+      "enum": [
+        "cumulative_log_likelihood",
+        "average_log_likelihood",
+        "log_probability",
+        "probability",
+        "logit",
+        "uncalibrated_score",
+        "preference",
+        "loss",
+        "cost"
+      ]
+    },
+    "calibrated": {
+      "type": "boolean"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scorer"],
+      "properties": {
+        "scorer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": ["string", "null"]
+        },
+        "revision": {
+          "type": ["string", "null"]
+        },
+        "runtime": {
+          "type": ["string", "null"]
+        },
+        "runtimeVersion": {
+          "type": ["string", "null"]
+        },
+        "configurationDigest": {
+          "type": ["string", "null"]
+        },
+        "calibrationDigest": {
+          "type": ["string", "null"]
+        },
+        "inputEvidenceDigest": {
+          "type": ["string", "null"]
+        },
+        "metadata": {
+          "type": "object"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "semantics": {
+            "const": "probability"
+          }
+        },
+        "required": ["semantics"]
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "minimum": 0,
+            "maximum": 1
+          },
+          "calibrated": {
+            "const": true
+          },
+          "provenance": {
+            "required": ["scorer", "calibrationDigest"]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "calibrated": {
+            "const": false
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "datasetName": "semantic-asr-v02-fixture",
+  "datasetRevision": "1",
+  "rightsRegistryDigest": null,
+  "records": [
+    {
+      "sampleId": "train-001",
+      "split": "train",
+      "audioSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "reference": "今日は東京に行きます",
+      "speakerId": "speaker-train-1",
+      "sourceRecordingId": "recording-train-1",
+      "durationSeconds": 2.4,
+      "domain": "fixture",
+      "metadata": {}
+    },
+    {
+      "sampleId": "calibration-001",
+      "split": "calibration",
+      "audioSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "reference": "明日は京都へ行きます",
+      "speakerId": "speaker-calibration-1",
+      "sourceRecordingId": "recording-calibration-1",
+      "durationSeconds": 2.1,
+      "domain": "fixture",
+      "metadata": {}
+    },
+    {
+      "sampleId": "test-001",
+      "split": "test",
+      "audioSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "reference": "会議は七時に始まります",
+      "speakerId": "speaker-test-1",
+      "sourceRecordingId": "recording-test-1",
+      "durationSeconds": 2.8,
+      "domain": "fixture",
+      "metadata": {}
+    }
+  ]
+}

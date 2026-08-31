@@ -75,6 +75,6 @@ line-length = 100
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
+# Source titles and falsification statements are immutable registry data.
+"src/semantic_asr/research_registry.py" = ["E501"]
 # Historical patch fixtures intentionally preserve exact long source lines.
-"scripts/apply_pr_review_fixes.py" = ["E501"]
-"scripts/apply_pr_review_fixes_v2.py" = ["E501"]

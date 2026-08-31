@@ -50,13 +50,9 @@ def fusion_example_from_row(
             for candidate_id, loss in losses.items()
         }
         total = sum(logits.values()) or 1.0
-        target = {
-            candidate_id: value / total for candidate_id, value in logits.items()
-        }
+        target = {candidate_id: value / total for candidate_id, value in logits.items()}
     else:
-        raise ValueError(
-            f"fusion row {line_number} requires targetDistribution or reference"
-        )
+        raise ValueError(f"fusion row {line_number} requires targetDistribution or reference")
     return FusionTrainingExample(
         example_id=str(row.get("exampleId") or row.get("example_id") or line_number),
         group_id=str(row.get("groupId") or row.get("group_id") or ""),
@@ -68,9 +64,7 @@ def fusion_example_from_row(
 
 def load_fusion_examples(path: str | Path) -> list[FusionTrainingExample]:
     output: list[FusionTrainingExample] = []
-    for line_number, line in enumerate(
-        Path(path).read_text(encoding="utf-8").splitlines(), 1
-    ):
+    for line_number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
         payload = json.loads(line)
@@ -82,9 +76,7 @@ def load_fusion_examples(path: str | Path) -> list[FusionTrainingExample]:
     return output
 
 
-def write_learned_fusion_result(
-    result: LearnedFusionResult, path: str | Path
-) -> None:
+def write_learned_fusion_result(result: LearnedFusionResult, path: str | Path) -> None:
     payload = {
         "schemaVersion": "learned-fusion-v1",
         "profile": {

@@ -74,10 +74,7 @@ def test_experiment_cli_partition_score_calibrate_and_apply() -> None:
         root = Path(directory)
         manifest = root / "all.jsonl"
         manifest.write_text(
-            "\n".join(
-                json.dumps(row, ensure_ascii=False) for row in _manifest_rows()
-            )
-            + "\n",
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in _manifest_rows()) + "\n",
             encoding="utf-8",
         )
         split_dir = root / "split"

@@ -31,8 +31,7 @@ class SequenceScore:
         if self.token_count < 1:
             raise ValueError("token_count must be positive")
         if any(
-            not math.isfinite(float(value))
-            for value in (self.sum_logprob, self.average_logprob)
+            not math.isfinite(float(value)) for value in (self.sum_logprob, self.average_logprob)
         ):
             raise ValueError("sequence log probabilities must be finite")
         object.__setattr__(self, "metadata", dict(self.metadata))
@@ -106,16 +105,12 @@ def sequence_scores_to_preferences(
     if len(identifiers) != len(set(identifiers)):
         raise ValueError("candidate IDs must be unique")
     values = {
-        score.candidate_id: (
-            score.average_logprob if use_average else score.sum_logprob
-        )
+        score.candidate_id: (score.average_logprob if use_average else score.sum_logprob)
         for score in scores
     }
     maximum = max(values.values())
     mass = {
-        candidate_id: math.exp(
-            max(-80.0, min(80.0, (value - maximum) / temperature))
-        )
+        candidate_id: math.exp(max(-80.0, min(80.0, (value - maximum) / temperature)))
         for candidate_id, value in values.items()
     }
     total = sum(mass.values()) or 1.0

@@ -153,15 +153,11 @@ def verify_manifest_isolation(records: Sequence[AudioManifestRecord]) -> None:
             dimensions[kind].setdefault(identifier, set()).add(record.split)
     for kind, values in dimensions.items():
         leaking = {
-            identifier: sorted(splits)
-            for identifier, splits in values.items()
-            if len(splits) > 1
+            identifier: sorted(splits) for identifier, splits in values.items() if len(splits) > 1
         }
         if leaking:
             identifier = sorted(leaking)[0]
-            raise ValueError(
-                f"{kind} leakage across splits: {identifier} -> {leaking[identifier]}"
-            )
+            raise ValueError(f"{kind} leakage across splits: {identifier} -> {leaking[identifier]}")
 
 
 def generate_candidates(
@@ -206,9 +202,7 @@ def generate_candidates(
                 "runtimeRevision": config.runtime_revision,
             }
         )
-        annotated.append(
-            CandidateEvidence.from_dict({**candidate.as_dict(), "metadata": metadata})
-        )
+        annotated.append(CandidateEvidence.from_dict({**candidate.as_dict(), "metadata": metadata}))
     return GeneratedCandidateRecord(
         sample_id=record.sample_id,
         group_id=record.group_id,
@@ -237,9 +231,7 @@ def generate_manifest(
     return [generate_candidates(record, adapter, config=config) for record in records]
 
 
-def audio_record_from_row(
-    row: Mapping[str, Any], *, line_number: int = 0
-) -> AudioManifestRecord:
+def audio_record_from_row(row: Mapping[str, Any], *, line_number: int = 0) -> AudioManifestRecord:
     return AudioManifestRecord(
         sample_id=str(row.get("sampleId") or row.get("sample_id") or line_number),
         group_id=str(row.get("groupId") or row.get("group_id") or ""),
@@ -253,9 +245,7 @@ def audio_record_from_row(
             if row.get("nearDuplicateId") or row.get("near_duplicate_id")
             else None
         ),
-        rights_decision=str(
-            row.get("rightsDecision") or row.get("rights_decision") or "review"
-        ),
+        rights_decision=str(row.get("rightsDecision") or row.get("rights_decision") or "review"),
         license_id=(
             str(row.get("licenseId") or row.get("license_id"))
             if row.get("licenseId") or row.get("license_id")
@@ -266,9 +256,7 @@ def audio_record_from_row(
 
 def load_audio_manifest(path: str | Path) -> list[AudioManifestRecord]:
     output: list[AudioManifestRecord] = []
-    for line_number, line in enumerate(
-        Path(path).read_text(encoding="utf-8").splitlines(), 1
-    ):
+    for line_number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
         payload = json.loads(line)

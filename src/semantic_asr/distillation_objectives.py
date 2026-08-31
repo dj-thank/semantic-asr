@@ -49,19 +49,14 @@ def _normalize(values: Mapping[str, float]) -> dict[str, float]:
 def _binary_kl(left: float, right: float) -> float:
     left = min(1.0 - _EPSILON, max(_EPSILON, left))
     right = min(1.0 - _EPSILON, max(_EPSILON, right))
-    return left * math.log(left / right) + (1.0 - left) * math.log(
-        (1.0 - left) / (1.0 - right)
-    )
+    return left * math.log(left / right) + (1.0 - left) * math.log((1.0 - left) / (1.0 - right))
 
 
 def _tempered(values: Mapping[str, float], temperature: float) -> dict[str, float]:
     if not math.isfinite(temperature) or temperature <= 0:
         raise ValueError("temperature must be positive and finite")
     return _normalize(
-        {
-            key: max(_EPSILON, value) ** (1.0 / temperature)
-            for key, value in values.items()
-        }
+        {key: max(_EPSILON, value) ** (1.0 / temperature) for key, value in values.items()}
     )
 
 
@@ -98,20 +93,20 @@ def decoupled_topk_kl(
     student_mass = sum(student_distribution[candidate_id] for candidate_id in topk_ids)
     membership = _binary_kl(teacher_mass, student_mass)
     teacher_conditional = _tempered(
-        _normalize(
-            {candidate_id: teacher_distribution[candidate_id] for candidate_id in topk_ids}
-        ),
+        _normalize({candidate_id: teacher_distribution[candidate_id] for candidate_id in topk_ids}),
         temperature,
     )
     student_conditional = _tempered(
-        _normalize(
-            {candidate_id: student_distribution[candidate_id] for candidate_id in topk_ids}
-        ),
+        _normalize({candidate_id: student_distribution[candidate_id] for candidate_id in topk_ids}),
         temperature,
     )
-    conditional = teacher_mass * (temperature**2) * _kl(
-        teacher_conditional,
-        student_conditional,
+    conditional = (
+        teacher_mass
+        * (temperature**2)
+        * _kl(
+            teacher_conditional,
+            student_conditional,
+        )
     )
     return DecoupledTopKLoss(
         total=membership + conditional,

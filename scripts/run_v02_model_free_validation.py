@@ -222,18 +222,14 @@ def run_validation() -> dict[str, object]:
         [
             ProgressiveStage(
                 name="cheap-student",
-                ranker=StaticCandidateRanker(
-                    {"teacher-a": 4.0, "teacher-b": -2.0}
-                ),
+                ranker=StaticCandidateRanker({"teacher-a": 4.0, "teacher-b": -2.0}),
                 estimated_cost_ms=2,
                 minimum_margin=0.50,
                 maximum_entropy=0.40,
             ),
             ProgressiveStage(
                 name="offline-teacher",
-                ranker=StaticCandidateRanker(
-                    {"teacher-a": 5.0, "teacher-b": -3.0}
-                ),
+                ranker=StaticCandidateRanker({"teacher-a": 5.0, "teacher-b": -3.0}),
                 estimated_cost_ms=1_000,
             ),
         ],
@@ -262,9 +258,7 @@ def run_validation() -> dict[str, object]:
             "before": asdict(calibration.before),
             "after": asdict(calibration.after),
             "profileDigest": calibration.profile.digest,
-            "calibrationManifestSha256": (
-                calibration.profile.calibration_manifest_sha256
-            ),
+            "calibrationManifestSha256": (calibration.profile.calibration_manifest_sha256),
             "converged": calibration.converged,
         },
         "fusion": {
@@ -276,12 +270,8 @@ def run_validation() -> dict[str, object]:
         },
         "ngram": {
             "digest": ngram.digest,
-            "correctScore": ngram.score(
-                "料金は3000円です"
-            ).average_log_probability,
-            "wrongScore": ngram.score(
-                "料金は30000円です"
-            ).average_log_probability,
+            "correctScore": ngram.score("料金は3000円です").average_log_probability,
+            "wrongScore": ngram.score("料金は30000円です").average_log_probability,
         },
         "teacherConsensus": asdict(teacher_consensus),
         "progressiveReranking": asdict(progressive),

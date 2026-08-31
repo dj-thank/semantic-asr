@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantic-asr.local/schemas/v02-experiment-manifest.schema.json",
+  "title": "Semantic ASR v0.2 experiment manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["datasetName", "datasetRevision", "records"],
+  "properties": {
+    "datasetName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "datasetRevision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rightsRegistryDigest": {
+      "type": ["string", "null"]
+    },
+    "records": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sampleId",
+          "split",
+          "audioSha256",
+          "reference"
+        ],
+        "properties": {
+          "sampleId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "split": {
+            "enum": ["train", "calibration", "test"]
+          },
+          "audioSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          },
+          "reference": {
+            "type": "string",
+            "minLength": 1
+          },
+          "speakerId": {
+            "type": ["string", "null"]
+          },
+          "sourceRecordingId": {
+            "type": ["string", "null"]
+          },
+          "durationSeconds": {
+            "type": ["number", "null"],
+            "exclusiveMinimum": 0
+          },
+          "domain": {
+            "type": ["string", "null"]
+          },
+          "metadata": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  }
+}

@@ -7,7 +7,7 @@ import re
 import unicodedata
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -197,15 +197,11 @@ class NGramLanguageModel:
         model.token_count = int(row.get("tokenCount", 0))
         model.vocabulary = {str(value) for value in row.get("vocabulary", [])}
         model.counts = {
-            int(n): Counter(
-                {tuple(str(token) for token in key): int(value) for key, value in rows}
-            )
+            int(n): Counter({tuple(str(token) for token in key): int(value) for key, value in rows})
             for n, rows in dict(row.get("counts", {})).items()
         }
         model.context_counts = {
-            int(n): Counter(
-                {tuple(str(token) for token in key): int(value) for key, value in rows}
-            )
+            int(n): Counter({tuple(str(token) for token in key): int(value) for key, value in rows})
             for n, rows in dict(row.get("contextCounts", {})).items()
         }
         for n in range(1, model.order + 1):
@@ -244,18 +240,21 @@ class NGramCandidateRanker:
         self.models = tuple(models)
         if not self.models or sum(item.weight for item in self.models) <= 0:
             raise ValueError("at least one positive-weight n-gram model is required")
-        self.name = "ngram:" + hashlib.sha256(
-            canonical_json(
-                [
-                    {
-                        "name": item.name,
-                        "weight": item.weight,
-                        "digest": item.model.digest,
-                    }
-                    for item in self.models
-                ]
-            ).encode("utf-8")
-        ).hexdigest()[:16]
+        self.name = (
+            "ngram:"
+            + hashlib.sha256(
+                canonical_json(
+                    [
+                        {
+                            "name": item.name,
+                            "weight": item.weight,
+                            "digest": item.model.digest,
+                        }
+                        for item in self.models
+                    ]
+                ).encode("utf-8")
+            ).hexdigest()[:16]
+        )
 
     def score(
         self,
@@ -269,7 +268,8 @@ class NGramCandidateRanker:
         total_weight = sum(item.weight for item in self.models)
         return {
             candidate.candidate_id: sum(
-                item.weight * item.model.score(
+                item.weight
+                * item.model.score(
                     candidate.reading
                     if item.model.mode == "mora" and candidate.reading
                     else candidate.text
@@ -314,7 +314,9 @@ class KenLMCandidateRanker:
         del context, consensus, contradiction
         output: dict[str, float] = {}
         for candidate in candidates:
-            source = candidate.reading if self.mode == "mora" and candidate.reading else candidate.text
+            source = (
+                candidate.reading if self.mode == "mora" and candidate.reading else candidate.text
+            )
             tokens = tokenize_ngram_text(source, self.mode)
             if not tokens:
                 output[candidate.candidate_id] = -math.inf

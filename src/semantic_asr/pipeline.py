@@ -135,9 +135,7 @@ class PipelineState:
 class FunctionalStage(Protocol):
     spec: StageSpec
 
-    def __call__(
-        self, artifact: ArtifactEnvelope, context: PipelineContext
-    ) -> StageExecution: ...
+    def __call__(self, artifact: ArtifactEnvelope, context: PipelineContext) -> StageExecution: ...
 
 
 StageFunction = Callable[[ArtifactEnvelope, PipelineContext], tuple[Any, int, Mapping[str, Any]]]
@@ -148,9 +146,7 @@ class FunctionStage:
         self.spec = spec
         self.function = function
 
-    def __call__(
-        self, artifact: ArtifactEnvelope, context: PipelineContext
-    ) -> StageExecution:
+    def __call__(self, artifact: ArtifactEnvelope, context: PipelineContext) -> StageExecution:
         artifact.verify()
         if artifact.kind != self.spec.input_kind:
             raise ValueError(
@@ -258,7 +254,7 @@ class FunctionalPipeline:
         names = [stage.spec.name for stage in self.stages]
         if len(names) != len(set(names)):
             raise ValueError("pipeline stage names must be unique")
-        for left, right in zip(self.stages, self.stages[1:]):
+        for left, right in zip(self.stages, self.stages[1:], strict=False):
             if left.spec.output_kind != right.spec.input_kind:
                 raise ValueError(
                     f"pipeline contract mismatch: {left.spec.name} emits "
@@ -306,8 +302,7 @@ class FunctionalPipeline:
                     history=state.history,
                     used_budget_ms=state.used_budget_ms,
                     stopped=True,
-                    stop_reasons=state.stop_reasons
-                    + (f"actual-stage-budget:{stage.spec.name}",),
+                    stop_reasons=state.stop_reasons + (f"actual-stage-budget:{stage.spec.name}",),
                 )
             state = PipelineState(
                 artifact=execution.output,
