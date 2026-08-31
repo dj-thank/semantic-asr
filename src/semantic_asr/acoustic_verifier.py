@@ -50,6 +50,10 @@ class QuerySelectedAcousticVerifier(nn.Module):
         super().__init__()
         if acoustic_hidden_size < 1 or mora_vocab_size < 2 or model_size < 8:
             raise ValueError("invalid verifier dimensions")
+        if model_size % 2:
+            raise ValueError("model_size must be even for the bidirectional mora encoder")
+        if not 0 <= mora_padding_id < mora_vocab_size:
+            raise ValueError("mora_padding_id must be inside the mora vocabulary")
         if not 0 <= dropout < 1:
             raise ValueError("dropout must be in [0, 1)")
         if balance_weight < 0 or temperature <= 0:
@@ -116,6 +120,20 @@ class QuerySelectedAcousticVerifier(nn.Module):
     ) -> tuple[Tensor, Tensor]:
         if candidate_mora_ids.ndim != 3:
             raise ValueError("candidate_mora_ids must be [batch, candidates, mora]")
+        integer_dtypes = {
+            torch.uint8,
+            torch.int8,
+            torch.int16,
+            torch.int32,
+            torch.int64,
+        }
+        if candidate_mora_ids.dtype not in integer_dtypes:
+            raise TypeError("candidate_mora_ids must use an integer dtype")
+        if torch.any(candidate_mora_ids < 0) or torch.any(
+            candidate_mora_ids >= self.mora_embedding.num_embeddings
+        ):
+            raise ValueError("candidate mora token ID is outside the vocabulary")
+
         batch, candidates, length = candidate_mora_ids.shape
         flat = candidate_mora_ids.reshape(batch * candidates, length)
         if candidate_mask is None:
@@ -124,7 +142,9 @@ class QuerySelectedAcousticVerifier(nn.Module):
             if candidate_mask.shape != candidate_mora_ids.shape:
                 raise ValueError("candidate_mask must match candidate_mora_ids")
             mask = candidate_mask.reshape(batch * candidates, length).bool()
-        lengths = mask.sum(dim=1).clamp_min(1)
+        lengths = mask.sum(dim=1)
+        if torch.any(lengths == 0):
+            raise ValueError("every candidate must contain at least one valid mora token")
         embedded = self.mora_embedding(flat)
         encoded, _state = self.mora_encoder(embedded)
         mask_value = mask.unsqueeze(-1).to(dtype=encoded.dtype)
@@ -142,6 +162,8 @@ class QuerySelectedAcousticVerifier(nn.Module):
     ) -> CandidateVerifierOutput:
         if acoustic_hidden.ndim != 3:
             raise ValueError("acoustic_hidden must be [batch, frames, hidden]")
+        if not acoustic_hidden.is_floating_point():
+            raise TypeError("acoustic_hidden must use a floating-point dtype")
         batch, frames, _hidden = acoustic_hidden.shape
         if candidate_mora_ids.shape[0] != batch:
             raise ValueError("acoustic and candidate batch sizes must match")
