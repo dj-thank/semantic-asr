@@ -15,11 +15,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build source snapshot
-        run: tar --exclude=.git -czf ../semantic-asr-source.tar.gz .
+        run: |
+          mkdir -p .snapshot
+          tar --exclude=.git --exclude=.snapshot -czf .snapshot/semantic-asr-source.tar.gz .
       - name: Upload source snapshot
         uses: actions/upload-artifact@v4
         with:
           name: semantic-asr-source
-          path: ../semantic-asr-source.tar.gz
+          path: .snapshot/semantic-asr-source.tar.gz
           if-no-files-found: error
           retention-days: 1
