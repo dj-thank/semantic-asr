@@ -154,6 +154,7 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
                         "adapter": self.name,
                         "model": self.model_name,
                         "scoreDomain": score_domain,
+                        "scoreKind": "length-normalized-sequence-log-likelihood",
                         "durationSeconds": duration_seconds,
                         "language": language,
                         "languageProbability": language_probability,
@@ -190,6 +191,12 @@ def _softmax_scores(
     *,
     temperature: float,
 ) -> dict[str, float]:
+    """Normalize comparable acoustic scores inside one candidate set.
+
+    The result is candidate-distribution mass, not a calibrated probability
+    that a transcript is correct.
+    """
+
     if temperature <= 0:
         raise ValueError("temperature must be positive")
     raw = [
@@ -229,7 +236,13 @@ def _semantic_criticality(candidates: list[CandidateEvidence]) -> float:
 
 
 class AdaptiveRerankingAdapter:
-    """Wrap an ASR adapter with adaptive candidate selection and raw-logit reranking."""
+    """Wrap an ASR adapter with adaptive candidate selection and raw-logit reranking.
+
+    An uncalibrated ranker may reorder and prune candidates, but it cannot add a
+    probability-like score to the fusion evidence streams. Only an explicitly
+    supplied held-out ``CalibrationProfile`` may convert ranker output into the
+    lexical stream.
+    """
 
     name = "adaptive-reranking-adapter"
 
@@ -266,8 +279,8 @@ class AdaptiveRerankingAdapter:
         candidates = aggregate_surface_candidates(
             self.base.decode(expanded), id_prefix="adaptive-pool"
         )
-        probabilities = _softmax_scores(candidates, temperature=self.acoustic_temperature)
-        ordered_mass = sorted(probabilities.values(), reverse=True)
+        acoustic_mass = _softmax_scores(candidates, temperature=self.acoustic_temperature)
+        ordered_mass = sorted(acoustic_mass.values(), reverse=True)
         entropy = _normalized_entropy(ordered_mass)
         top = ordered_mass[0] if ordered_mass else 0.0
         second = ordered_mass[1] if len(ordered_mass) > 1 else 0.0
@@ -278,7 +291,7 @@ class AdaptiveRerankingAdapter:
         criticality = _semantic_criticality(candidates)
         decision = select_adaptive_k(
             candidates,
-            probabilities,
+            acoustic_mass,
             selective_risk=selective_risk,
             semantic_criticality=criticality,
             config=self.adaptive_config,
@@ -295,11 +308,17 @@ class AdaptiveRerankingAdapter:
         )
         if set(scores) != selected_ids:
             raise ValueError("ranker must return exactly one score for each selected candidate")
-        calibrated = calibrate_values(
-            [scores[candidate.candidate_id] for candidate in selected],
-            profile=self.calibration_profile,
-            stream_name=f"reranker:{self.ranker.name}",
-        )
+
+        calibrated: list[float | None]
+        if self.calibration_profile is None:
+            calibrated = [None] * len(selected)
+        else:
+            calibrated = calibrate_values(
+                [scores[candidate.candidate_id] for candidate in selected],
+                profile=self.calibration_profile,
+                stream_name=f"reranker:{self.ranker.name}",
+            )
+
         output: list[CandidateEvidence] = []
         for candidate, raw_score, calibrated_score in zip(
             selected,
@@ -314,22 +333,28 @@ class AdaptiveRerankingAdapter:
                     "source": self.ranker.name,
                     "kind": "logit",
                     "value": float(raw_score),
-                    "calibrated": self.calibration_profile is not None,
-                    "calibrationDigest": (
-                        self.calibration_profile.digest
-                        if self.calibration_profile is not None
-                        else None
-                    ),
+                    "calibrated": False,
                 }
             )
+            if calibrated_score is not None:
+                evidence_scores.append(
+                    {
+                        "source": self.ranker.name,
+                        "kind": "probability",
+                        "value": float(calibrated_score),
+                        "calibrated": True,
+                        "calibrationDigest": self.calibration_profile.digest,
+                    }
+                )
             metadata.update(
                 {
                     "evidenceScores": evidence_scores,
                     "rerankerRawLogit": float(raw_score),
-                    "rerankerCalibratedScore": calibrated_score,
+                    "rerankerCalibratedProbability": calibrated_score,
+                    "rerankerEvidenceInjected": calibrated_score is not None,
                     "rerankerSource": self.ranker.name,
                     "adaptiveK": asdict(decision),
-                    "preRerankPosterior": probabilities[candidate.candidate_id],
+                    "preRerankAcousticMass": acoustic_mass[candidate.candidate_id],
                     "adaptiveSelectiveRisk": selective_risk,
                     "adaptiveSemanticCriticality": criticality,
                 }
@@ -352,7 +377,7 @@ class AdaptiveRerankingAdapter:
         output.sort(
             key=lambda candidate: (
                 -float(candidate.metadata.get("rerankerRawLogit", -1e30)),
-                -probabilities[candidate.candidate_id],
+                -acoustic_mass[candidate.candidate_id],
                 candidate.candidate_id,
             )
         )
