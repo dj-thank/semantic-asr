@@ -47,9 +47,66 @@ jobs:
           new = 'from .mbr import critical_units'
           if text.count(old) != 2:
               raise SystemExit('unexpected finalizer compatibility-anchor count')
-          path.write_text(text.replace(old, new), encoding='utf-8', newline='\n')
+          text = text.replace(old, new)
+
+          # candidate_pool gained score-domain validation on the concurrent
+          # implementation branch. Preserve that stronger implementation and
+          # apply the representative-path change with a local, narrow patch.
+          start = text.index('def _patch_candidate_pool() -> None:')
+          end = text.index('\n\ndef _patch_advanced_adapters()', start)
+          text = (
+              text[:start]
+              + 'def _patch_candidate_pool() -> None:\n    pass\n'
+              + text[end:]
+          )
+          path.write_text(text, encoding='utf-8', newline='\n')
           PY
           python -m py_compile .github/scripts/finalize_v02_frontier.py
+
+      - name: Apply representative-path score semantics
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/semantic_asr/candidate_pool.py')
+          text = path.read_text(encoding='utf-8')
+          old_metadata = '''        metadata["aggregateCumulativeLogprob"] = aggregate_cumulative
+                  metadata["pathProbabilityMassAggregated"] = True
+          '''
+          if text.count(old_metadata) != 1:
+              raise SystemExit('candidate-pool aggregate metadata anchor mismatch')
+          text = text.replace(old_metadata, '', 1)
+
+          old_return = '''        return replace(
+                      representative,
+                      acoustic=aggregate_average,
+                      avg_logprob=aggregate_average,
+                      metadata=metadata,
+                  )
+          '''
+          new_return = '''        metadata.update(
+                      {
+                          "aggregateCumulativeLogprob": aggregate_cumulative,
+                          "aggregateAverageLogprob": aggregate_average,
+                          "pathProbabilityMassAggregated": True,
+                          "representativeSequenceScore": representative.sequence_score,
+                          "representativeAvgLogprob": representative.avg_logprob,
+                          "representativeAcoustic": representative.acoustic,
+                      }
+                  )
+                  # Aggregate mass belongs to the surface equivalence class, not
+                  # to a synthetic decoder path. Preserve the strongest real path.
+                  return replace(representative, metadata=metadata)
+          '''
+          if text.count(old_return) != 1:
+              raise SystemExit('candidate-pool return anchor mismatch')
+          path.write_text(
+              text.replace(old_return, new_return, 1),
+              encoding='utf-8',
+              newline='\n',
+          )
+          PY
 
       - name: Apply final audit atomically
         run: python .github/scripts/finalize_v02_frontier.py
