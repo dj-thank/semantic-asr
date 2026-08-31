@@ -42,4 +42,4 @@ jobs:
           name: semantic-asr-source
           path: source-snapshot/
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 2
