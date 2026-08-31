@@ -8,11 +8,11 @@ from dataclasses import dataclass, field
 
 from .contracts import CandidateEvidence
 from .evaluation import (
+    CRITICAL_ENTITY_PATTERN,
     CURRENCY_PATTERN,
     DATE_TIME_PATTERN,
     NEGATION_PATTERN,
     NUMBER_PATTERN,
-    critical_entity_sequence,
     edit_distance,
     normalize_characters,
 )
@@ -114,7 +114,14 @@ def _candidate_mora(candidate: CandidateEvidence) -> list[str]:
 
 
 def mora_loss(left: CandidateEvidence, right: CandidateEvidence) -> float:
-    return _symmetric_distance(_candidate_mora(left), _candidate_mora(right))
+    left_mora = _candidate_mora(left)
+    right_mora = _candidate_mora(right)
+    # Kanji-only candidates have no trustworthy reading unless an ASR/lexicon
+    # supplied one. Treat that case as unavailable mora evidence instead of the
+    # previous false zero-loss match.
+    if not left_mora or not right_mora:
+        return surface_loss(left, right)
+    return _symmetric_distance(left_mora, right_mora)
 
 
 _CRITICAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -127,21 +134,27 @@ _CRITICAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 def critical_units(text: str) -> list[str]:
     normalized = unicodedata.normalize("NFKC", str(text or ""))
-    units: list[tuple[int, str]] = []
+    units: list[tuple[int, int, str]] = []
     occupied: list[tuple[int, int]] = []
+    # Specific semantic types are collected before the broad entity pattern.
+    # Fully-contained generic entities are then suppressed to avoid counting the
+    # same number/date/currency token twice.
     for label, pattern in _CRITICAL_PATTERNS:
         for match in pattern.finditer(normalized):
-            units.append((match.start(), f"{label}:{match.group(0)}"))
+            units.append((match.start(), match.end(), f"{label}:{match.group(0)}"))
             occupied.append((match.start(), match.end()))
-    for value in critical_entity_sequence(normalized):
-        start = normalized.find(value)
-        if start < 0:
-            continue
-        end = start + len(value)
+    for match in CRITICAL_ENTITY_PATTERN.finditer(normalized):
+        start, end = match.span()
         if any(start >= low and end <= high for low, high in occupied):
             continue
-        units.append((start, f"entity:{value}"))
-    return [value for _index, value in sorted(units, key=lambda item: (item[0], item[1]))]
+        units.append((start, end, f"entity:{match.group(0)}"))
+    return [
+        value
+        for _start, _end, value in sorted(
+            units,
+            key=lambda item: (item[0], item[1], item[2]),
+        )
+    ]
 
 
 def critical_loss(left: CandidateEvidence, right: CandidateEvidence) -> float:
@@ -227,7 +240,12 @@ def semantic_minimum_bayes_risk(
     rows: list[CandidateRisk] = []
     for candidate in candidates:
         expected = 0.0
-        aggregate = {"surface": 0.0, "mora": 0.0, "critical": 0.0, "preservation": 0.0}
+        aggregate = {
+            "surface": 0.0,
+            "mora": 0.0,
+            "critical": 0.0,
+            "preservation": 0.0,
+        }
         for reference in candidates:
             value, components = semantic_loss(candidate, reference, config=resolved)
             probability = probabilities[reference.candidate_id]
