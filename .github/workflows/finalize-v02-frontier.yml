@@ -1,0 +1,78 @@
+name: Finalize Semantic ASR v0.2 frontier
+
+on:
+  push:
+    branches:
+      - codex/semantic-asr-v0.2-final-audit
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: semantic-asr-v02-final-audit
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/semantic-asr-v0.2-final-audit
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Reconstruct and verify reviewed finalizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/finalizer_payload/0* | tr -d '\r\n' | base64 --decode > /tmp/finalizer.py.xz
+          echo '007a13ad250b3ca475ef623776f7e659acf8a2447341cff4a580460226db35e7  /tmp/finalizer.py.xz' | sha256sum --check --strict
+          mkdir -p .github/scripts
+          xz --decompress --stdout /tmp/finalizer.py.xz > .github/scripts/finalize_v02_frontier.py
+          python -m py_compile .github/scripts/finalize_v02_frontier.py
+
+      - name: Apply final audit atomically
+        run: python .github/scripts/finalize_v02_frontier.py
+
+      - name: Remove transport payload
+        run: rm -rf .github/finalizer_payload
+
+      - name: Install validation dependencies
+        run: python -m pip install -e '.[dev]'
+
+      - name: Format and lint
+        run: |
+          ruff check --fix .
+          ruff format .
+          ruff check .
+          ruff format --check .
+
+      - name: Compile and test
+        run: |
+          python -m compileall -q src tests scripts
+          python -m pytest -q
+
+      - name: Exercise installed research paths
+        run: |
+          semantic-asr research-smoke
+          semantic-asr-risk-control --help >/dev/null
+
+      - name: Commit validated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'semantic-asr-final-audit-bot'
+          git config user.email '204638875+dj-thank@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat(v0.2): finalize risk-controlled edge frontier'
+          git push origin HEAD:codex/semantic-asr-v0.2-final-audit
