@@ -54,6 +54,22 @@ index c7f6c27..c9ef2a8 100644
 +    if values and values[0] in EXPERIMENT_COMMANDS:
 +        return experiment_main(values)
      return compatibility_main(values)
+diff --git a/src/semantic_asr/frontier_cli.py b/src/semantic_asr/frontier_cli.py
+index 34f6dff..9778418 100644
+--- a/src/semantic_asr/frontier_cli.py
++++ b/src/semantic_asr/frontier_cli.py
+@@ -241,7 +241,10 @@ def command_throttle_policy(args: argparse.Namespace) -> int:
+ def build_parser() -> argparse.ArgumentParser:
+     parser = argparse.ArgumentParser(
+         prog="semantic-asr",
+-        description="Semantic ASR frontier training, deployment, and real-audio experiment commands.",
++        description=(
++            "Semantic ASR frontier training, deployment, and "
++            "real-audio experiment commands."
++        ),
+     )
+     commands = parser.add_subparsers(dest="command", required=True)
+ 
 diff --git a/src/semantic_asr/mbr.py b/src/semantic_asr/mbr.py
 index ccc5eb3..5dd2dd9 100644
 --- a/src/semantic_asr/mbr.py
@@ -116,6 +132,19 @@ index d4662ab..376cafd 100644
                  lexical=lexical,
                  metadata=metadata,
              )
+diff --git a/src/semantic_asr/pipeline.py b/src/semantic_asr/pipeline.py
+index 79894bf..4cc8f94 100644
+--- a/src/semantic_asr/pipeline.py
++++ b/src/semantic_asr/pipeline.py
+@@ -258,7 +258,7 @@ class FunctionalPipeline:
+         names = [stage.spec.name for stage in self.stages]
+         if len(names) != len(set(names)):
+             raise ValueError("pipeline stage names must be unique")
+-        for left, right in zip(self.stages, self.stages[1:]):
++        for left, right in zip(self.stages, self.stages[1:], strict=False):
+             if left.spec.output_kind != right.spec.input_kind:
+                 raise ValueError(
+                     f"pipeline contract mismatch: {left.spec.name} emits "
 diff --git a/src/semantic_asr/rerankers.py b/src/semantic_asr/rerankers.py
 index 3d0edf4..983262b 100644
 --- a/src/semantic_asr/rerankers.py
