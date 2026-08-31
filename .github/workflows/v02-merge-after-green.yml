@@ -1,0 +1,68 @@
+name: Merge validated Semantic ASR v0.2
+
+on:
+  workflow_run:
+    workflows:
+      - Semantic ASR v0.2 CI
+    types:
+      - completed
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: semantic-asr-v02-merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'codex/semantic-asr-v0.2-research-stack' &&
+      startsWith(github.event.workflow_run.head_commit.message, 'ci: record Semantic ASR v0.2 validation')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve and verify the stacked pull request
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          row="$(gh pr list \
+            --repo '${{ github.repository }}' \
+            --head 'codex/semantic-asr-v0.2-research-stack' \
+            --state open \
+            --json number,baseRefName,isDraft \
+            --jq '.[0] // empty')"
+          if [[ -z "$row" ]]; then
+            echo 'No open v0.2 pull request was found; it may already be merged.'
+            echo 'merge=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          number="$(jq -r '.number' <<<"$row")"
+          base="$(jq -r '.baseRefName' <<<"$row")"
+          draft="$(jq -r '.isDraft' <<<"$row")"
+          if [[ "$base" != 'main' ]]; then
+            echo "Refusing to merge PR #${number}: base is ${base}, expected main." >&2
+            exit 1
+          fi
+          if [[ "$draft" == 'true' ]]; then
+            echo "Refusing to merge PR #${number}: pull request is still a draft." >&2
+            exit 1
+          fi
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
+          echo 'merge=true' >> "$GITHUB_OUTPUT"
+
+      - name: Squash merge the validated v0.2 pull request
+        if: steps.pr.outputs.merge == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr merge '${{ steps.pr.outputs.number }}' \
+            --repo '${{ github.repository }}' \
+            --squash \
+            --delete-branch=false \
+            --subject 'Build Semantic ASR v0.2 research stack' \
+            --body 'Integrate the validated path-mass, MBR, learned reranking, adaptive risk-control, acoustic verification and Koemo evidence contracts. Real-model accuracy claims remain gated by the held-out benchmark protocol.'
