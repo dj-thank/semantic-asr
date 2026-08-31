@@ -1,0 +1,45 @@
+name: Mark validated Semantic ASR v0.2 PR ready
+
+on:
+  workflow_run:
+    workflows:
+      - Semantic ASR v0.2 CI
+    types:
+      - completed
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  mark-ready:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'codex/semantic-asr-v0.2-research-stack' &&
+      startsWith(github.event.workflow_run.head_commit.message, 'ci: record Semantic ASR v0.2 validation')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Mark the stacked pull request ready for review
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          number="$(gh pr list \
+            --repo '${{ github.repository }}' \
+            --head 'codex/semantic-asr-v0.2-research-stack' \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')"
+          if [[ -z "$number" ]]; then
+            echo 'No open v0.2 pull request was found.' >&2
+            exit 1
+          fi
+          is_draft="$(gh pr view "$number" \
+            --repo '${{ github.repository }}' \
+            --json isDraft \
+            --jq '.isDraft')"
+          if [[ "$is_draft" == 'true' ]]; then
+            gh pr ready "$number" --repo '${{ github.repository }}'
+          else
+            echo "Pull request #${number} is already ready."
+          fi
