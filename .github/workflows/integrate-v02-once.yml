@@ -6,6 +6,10 @@ on:
       - codex/semantic-asr-v0.2-integrated
     paths:
       - .github/workflows/integrate-v02-once.yml
+  pull_request:
+    branches:
+      - main
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: write
@@ -16,6 +20,7 @@ concurrency:
 
 jobs:
   integrate:
+    if: github.event_name == 'push' || github.head_ref == 'codex/semantic-asr-v0.2-integrated'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
