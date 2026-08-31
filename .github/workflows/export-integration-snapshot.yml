@@ -18,17 +18,28 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: codex/semantic-asr-v0.2-integrated
+          fetch-depth: 0
           persist-credentials: false
-      - name: Create exact source archive
+      - name: Create exact source archives
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/integration-source"
           tar --exclude=.git --exclude=.github/workflows/export-integration-snapshot.yml \
             -czf "$RUNNER_TEMP/integration-source/semantic-asr-integrated.tar.gz" .
-          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/integration-source/source-commit.txt"
-          sha256sum "$RUNNER_TEMP/integration-source/semantic-asr-integrated.tar.gz" \
-            > "$RUNNER_TEMP/integration-source/semantic-asr-integrated.sha256"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/integration-source/integrated-commit.txt"
+
+          git fetch origin codex/semantic-asr-v0.2-research-stack
+          research_sha="$(git rev-parse origin/codex/semantic-asr-v0.2-research-stack)"
+          git archive --format=tar.gz \
+            --output="$RUNNER_TEMP/integration-source/semantic-asr-research.tar.gz" \
+            "$research_sha"
+          printf '%s\n' "$research_sha" > "$RUNNER_TEMP/integration-source/research-commit.txt"
+
+          sha256sum \
+            "$RUNNER_TEMP/integration-source/semantic-asr-integrated.tar.gz" \
+            "$RUNNER_TEMP/integration-source/semantic-asr-research.tar.gz" \
+            > "$RUNNER_TEMP/integration-source/source-archives.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: semantic-asr-integration-source
