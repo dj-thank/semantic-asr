@@ -60,3 +60,38 @@ def test_verifier_rejects_empty_acoustic_mask() -> None:
             candidate_mora_ids=torch.tensor([[[1, 2]]]),
             acoustic_mask=torch.zeros((1, 3), dtype=torch.bool),
         )
+
+
+def test_verifier_requires_even_model_size() -> None:
+    with pytest.raises(ValueError, match="even"):
+        QuerySelectedAcousticVerifier(
+            acoustic_hidden_size=4,
+            mora_vocab_size=8,
+            model_size=9,
+        )
+
+
+def test_verifier_rejects_all_padding_candidate() -> None:
+    model = QuerySelectedAcousticVerifier(
+        acoustic_hidden_size=4,
+        mora_vocab_size=8,
+        model_size=8,
+    )
+    with pytest.raises(ValueError, match="valid mora token"):
+        model(
+            acoustic_hidden=torch.randn(1, 3, 4),
+            candidate_mora_ids=torch.tensor([[[0, 0], [1, 2]]]),
+        )
+
+
+def test_verifier_rejects_out_of_vocabulary_mora_id() -> None:
+    model = QuerySelectedAcousticVerifier(
+        acoustic_hidden_size=4,
+        mora_vocab_size=8,
+        model_size=8,
+    )
+    with pytest.raises(ValueError, match="outside the vocabulary"):
+        model(
+            acoustic_hidden=torch.randn(1, 3, 4),
+            candidate_mora_ids=torch.tensor([[[1, 8]]]),
+        )
