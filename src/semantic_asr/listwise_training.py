@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import random
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from statistics import fmean, pstdev
 
 from .contracts import canonical_json
@@ -239,4 +241,24 @@ def train_listwise_semantic_mwer(
         epoch_losses=tuple(epoch_losses),
         example_count=len(examples),
         training_manifest_sha256=manifest_digest,
+    )
+
+
+def write_listwise_training_result(
+    result: ListwiseTrainingResult, path: str | Path
+) -> None:
+    payload = {
+        "schemaVersion": "listwise-semantic-mwer-v1",
+        "profile": result.profile.as_dict(),
+        "before": asdict(result.before),
+        "after": asdict(result.after),
+        "epochLosses": list(result.epoch_losses),
+        "exampleCount": result.example_count,
+        "trainingManifestSha256": result.training_manifest_sha256,
+    }
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
