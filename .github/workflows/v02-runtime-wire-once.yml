@@ -1,9 +1,13 @@
 name: v0.2 one-time runtime wiring
 
 on:
-  push:
+  pull_request:
     branches:
-      - codex/semantic-asr-v0.2-adaptive-reranking
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   contents: write
