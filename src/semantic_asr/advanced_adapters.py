@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, replace
 
-from .adaptive import AdaptiveKConfig, select_adaptive_k
 from .adapters import (
     ASRAdapter,
     DecodeRequest,
@@ -11,6 +10,7 @@ from .adapters import (
     _digest_text,
     _package_version,
 )
+from .adaptive import AdaptiveKConfig, select_adaptive_k
 from .calibration import CalibrationProfile, calibrate_values
 from .candidate_pool import aggregate_surface_candidates
 from .contracts import CandidateEvidence

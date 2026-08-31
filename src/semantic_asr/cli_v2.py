@@ -7,8 +7,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .adaptive import AdaptiveKConfig
 from .adapters import Qwen3ASRAdapter, Qwen3ForcedAlignerAdapter
+from .adaptive import AdaptiveKConfig
 from .advanced_adapters import (
     AdaptiveRerankingAdapter,
     PathPreservingFasterWhisperAdapter,
