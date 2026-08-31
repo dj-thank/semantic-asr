@@ -2,7 +2,7 @@
 
 **発話された日本語を、意味を勝手に直さず、音響証拠・モーラ・複数ASR・局所的な意味リスクから復元する。**
 
-Semantic ASRは、日本語音声を単に「自然な文章」へ変換する後処理ツールではありません。Whisper系N-best、モーラ影表現、独立ASR、語彙証拠、フィラー・言い直しの保存証拠を融合し、**実際に話された内容**と**読みやすく整えた文章**を別の証拠オブジェクトとして保存する、ローカル優先の日本語音声認識基盤です。
+Semantic ASRは、日本語音声を単に「自然な文章」へ変換する後処理ツールではありません。Whisper系N-best、decoder path、モーラ影表現、独立ASR、学習済みreranker、語彙証拠、フィラー・言い直しの保存証拠を融合し、**実際に話された内容**と**読みやすく整えた文章**を別の証拠オブジェクトとして保存する、ローカル優先の日本語音声認識基盤です。
 
 ```text
 observedTranscript != normalizedTranscript
@@ -10,127 +10,155 @@ observedTranscript != normalizedTranscript
 
 発話者が実際に「昨日、学校を行きました」と話した場合、言語モデルが「昨日、学校に行きました」を好んでも、前者を消しません。
 
-## 目標
-
-- 文法的な自然さではなく、音声への忠実性を最優先する
-- 「ない／ある」「2人／3人」「3,000円／30,000円」のような意味反転を局所検出する
-- 曖昧な区間だけを再聴取し、重いモデルを全音声へ常時投入しない
-- 自信が不足するときは、誤った確定ではなく`provisional`として棄権する
-- 発音誤り、助詞誤り、フィラー、自己修復を評価可能な形で残す
-- Qwen3-ASRやローカルQwen3.8を、音響証拠に逆らえない補助者として使う
-- 評価、データ権利、キャッシュ、モデル版、校正状態を再現可能にする
-
-## アーキテクチャ
+## v0.2の中心
 
 ```text
-audio / video
+audio
   │
-  ├─ long-form window planner + cache
-  │
-  ├─ faster-whisper / CTranslate2 N-best
-  │      ├─ sequence score
-  │      ├─ average log probability
-  │      ├─ rank / hypothesis count
-  │      └─ prompt / hotword provenance
-  │
-  ├─ Mora Shadow
-  │      ├─ reading
-  │      ├─ mora CTC
-  │      ├─ phone / boundary / accent / F0
-  │      └─ error-preservation evidence
-  │
-  ├─ independent second ear: Qwen3-ASR
-  ├─ optional Qwen3 Forced Aligner
-  └─ rights-gated lexical memory
-          │
-          ▼
-calibration
-  ├─ held-out temperature profile
-  ├─ robust median/MAD fallback
-  └─ beam score-rank confidence
-          │
-          ▼
-five-stream evidence fusion
-  ├─ acoustic
-  ├─ mora
-  ├─ lexical
-  ├─ preservation
-  └─ cross-model consensus
-          │
-          ├─ posterior
-          ├─ entropy
-          ├─ evidence disagreement
-          ├─ evidence coverage
-          ├─ selective risk
-          └─ accepted / provisional
-          │
-          ▼
-Semantic Lattice
-  ├─ Consensus Spine
-  └─ Contradiction Islands
-          ├─ number / quantity
-          ├─ date / time
-          ├─ currency / percentage
-          ├─ negation meaning flip
-          ├─ modality / intent
-          ├─ entity / technical term
-          ├─ particle
-          └─ special mora
-          │
-          ▼
-query-selected evidence acquisition
-  utility = expected information gain / estimated cost
-  ├─ Whisper local re-listening
-  ├─ Qwen3-ASR second ear
-  ├─ Qwen3 Forced Aligner
-  ├─ rights-gated lexicon lookup
-  └─ local Qwen teacher
+  ├─ path-preserving faster-whisper / CTranslate2 N-best
+  ├─ score-domain-safe surface pooling
+  ├─ Semantic Minimum Bayes Risk
+  ├─ adaptive candidate K
+  ├─ optional linear / ModernBERT / Qwen3 reranker
+  ├─ held-out calibration
+  ├─ constrained evidence fusion
+  ├─ fusion–MBR agreement check
+  └─ uncertainty-only acoustic verification / second ear
           │
           ▼
 immutable observed transcript
           │
-          └─ separate normalized transcript
+          └─ separately linked normalized transcript
 ```
 
-詳細は[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)を参照してください。
+v0.2で追加した主な機構:
 
-## 主要な独自機構
+- 同一表記へ到達した複数beamを捨てず、同一score domain内だけ`logsumexp`で確率質量を集約
+- raw score、log likelihood、logit、preference、calibrated probabilityを型として分離
+- surface/mora/数字・日時・金額・否定・固有表現・保存性を扱うSemantic MBR
+- posterior mass、risk、semantic criticality、diversityによるadaptive K
+- 依存なしで学習できるpairwise linear ranker
+- optional ModernBERT/CrossEncoder raw-logit ranker
+- optional Qwen3-Reranker-0.6B raw yes/no logit margin
+- candidate moraが必要な音声frameを選ぶ小型Query-Selected Acoustic Verifier
+- evidence actionの固定化を防ぐquantile-balanced sparse router
+- 8B/12B級offline teacherのnext-token probabilityを端末で再利用するhashed cache
+- 日本語hard negative生成と、CI内で実際に最適化されるresearch smoke training
 
-### Semantic Contradiction Islands
+詳細:
 
-候補文全体を一つのランキングとして扱わず、候補が食い違う箇所だけを局所化します。
+- [`docs/ARCHITECTURE_V0.2.md`](docs/ARCHITECTURE_V0.2.md)
+- [`docs/RESEARCH_2026-08-31.md`](docs/RESEARCH_2026-08-31.md)
+- [`docs/RERANKER_TRAINING.md`](docs/RERANKER_TRAINING.md)
+- [`docs/KOEMO_INTEGRATION.md`](docs/KOEMO_INTEGRATION.md)
+- [`docs/BENCHMARK_PROTOCOL.md`](docs/BENCHMARK_PROTOCOL.md)
+
+## 設計原則
+
+- 文法的な自然さより、音声への忠実性を優先する
+- 「ない／ある」「2人／3人」「3,000円／30,000円」の意味反転を局所検出する
+- 重いモデルは曖昧な区間だけに投入する
+- 自信不足は誤った確定ではなく`provisional`として残す
+- フィラー、言い直し、学習者誤りを勝手に消さない
+- LLMがN-best外の文を作る場合は、新候補として音響再検証する
+- 評価、権利、モデル版、score semantics、校正状態を再現可能にする
+- CPU tierが勝てば、より大きいLLMを採用しない
+
+## アーキテクチャ
+
+### Candidate path pool
+
+CTranslate2が返すduplicate textを最良path一つに潰しません。
 
 ```text
-候補A: 明日は行きません。料金は3,000円です。
-候補B: 明日は行きます。料金は30,000円です。
+path 1 ─┐
+path 3 ─┼─→ 同じ表記 → logsumexp(path scores)
+path 7 ─┘
 ```
 
-この場合、`negation-meaning-flip`、`number-or-quantity`、`currency`として高リスク化し、通常の句読点差より先に追加証拠を取得します。
+ただし異なるモデル、区間、prompt、decode namespaceのscoreを一つの正規化分布として足しません。異種モデルの一致は`cross_model`証拠として別に保存します。
 
-### Mora Shadow
+### Score semantics
 
-`今日`と`きょう`のような表記差は、読みが同じならモーララティス上で一致できます。反対に、促音・撥音・長音・拗音など本当に音が違う箇所は矛盾として残ります。
+次は互いに別物です。
 
 ```text
-きゃく   → キャ / ク
-がっこう → ガ / ッ / コ / ウ
-しんぶん → シ / ン / ブ / ン
-スーパー → ス / ー / パ / ー
-ティ     → ティ
-ファイル → ファ / イ / ル
+raw score
+log likelihood
+logit
+preference
+probability
 ```
+
+チャットLLMがJSONに`0.9`と書いても、それは校正済み確率ではありません。専用rerankerもraw logitを返します。自動受理やrisk計算で確率として使うには、held-out calibrationが必要です。
+
+### Semantic MBR
+
+候補`y`の期待損失をN-best posterior上で最小化します。
+
+```text
+R(y) = Σ_h P(h | x) L(y, h)
+```
+
+既定loss:
+
+```text
+surface edit
+mora edit
+number/date/time/currency/negation/entity loss
+preservation disagreement
+```
+
+FusionとMBRが不一致なら、既定ではMBRへ即座に置き換えず、追加音響証拠または`provisional`を要求します。
+
+### Adaptive K
+
+固定top-5ではなく、候補分布が平坦、riskが高い、重要語が矛盾する場合にKを増やします。十分なposterior massを回収した時点、またはtailの追加質量が小さい時点で停止します。
+
+### Learned reranker
+
+三つのtierがあります。
+
+```text
+CPU最小      pairwise linear ranker
+CPU/小GPU    Japanese CrossEncoder / ModernBERT
+小GPU        Qwen3-Reranker-0.6B
+```
+
+すべて候補ランキング用です。観測文字列を生成する権限はありません。
+
+### Query-Selected Acoustic Verifier
+
+候補モーラ列をqueryとして、候補判定に必要な音声frameを選びます。
+
+```text
+candidate mora query
+        ├─ selected acoustic branch
+        ├─ global context branch
+        └─ mora-internal branch
+                │
+          bounded learned gates
+                │
+          candidate ranking logit
+```
+
+これはQwen3.8のsparse selection、Kimi K3のAttention Residuals/高疎MoE、GLM-5.3のmHCをASR証拠処理へ翻訳した研究設計です。各モデルの内部kernelやweightsを複製したという主張ではありません。
 
 ### Grammar Honeytrap
 
-ローカルLLMが強く好む候補でも、音響＋モーラ＋独立ASRの支持が弱ければペナルティを与えます。LLMの文法知識を「音響スコア」として扱いません。
+言語モデルが自然だと判断しても、音響・モーラ・独立ASRの支持が弱ければペナルティを与えます。言語priorを音響証拠として扱いません。
 
-### Selective Risk / Abstention
+### Observed / normalized split
 
-候補の事後確率、証拠ストリーム間の不一致、欠落証拠、上位候補差から選択リスクを求めます。閾値を満たさなければ、結果を捨てるのではなく`provisional`として保存し、再聴取候補を提示します。
+```text
+observed transcript
+  acoustic candidateから選択
+  evidence hashで改変検知
 
-### Query-Selected Evidence
-
-追加推論は、情報利得と推論コストの比で選択します。これはQwen3.8-Flash-Nextの効率的な状態選択・ゲート設計から着想した**音声オーケストレーション上の翻訳**であり、QSAやGated DeltaNetの内部カーネルを再実装したという主張ではありません。
+normalized transcript
+  observed evidence hashへリンク
+  deterministic / rank-only / guarded-rewrite
+```
 
 ## インストール
 
@@ -143,236 +171,215 @@ python -m pip install --upgrade pip
 python -m pip install -e '.[asr]'
 ```
 
-Qwen3-ASR／Forced Alignerを使用する場合:
+Qwen3-ASR／Forced Aligner:
 
 ```bash
 python -m pip install -e '.[asr,qwen]'
 ```
 
-補助ヘッドを学習する場合:
+CrossEncoder／Qwen3 reranker:
+
+```bash
+python -m pip install -e '.[asr,rerank]'
+```
+
+PyTorch acoustic verifier／補助ヘッド:
 
 ```bash
 python -m pip install -e '.[train]'
 ```
 
-## まず試す
+基本packageは依存ゼロです。
 
-モデルを使わない決定論的デモ:
+## モデルなしで試す
+
+v0.1互換デモ:
 
 ```bash
 semantic-asr demo
 ```
 
-既存N-bestを融合:
+v0.2の候補cascade:
 
 ```bash
-semantic-asr fuse examples/candidates.json --output runs/fused.json
+semantic-asr cascade examples/candidates.json \
+  --selection-policy fusion \
+  --output runs/cascade.json
 ```
 
-## 完全な長時間文字起こし
+実際に小型rankerを学習するsynthetic smoke:
 
 ```bash
-semantic-asr transcribe meeting.m4a \
+semantic-asr research-smoke --output runs/research-smoke.json
+```
+
+これは学習・MBR・adaptive Kのcode pathを検証しますが、実音声CER改善の証拠ではありません。
+
+## v0.2長時間文字起こし
+
+Path-preserving N-bestだけを使う:
+
+```bash
+semantic-asr transcribe-v2 meeting.m4a \
   --model large-v3-turbo \
+  --maximum-hypotheses 12 \
+  --patience 1.4 \
   --language ja \
   --output-dir transcripts
 ```
 
-固有名詞と文脈を渡す:
+学習済みlinear ranker:
 
 ```bash
-semantic-asr transcribe meeting.wav \
-  --initial-prompt '日本語音声認識と生成AIの技術会議です。' \
-  --hotwords 'Semantic ASR,Qwen3-ASR,Qwen3.8,CTranslate2,モーラ' \
-  --context '発話誤りとフィラーを消さない。' \
+semantic-asr transcribe-v2 meeting.wav \
+  --ranker-backend linear \
+  --ranker-profile artifacts/linear-ranker.json \
+  --ranker-calibration calibration/ranker.json \
   --output-dir transcripts
 ```
 
-### GTX 1660 SUPERなど低VRAM環境
+Japanese CrossEncoder:
 
 ```bash
-semantic-asr transcribe meeting.wav \
-  --model small \
-  --device cuda \
-  --compute-type int8_float16 \
+semantic-asr transcribe-v2 meeting.wav \
+  --ranker-backend cross-encoder \
+  --ranker-model sbintuitions/modernbert-ja-130m \
+  --ranker-device cpu \
   --output-dir transcripts
 ```
 
-CUDAランタイムが使えない場合:
+モデルによってsequence-classification headの追加学習が必要です。汎用masked-LM checkpointを未学習のままproduction rankerとはみなしません。
+
+Qwen3 reranker:
 
 ```bash
-semantic-asr transcribe meeting.wav \
-  --model small \
-  --device cpu \
-  --compute-type int8 \
+semantic-asr transcribe-v2 meeting.wav \
+  --ranker-backend qwen3 \
+  --ranker-model Qwen/Qwen3-Reranker-0.6B \
+  --ranker-device cuda:0 \
+  --ranker-dtype float16 \
   --output-dir transcripts
 ```
 
-ハードウェア、ドライバー、モデル版によりVRAMは変わるため、特定GPUで必ず収まるとは断定していません。
-
-## Qwen3-ASRを第二の耳として使う
+Qwen3-ASR second ear／Forced Aligner:
 
 ```bash
-semantic-asr transcribe meeting.wav \
+semantic-asr transcribe-v2 meeting.wav \
   --qwen-second-ear \
+  --qwen-aligner \
   --qwen-model Qwen/Qwen3-ASR-0.6B \
-  --qwen-device-map cuda:0 \
-  --qwen-dtype float16 \
-  --qwen-timestamps \
+  --qwen-aligner-model Qwen/Qwen3-ForcedAligner-0.6B \
   --output-dir transcripts
 ```
 
-Qwen3-ASRは、原則として曖昧なContradiction Islandだけに投入します。公式高レベルAPIが1入力につき1文字起こしを返す経路を、Whisper N-bestと同じものとして偽装しません。
+## Ranker datasetと学習
 
-Forced Aligner:
+参照文を1行ずつ書いた`references.txt`からhard negativeを作る:
 
 ```bash
-semantic-asr transcribe meeting.wav \
-  --qwen-aligner \
-  --qwen-aligner-model Qwen/Qwen3-ForcedAligner-0.6B
+semantic-asr synthetic-data references.txt \
+  --output data/synthetic-ranker.jsonl \
+  --maximum-negatives 8
 ```
 
-Forced Alignmentは候補の時刻配置証拠であり、その候補が実際に発話されたことを単独で証明するものではありません。
-
-## ローカルLLM
-
-### Ollama
+軽量rankerを学習:
 
 ```bash
-semantic-asr transcribe interview.wav \
+semantic-asr train-ranker data/train.jsonl \
+  --output artifacts/linear-ranker.json \
+  --epochs 80
+```
+
+実運用ではsynthetic dataだけで学習せず、実ASR N-best、speaker-disjoint calibration、locked testを使用します。
+
+## Offline teacher probability cache
+
+実際のteacher logitsから得たnext-token probabilityを、端末向けcacheへ変換できます。
+
+```bash
+semantic-asr lm-cache-build teacher-probabilities.jsonl \
+  --output artifacts/teacher-cache.json \
+  --key-hex <deployment-local-secret-in-hex> \
+  --teacher local-12b \
+  --teacher-revision <exact-revision>
+```
+
+cacheはraw contextを保存せず、keyed SHA-256 context digest、target token ID、probability、teacher provenanceだけを保持します。秘密keyはrepositoryへcommitしません。
+
+## Legacy local teacher
+
+v0.1互換のOllama／OpenAI-compatible teacherも残しています。
+
+```bash
+semantic-asr transcribe-v2 interview.wav \
   --teacher-protocol ollama \
-  --teacher-model qwen3:4b \
-  --teacher-endpoint http://127.0.0.1:11434/api/chat
+  --teacher-model qwen3:4b
 ```
 
-### ローカルQwen3.8 OpenAI互換サーバー
-
-```bash
-semantic-asr transcribe interview.wav \
-  --teacher-protocol openai \
-  --teacher-model Qwen/Qwen3.8-Flash-Next \
-  --teacher-endpoint http://127.0.0.1:8000/v1/chat/completions
-```
-
-教師は既存候補IDへの確率と`abstain`だけを返せます。新しい文字起こしの生成、候補追加、観測文字列の上書きは禁止です。
+このteacherがJSONに出力する数値は、candidate-only rank preferenceとして扱います。専用rerankerのraw logitやheld-out calibrated probabilityと同一視しません。teacherはobserved transcriptを直接変更できず、rank-only normalized layerまたは追加証拠要求にのみ使われます。
 
 安全境界:
 
-- ループバックHTTPのみ
-- URL認証情報・クエリ・フラグメントを拒否
-- 環境変数プロキシを無効化
-- HTTPリダイレクトを拒否
-- 候補IDの完全一致を検証
-- 思考過程を保存しない
-- 棄権状態をキャッシュでも維持
-- 教師結果は`observedTranscript`を直接変更できない
+- loopback HTTPのみ
+- URL認証情報・query・fragmentを拒否
+- environment proxyを無効化
+- redirectを拒否
+- candidate ID完全一致を検証
+- candidate外のobserved text生成を禁止
+- abstentionをcacheでも維持
 
 ## 出力
 
-入力が`meeting.m4a`の場合:
-
 ```text
-meeting.semantic-asr.json  全証拠・候補・校正・不確実性・行動計画
-meeting.observed.txt       実際に発話されたと判断した日本語
-meeting.txt                読みやすさ用の別レイヤー
-meeting.md                 監査情報とタイムライン
+meeting.semantic-asr.json  全証拠・候補・校正・不確実性・計画
+meeting.observed.txt       発話されたと判断した改変検知対象
+meeting.txt                別レイヤーの読みやすい文章
+meeting.md                 監査情報とtimeline
 meeting.srt                字幕
 meeting.vtt                Web字幕
 ```
 
-絶対入力パスは既定で出力しません。
-
-## 校正
-
-校正用JSONL:
-
-```json
-{"confidence": 0.73, "correct": true}
-```
-
-```bash
-semantic-asr calibrate heldout.jsonl \
-  --output calibration/observed-posterior.json
-```
-
-出力:
-
-- ECE
-- Brier score
-- Negative Log-Likelihood
-- Risk-Coverage Curve
-- 校正プロファイルSHA-256
-
-詳細は[`docs/BENCHMARK_PROTOCOL.md`](docs/BENCHMARK_PROTOCOL.md)を参照してください。
+絶対入力pathは既定で出力しません。
 
 ## 評価
 
-通常のCERだけでなく、次を重視します。
-
 ```text
-CER
-Kana-CER
-Mora Error Rate
-number/date/time/currency error rate
-negation error rate
-critical-entity error rate
-punctuation F1
-filler / disfluency preservation
-unsupported correction rate
-ECE / Brier / NLL / AURC
-coverage at fixed risk
-RTF / peak VRAM / cache hit rate
-information gain per additional inference millisecond
+recognition:
+  CER / Kana-CER / Mora Error Rate / oracle@K / rank regret
+
+meaning-critical:
+  number / date / time / currency / negation / entity errors
+
+preservation:
+  filler / repair / learner-error preservation
+  unsupported insertion / unsupported correction
+
+confidence:
+  ECE / Brier / NLL / AURC / risk-coverage
+
+cost:
+  RTF / p50-p95 latency / RAM / VRAM
+  verifier / second-ear / teacher invocation rate
 ```
 
-最低限のアブレーション:
+必須ablationは[`docs/RESEARCH_2026-08-31.md`](docs/RESEARCH_2026-08-31.md)に固定しています。
 
-```text
-Whisper single-best
-Whisper N-best
-+ calibrated fusion
-+ Mora Shadow
-+ semantic contradiction islands
-+ selective re-listening
-+ Qwen second ear
-+ local teacher
-full system
-```
+## 公開データと権利
 
-## 公開データ
-
-公開されていることと、学習・派生特徴・再配布が許されることは同義ではありません。`allow / deny / review`を操作ごとに持つ権利台帳を実行時に検査します。
+公開されていることと、学習・派生特徴・再配布が許されることは同義ではありません。`allow / deny / review`を操作ごとに持つrights registryを実行時に検査します。
 
 ```bash
 semantic-asr rights data/rights_registry.example.json \
   jmdict-current derive_features
 ```
 
-`review`は「たぶん使える」ではなく処理停止です。詳細は[`docs/PUBLIC_DATA.md`](docs/PUBLIC_DATA.md)を参照してください。
+`review`は「たぶん使える」ではなく処理停止です。
 
-## 学習用補助ヘッド
+## Koemo
 
-共有音声エンコーダーへ、次を追加できます。
+Koemoはcapture/AEC/live/UI/model lifecycleを担当し、Semantic ASRをauthoritative final transcript coreとしてpackage利用します。Koemoのregex correctionはnormalized layerにのみ適用し、observed evidence作成前のraw ASR candidateを変更しません。
 
-```text
-mora CTC
-phone CTC
-mora boundary
-accent class
-F0 regression
-preservation class
-```
-
-保存分類の想定ラベル:
-
-```text
-ordinary
-filler
-repair / self-correction
-learner error
-```
-
-通常のWhisperデコーダーを最初から置き換えず、日本語固有の音響監督信号を追加する設計です。
+移行契約は[`docs/KOEMO_INTEGRATION.md`](docs/KOEMO_INTEGRATION.md)を参照してください。
 
 ## 検証
 
@@ -381,32 +388,30 @@ python -m compileall -q src tests scripts
 python -m ruff format --check src tests scripts
 python -m ruff check src tests scripts
 python -m pytest -q
-semantic-asr demo --output runs/demo.json
+semantic-asr research-smoke --output runs/research-smoke.json
 python -m build --wheel
 ```
 
-現在のmodel-freeテストは、モーラ、改変検出、校正、融合、Semantic Lattice、証拠計画、キャッシュ、長時間処理、出力、教師安全境界、評価指標、PyTorch補助ヘッドを検証します。
+CPU PyTorch検証:
 
-基本環境ではPyTorchを入れず、補助ヘッドのテストは意図的にskipします。別のCPU環境へ
-`torch>=2.4`を導入し、`python -m pytest -q tests/test_training_optional.py`で実行してください。
-CIはLinux/Python 3.11・3.12、Windows/Python 3.12、CPU補助ヘッドを分けて検証し、
-ソースの自動整形・commit・pushは行いません。実音声やモデル重みはこの検証に不要です。
+```bash
+python -m pytest -q \
+  tests/test_training_optional.py \
+  tests/test_acoustic_verifier_optional.py
+```
 
-### 主張しないもの
+CIはmodel-free test、synthetic ranker optimization、Linux/Windows、Python 3.11/3.12、CPU verifier backward、wheel clean installを分離して実行します。
 
-実モデルと公開・権利確認済み正解コーパスで測定するまでは、次を主張しません。
+## Claim boundary
+
+コード契約、synthetic training、CI成功は、実音声精度改善とは別です。権利確認済み日本語音声と正解transcriptで測定するまでは、次を主張しません。
 
 - Whisperより必ず高精度
 - CERが特定割合改善
 - 100%正しい文字起こし
 - 特定GPUで必ず一定VRAM以内
-- Qwen3.8の内部アーキテクチャを音声モデルへ直接実装済み
-
-コード契約の成功と、実音声認識精度の改善は別物です。
-
-## 研究根拠
-
-2026年8月29日時点の一次資料と、直接実装・発想の翻訳・未検証仮説の境界を[`docs/RESEARCH_2026-08-29.md`](docs/RESEARCH_2026-08-29.md)へ固定しています。
+- Qwen/Kimi/GLMの内部kernelを再実装した
+- synthetic fixtureで学んだrankerがproduction-readyである
 
 ## ライセンス
 
