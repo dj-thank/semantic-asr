@@ -27,6 +27,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The workflow is intentionally triggered only after registration.
           actual_head="$(gh api repos/${GITHUB_REPOSITORY}/pulls/7 --jq .head.ref)"
           actual_state="$(gh api repos/${GITHUB_REPOSITORY}/pulls/7 --jq .state)"
           actual_draft="$(gh api repos/${GITHUB_REPOSITORY}/pulls/7 --jq .draft)"
