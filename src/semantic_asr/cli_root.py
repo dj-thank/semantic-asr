@@ -3,10 +3,12 @@ from __future__ import annotations
 import sys
 
 from .cli_v2 import main as compatibility_main
-from .experiment_cli import EXPERIMENT_COMMANDS, main as experiment_main
+from .experiment_cli import EXPERIMENT_COMMANDS
+from .experiment_cli import main as experiment_main
 from .frontier_cli import FRONTIER_COMMANDS
 from .frontier_cli import main as frontier_main
-from .research_cli import RESEARCH_COMMANDS, main as research_main
+from .research_cli import RESEARCH_COMMANDS
+from .research_cli import main as research_main
 
 
 def main(argv: list[str] | None = None) -> int:
