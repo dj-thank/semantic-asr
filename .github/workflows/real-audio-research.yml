@@ -76,7 +76,7 @@ jobs:
     timeout-minutes: 720
     steps:
       - name: Check out exact source revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Resolve and validate local paths
         id: paths
