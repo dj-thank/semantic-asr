@@ -1,0 +1,115 @@
+name: Semantic ASR frontier contracts
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: "1"
+
+concurrency:
+  group: semantic-asr-frontier-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontier-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install model-free development environment
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" pyyaml
+
+      - name: Parse all workflow YAML
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          import yaml
+
+          for path in sorted(Path(".github/workflows").glob("*.yml")):
+              with path.open(encoding="utf-8") as handle:
+                  payload = yaml.safe_load(handle)
+              if not isinstance(payload, dict):
+                  raise SystemExit(f"invalid workflow object: {path}")
+          PY
+
+      - name: Run frontier contract tests
+        run: python -m pytest -q tests/test_v02_*.py
+
+      - name: Validate the pinned research registry
+        run: python scripts/validate_research_registry.py
+
+      - name: Run the dependency-free v0.2 demonstration
+        run: python examples/v02_cpu_demo.py
+
+      - name: Train the deterministic constrained-ranker fixture
+        run: |
+          python scripts/train_reranker_v2.py \
+            examples/v02-ranking-groups.jsonl \
+            --output .ci-artifacts/reranker.json \
+            --epochs 80 \
+            --seed 17
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          row = json.loads(Path(".ci-artifacts/reranker.json").read_text(encoding="utf-8"))
+          assert row["format"] == "semantic-asr-constrained-linear-reranker-v1"
+          assert len(row["modelDigest"]) == 64
+          assert row["report"]["pairwise_accuracy"] >= 0.9
+          PY
+
+      - name: Build wheel
+        run: python -m build --wheel
+
+      - name: Install wheel in a clean environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/wheel-venv"
+          source "$RUNNER_TEMP/wheel-venv/bin/activate"
+          python -m pip install --upgrade pip
+          python -m pip install dist/*.whl
+          semantic-asr --help >/dev/null
+          semantic-asr research-ledger --format json > research-ledger.json
+          semantic-asr train-ngram --help >/dev/null
+          semantic-asr train-listwise-ranker --help >/dev/null
+          semantic-asr train-fusion --help >/dev/null
+          semantic-asr generate-candidates --help >/dev/null
+          semantic-asr partition-manifest --help >/dev/null
+          semantic-asr score-ranker-calibration --help >/dev/null
+          semantic-asr apply-ranker --help >/dev/null
+          semantic-asr calibrate-ranker --help >/dev/null
+          semantic-asr benchmark --help >/dev/null
+          semantic-asr deployment-gate --help >/dev/null
+          semantic-asr throttle-policy --effort ultra-light >/dev/null
+          python - <<'PY'
+          from semantic_asr.candidate_pool import CandidatePath, CandidatePool
+          from semantic_asr.research_registry import default_research_registry
+
+          pool = CandidatePool.from_paths(
+              (
+                  CandidatePath("a", "東京", -1.0),
+                  CandidatePath("b", "京都", -2.0),
+              )
+          )
+          assert len(pool.candidates) == 2
+          assert len(default_research_registry().digest) == 64
+          PY

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantic-asr.local/schemas/v02-ranking-group.schema.json",
+  "title": "Semantic ASR v0.2 ranking training group",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["groupId", "candidates"],
+  "properties": {
+    "groupId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["candidateId", "features", "targetLoss"],
+        "properties": {
+          "candidateId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "features": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "targetLoss": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "criticalLoss": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0
+          },
+          "weight": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": 1
+          }
+        }
+      }
+    }
+  }
+}

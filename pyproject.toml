@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "semantic-asr"
-version = "0.1.0"
-description = "Evidence-preserving, semantics-aware Japanese ASR with mora lattices, selective re-listening, and local Qwen teachers"
+version = "0.2.0"
+description = "Evidence-preserving Japanese ASR with path pooling, adaptive reranking, semantic MBR, and selective acoustic verification"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -33,6 +33,17 @@ train = [
   "torch>=2.4",
   "transformers>=4.51",
 ]
+rerank = [
+  "sentence-transformers>=5,<6",
+  "torch>=2.4",
+  "transformers>=5,<6",
+]
+kenlm = [
+  "kenlm>=0.2.0",
+]
+japanese = [
+  "pyopenjtalk>=0.4",
+]
 dev = [
   "build>=1.2",
   "jsonschema>=4.20",
@@ -41,7 +52,7 @@ dev = [
 ]
 
 [project.scripts]
-semantic-asr = "semantic_asr.cli:main"
+semantic-asr = "semantic_asr.cli_root:main"
 
 [project.urls]
 Homepage = "https://github.com/dj-thank/semantic-asr"
@@ -64,6 +75,6 @@ line-length = 100
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
+# Source titles and falsification statements are immutable registry data.
+"src/semantic_asr/research_registry.py" = ["E501"]
 # Historical patch fixtures intentionally preserve exact long source lines.
-"scripts/apply_pr_review_fixes.py" = ["E501"]
-"scripts/apply_pr_review_fixes_v2.py" = ["E501"]

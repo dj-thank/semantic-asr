@@ -6,6 +6,13 @@ authors:
   - family-names: Moriwaki
     given-names: Shota
 repository-code: "https://github.com/dj-thank/semantic-asr"
-version: 0.1.0
-date-released: 2026-08-29
+version: 0.2.0
+date-released: 2026-08-31
 license: Apache-2.0
+keywords:
+  - automatic speech recognition
+  - Japanese
+  - Whisper
+  - minimum Bayes risk
+  - reranking
+  - mora
