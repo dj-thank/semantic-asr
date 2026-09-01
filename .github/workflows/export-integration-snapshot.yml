@@ -1,4 +1,5 @@
 name: Apply verified v0.2 compatibility integration
+# Re-run only after the validated compatibility archive has been restored.
 
 on:
   push:
