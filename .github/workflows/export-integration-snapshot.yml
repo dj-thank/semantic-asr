@@ -38,12 +38,33 @@ jobs:
           # exact first 8,000 bytes, then append the remaining non-overlapping parts.
           head -c 8000 "${parts[0]}" > "$RUNNER_TEMP/semantic-v02-compat.b64"
           cat "${parts[@]:1}" >> "$RUNNER_TEMP/semantic-v02-compat.b64"
-          test "$(wc -c < "$RUNNER_TEMP/semantic-v02-compat.b64" | tr -d ' ')" -eq 52308
-          base64 --decode "$RUNNER_TEMP/semantic-v02-compat.b64" \
-            > "$RUNNER_TEMP/semantic-v02-compat.tar.gz"
-          test "$(stat -c%s "$RUNNER_TEMP/semantic-v02-compat.tar.gz")" -eq 39231
-          echo "d44dc095bb449963483900ee3099e2d375321badf52f63c353ead64683bac931  $RUNNER_TEMP/semantic-v02-compat.tar.gz" \
-            | sha256sum -c -
+
+          b64_size="$(wc -c < "$RUNNER_TEMP/semantic-v02-compat.b64" | tr -d ' ')"
+          echo "reassembled_base64_bytes=$b64_size"
+          if [ "$b64_size" -ne 52308 ]; then
+            echo "Expected 52308 base64 bytes" >&2
+            exit 1
+          fi
+
+          if ! base64 --decode "$RUNNER_TEMP/semantic-v02-compat.b64" \
+            > "$RUNNER_TEMP/semantic-v02-compat.tar.gz"; then
+            echo "Base64 decoding failed" >&2
+            exit 1
+          fi
+
+          tar_size="$(stat -c%s "$RUNNER_TEMP/semantic-v02-compat.tar.gz")"
+          tar_sha="$(sha256sum "$RUNNER_TEMP/semantic-v02-compat.tar.gz" | cut -d' ' -f1)"
+          echo "decoded_tar_bytes=$tar_size"
+          echo "decoded_tar_sha256=$tar_sha"
+          if [ "$tar_size" -ne 39231 ]; then
+            echo "Expected 39231 decoded bytes" >&2
+            exit 1
+          fi
+          if [ "$tar_sha" != "d44dc095bb449963483900ee3099e2d375321badf52f63c353ead64683bac931" ]; then
+            echo "Decoded archive SHA-256 does not match the locally validated payload" >&2
+            exit 1
+          fi
+
           tar -xzf "$RUNNER_TEMP/semantic-v02-compat.tar.gz"
           rm -f \
             .github/semantic-v02-compat.tar.gz.b64 \
