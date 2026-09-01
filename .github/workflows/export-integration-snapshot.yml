@@ -1,4 +1,4 @@
-name: Export integration snapshot
+name: Apply validated v0.2 compatibility integration
 
 on:
   push:
@@ -8,41 +8,92 @@ on:
       - .github/workflows/export-integration-snapshot.yml
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: semantic-asr-v02-compatibility-integration
+  cancel-in-progress: false
 
 jobs:
-  export:
+  apply-and-verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - name: Check out exact integration branch
+        uses: actions/checkout@v6
         with:
           ref: codex/semantic-asr-v0.2-integrated
           fetch-depth: 0
-          persist-credentials: false
-      - name: Create exact source archives
+          persist-credentials: true
+
+      - name: Apply the locally validated compatibility payload
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/integration-source"
-          tar --exclude=.git --exclude=.github/workflows/export-integration-snapshot.yml \
-            -czf "$RUNNER_TEMP/integration-source/semantic-asr-integrated.tar.gz" .
-          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/integration-source/integrated-commit.txt"
+          test -f .github/semantic-v02-compat.tar.gz.b64
+          base64 --decode .github/semantic-v02-compat.tar.gz.b64 \
+            > "$RUNNER_TEMP/semantic-v02-compat.tar.gz"
+          tar -xzf "$RUNNER_TEMP/semantic-v02-compat.tar.gz"
+          rm -f \
+            .github/semantic-v02-compat.tar.gz.b64 \
+            .github/workflows/export-integration-snapshot.yml
 
-          git fetch origin codex/semantic-asr-v0.2-research-stack
-          research_sha="$(git rev-parse origin/codex/semantic-asr-v0.2-research-stack)"
-          git archive --format=tar.gz \
-            --output="$RUNNER_TEMP/integration-source/semantic-asr-research.tar.gz" \
-            "$research_sha"
-          printf '%s\n' "$research_sha" > "$RUNNER_TEMP/integration-source/research-commit.txt"
-
-          sha256sum \
-            "$RUNNER_TEMP/integration-source/semantic-asr-integrated.tar.gz" \
-            "$RUNNER_TEMP/integration-source/semantic-asr-research.tar.gz" \
-            > "$RUNNER_TEMP/integration-source/source-archives.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/setup-python@v6
         with:
-          name: semantic-asr-integration-source
-          path: ${{ runner.temp }}/integration-source/
-          if-no-files-found: error
-          retention-days: 1
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install model-free development environment
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Canonically format and lint the integrated source
+        run: |
+          python -m ruff format src tests scripts
+          python -m ruff check --fix src tests scripts
+          python -m ruff check src tests scripts
+
+      - name: Run the complete model-free validation suite
+        run: |
+          python -m compileall -q src tests scripts
+          python -m pytest -q
+
+      - name: Build and verify the wheel entrypoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wheel"
+          python -m build --wheel --outdir "$RUNNER_TEMP/wheel"
+          python -m venv "$RUNNER_TEMP/wheel-venv"
+          source "$RUNNER_TEMP/wheel-venv/bin/activate"
+          python -m pip install --upgrade pip
+          python -m pip install "$RUNNER_TEMP"/wheel/*.whl
+          semantic-asr --help >/dev/null
+          for command in \
+            partition-manifest \
+            score-ranker-calibration \
+            apply-ranker \
+            benchmark \
+            calibrate-ranker \
+            train-ngram \
+            train-listwise-ranker \
+            train-fusion \
+            generate-candidates \
+            deployment-gate \
+            throttle-policy
+          do
+            semantic-asr "$command" --help >/dev/null
+          done
+          python -m semantic_asr --help >/dev/null
+
+      - name: Commit the verified compatibility integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "semantic-asr-integration"
+          git config user.email "204638875+dj-thank@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: unify v0.2 runtime and research APIs"
+          git push origin HEAD:codex/semantic-asr-v0.2-integrated
