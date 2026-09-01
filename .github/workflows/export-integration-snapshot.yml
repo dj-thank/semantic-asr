@@ -1,4 +1,4 @@
-name: Apply validated v0.2 compatibility integration
+name: Apply verified v0.2 compatibility integration
 
 on:
   push:
@@ -19,23 +19,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Check out exact integration branch
+      - name: Check out the exact integration branch
         uses: actions/checkout@v6
         with:
           ref: codex/semantic-asr-v0.2-integrated
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Apply the locally validated compatibility payload
+      - name: Reassemble and verify the validated payload
         shell: bash
         run: |
           set -euo pipefail
-          test -f .github/semantic-v02-compat.tar.gz.b64
-          base64 --decode .github/semantic-v02-compat.tar.gz.b64 \
+          parts=(.github/semantic-v02-compat.part{00..09})
+          for part in "${parts[@]}"; do
+            test -f "$part"
+          done
+          cat "${parts[@]}" > "$RUNNER_TEMP/semantic-v02-compat.b64"
+          test "$(wc -c < "$RUNNER_TEMP/semantic-v02-compat.b64" | tr -d ' ')" -eq 52308
+          base64 --decode "$RUNNER_TEMP/semantic-v02-compat.b64" \
             > "$RUNNER_TEMP/semantic-v02-compat.tar.gz"
+          test "$(stat -c%s "$RUNNER_TEMP/semantic-v02-compat.tar.gz")" -eq 39231
+          echo "d44dc095bb449963483900ee3099e2d375321badf52f63c353ead64683bac931  $RUNNER_TEMP/semantic-v02-compat.tar.gz" \
+            | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/semantic-v02-compat.tar.gz"
           rm -f \
             .github/semantic-v02-compat.tar.gz.b64 \
+            .github/semantic-v02-compat.part{00..09} \
             .github/workflows/export-integration-snapshot.yml
 
       - uses: actions/setup-python@v6
@@ -43,10 +52,10 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install model-free development environment
+      - name: Install the model-free development environment
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[dev]" build
 
       - name: Canonically format and lint the integrated source
         run: |
@@ -59,7 +68,7 @@ jobs:
           python -m compileall -q src tests scripts
           python -m pytest -q
 
-      - name: Build and verify the wheel entrypoints
+      - name: Build and verify wheel entrypoints
         shell: bash
         run: |
           set -euo pipefail
