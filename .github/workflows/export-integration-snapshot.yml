@@ -34,7 +34,10 @@ jobs:
           for part in "${parts[@]}"; do
             test -f "$part"
           done
-          cat "${parts[@]}" > "$RUNNER_TEMP/semantic-v02-compat.b64"
+          # part00 was staged with 2,000 overlapping characters; keep only the
+          # exact first 8,000 bytes, then append the remaining non-overlapping parts.
+          head -c 8000 "${parts[0]}" > "$RUNNER_TEMP/semantic-v02-compat.b64"
+          cat "${parts[@]:1}" >> "$RUNNER_TEMP/semantic-v02-compat.b64"
           test "$(wc -c < "$RUNNER_TEMP/semantic-v02-compat.b64" | tr -d ' ')" -eq 52308
           base64 --decode "$RUNNER_TEMP/semantic-v02-compat.b64" \
             > "$RUNNER_TEMP/semantic-v02-compat.tar.gz"
