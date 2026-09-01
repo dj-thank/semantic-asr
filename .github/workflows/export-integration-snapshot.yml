@@ -68,6 +68,79 @@ jobs:
             .github/semantic-v02-compat.part{00..09} \
             .github/workflows/export-integration-snapshot.yml
 
+      - name: Restore exact shared research type aliases
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          from pathlib import Path
+
+
+          def imported_names(source: str) -> set[str]:
+              names: set[str] = set()
+              for node in ast.parse(source).body:
+                  if isinstance(node, (ast.Import, ast.ImportFrom)):
+                      names.update(alias.asname or alias.name for alias in node.names)
+              return names
+
+
+          cascade_path = Path("src/semantic_asr/cascade.py")
+          cascade = cascade_path.read_text(encoding="utf-8")
+          if "StageKind = Literal[" not in cascade:
+              if "Literal" not in imported_names(cascade):
+                  cascade = cascade.replace(
+                      "from __future__ import annotations\n",
+                      "from __future__ import annotations\n\nfrom typing import Literal\n",
+                      1,
+                  )
+              anchor = "@dataclass(frozen=True, slots=True)\nclass ExecutionBudget:"
+              if anchor not in cascade:
+                  raise RuntimeError("ExecutionBudget anchor missing from cascade.py")
+              aliases = '''DecisionStatus = Literal[
+              "unresolved",
+              "accepted",
+              "provisional",
+              "rejected",
+          ]
+          StageKind = Literal[
+              "generator",
+              "scorer",
+              "reranker",
+              "calibrator",
+              "verifier",
+              "second-ear",
+              "proposal",
+              "normalizer",
+          ]
+          '''
+              cascade = cascade.replace(anchor, aliases + "\n" + anchor, 1)
+              cascade_path.write_text(cascade, encoding="utf-8")
+
+          ngram_path = Path("src/semantic_asr/ngram.py")
+          ngram = ngram_path.read_text(encoding="utf-8")
+          if "Tokenizer = Callable[[str], Sequence[str]]" not in ngram:
+              names = imported_names(ngram)
+              missing_imports = [name for name in ("Callable", "Sequence") if name not in names]
+              if missing_imports:
+                  ngram = ngram.replace(
+                      "from __future__ import annotations\n",
+                      "from __future__ import annotations\n\n"
+                      f"from collections.abc import {', '.join(missing_imports)}\n",
+                      1,
+                  )
+              anchor = "def character_tokenize("
+              if anchor not in ngram:
+                  raise RuntimeError("character_tokenize anchor missing from ngram.py")
+              ngram = ngram.replace(
+                  anchor,
+                  "Tokenizer = Callable[[str], Sequence[str]]\n\n\n" + anchor,
+                  1,
+              )
+              ngram_path.write_text(ngram, encoding="utf-8")
+          PY
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
