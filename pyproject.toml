@@ -52,7 +52,7 @@ dev = [
 ]
 
 [project.scripts]
-semantic-asr = "semantic_asr.cli_v2:main"
+semantic-asr = "semantic_asr.cli_root:main"
 
 [project.urls]
 Homepage = "https://github.com/dj-thank/semantic-asr"
