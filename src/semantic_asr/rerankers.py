@@ -24,6 +24,14 @@ class CandidateRanker(Protocol):
     ) -> Mapping[str, float]: ...
 
 
+FEATURE_ALIASES: dict[str, str] = {
+    "rank_fraction": "relative_rank",
+    "logprob": "avg_logprob",
+    "length": "log_text_length",
+    "critical_count": "critical_unit_count",
+}
+
+
 FEATURE_NAMES: tuple[str, ...] = (
     "acoustic",
     "mora",
@@ -137,17 +145,21 @@ class LinearRankerProfile:
     def from_dict(cls, row: Mapping[str, Any]) -> LinearRankerProfile:
         values = dict(row)
         values.pop("digest", None)
-        values["weights"] = {
-            str(name): float(value) for name, value in dict(values["weights"]).items()
-        }
+
+        def canonical_features(raw: Mapping[str, Any]) -> dict[str, float]:
+            output: dict[str, float] = {}
+            for raw_name, raw_value in raw.items():
+                name = FEATURE_ALIASES.get(str(raw_name), str(raw_name))
+                if name in output:
+                    raise ValueError(f"duplicate ranker feature after aliasing: {name}")
+                output[name] = float(raw_value)
+            return output
+
+        values["weights"] = canonical_features(dict(values["weights"]))
         if values.get("feature_mean") is not None:
-            values["feature_mean"] = {
-                str(name): float(value) for name, value in dict(values["feature_mean"]).items()
-            }
+            values["feature_mean"] = canonical_features(dict(values["feature_mean"]))
         if values.get("feature_scale") is not None:
-            values["feature_scale"] = {
-                str(name): float(value) for name, value in dict(values["feature_scale"]).items()
-            }
+            values["feature_scale"] = canonical_features(dict(values["feature_scale"]))
         return cls(**values)
 
 

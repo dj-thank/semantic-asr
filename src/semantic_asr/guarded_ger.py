@@ -125,14 +125,16 @@ def _nearest_candidate(
     proposal: GERProposal, candidates: Sequence[CandidateEvidence]
 ) -> tuple[CandidateEvidence, float, float]:
     proposed = CandidateEvidence(proposal.candidate_id, proposal.text)
-    rows = [
-        (
-            candidate,
-            surface_loss(proposed, candidate),
-            mora_loss(proposed, candidate),
-        )
-        for candidate in candidates
-    ]
+    rows = []
+    for candidate in candidates:
+        surface_distance = surface_loss(proposed, candidate)
+        text_mora_distance = mora_loss(proposed, candidate)
+        # GERProposal currently carries no explicit reading. Mixed-script
+        # mora extraction can therefore be partial and must not become a
+        # false hard rejection. The calibrated verifier remains the source
+        # of acoustic/mora truth; this value is only a vicinity guard.
+        mora_distance = min(text_mora_distance, surface_distance)
+        rows.append((candidate, surface_distance, mora_distance))
     return min(
         rows,
         key=lambda row: (

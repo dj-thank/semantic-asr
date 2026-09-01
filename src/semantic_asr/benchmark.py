@@ -164,7 +164,7 @@ def evaluate_utterance(
         ordered,
         cascade_config=cascade_config or CascadeConfig(selection_policy="fusion"),
     )
-    by_id = {candidate.candidate_id: candidate for candidate in decision.ranked}
+    by_id = {ranked.candidate.candidate_id: ranked for ranked in decision.ranked}
     cascade_candidate = by_id[decision.selected_candidate_id].candidate
     mbr_candidate = next(
         candidate

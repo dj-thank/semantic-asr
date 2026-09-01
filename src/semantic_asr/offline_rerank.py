@@ -91,6 +91,7 @@ def rerank_record(
                 "originalRank": candidate.rank,
                 "offlineReranker": ranker.name,
                 "offlineRerankerRawScore": raw_score,
+                "offlineRerankerRank": rank,
                 "offlineRerankerCalibrationDigest": (
                     calibration.digest if calibration is not None else None
                 ),
@@ -108,8 +109,6 @@ def rerank_record(
         reranked.append(
             replace(
                 candidate,
-                rank=rank,
-                hypothesis_count=len(ordered),
                 lexical=lexical,
                 metadata=metadata,
             )

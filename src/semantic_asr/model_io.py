@@ -100,12 +100,15 @@ def deserialize_constrained_reranker(
         str(name): float(value)
         for name, value in _mapping(payload.get("weights"), name="weights").items()
     }
+    objective = str(payload.get("objective") or "")
+    if objective not in {"pairwise", "listwise", "hybrid"}:
+        raise ValueError("unsupported constrained reranker objective")
     model = ConstrainedLinearReranker(
         schema=schema,
         normalizer=normalizer,
         weights=weights,
         bias=float(payload.get("bias")),
-        objective=str(payload.get("objective")),  # type: ignore[arg-type]
+        objective=objective,  # type: ignore[arg-type]
         training_digest=str(payload.get("trainingDigest") or ""),
         metadata=dict(_mapping(payload.get("metadata", {}), name="metadata")),
     )

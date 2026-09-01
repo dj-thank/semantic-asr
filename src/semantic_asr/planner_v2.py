@@ -387,7 +387,7 @@ def plan_learned_evidence(
     while pending and made_progress and len(selected) < maximum_actions:
         made_progress = False
         next_pending: list[ActionPrediction] = []
-        for prediction in pending:
+        for pending_index, prediction in enumerate(pending):
             action = prediction.action
             if not set(action.dependencies).issubset(selected_ids):
                 next_pending.append(prediction)
@@ -408,9 +408,7 @@ def plan_learned_evidence(
             used += prediction.expected_cost_ms
             made_progress = True
             if len(selected) >= maximum_actions:
-                next_pending.extend(
-                    row for row in pending if row.action.action_id not in selected_ids
-                )
+                next_pending.extend(pending[pending_index + 1 :])
                 break
         pending = next_pending
     rejected.extend(pending)
