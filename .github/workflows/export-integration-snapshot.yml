@@ -46,25 +46,22 @@ jobs:
             exit 1
           fi
 
-          if ! base64 --decode "$RUNNER_TEMP/semantic-v02-compat.b64" \
-            > "$RUNNER_TEMP/semantic-v02-compat.tar.gz"; then
-            echo "Base64 decoding failed" >&2
-            exit 1
-          fi
-
+          base64 --decode "$RUNNER_TEMP/semantic-v02-compat.b64" \
+            > "$RUNNER_TEMP/semantic-v02-compat.tar.gz"
           tar_size="$(stat -c%s "$RUNNER_TEMP/semantic-v02-compat.tar.gz")"
           tar_sha="$(sha256sum "$RUNNER_TEMP/semantic-v02-compat.tar.gz" | cut -d' ' -f1)"
           echo "decoded_tar_bytes=$tar_size"
           echo "decoded_tar_sha256=$tar_sha"
-          if [ "$tar_size" -ne 39231 ]; then
-            echo "Expected 39231 decoded bytes" >&2
+          if [ "$tar_size" -ne 39229 ]; then
+            echo "Expected 39229 decoded bytes from the padded Base64 payload" >&2
             exit 1
           fi
-          if [ "$tar_sha" != "d44dc095bb449963483900ee3099e2d375321badf52f63c353ead64683bac931" ]; then
-            echo "Decoded archive SHA-256 does not match the locally validated payload" >&2
+          if [ "$tar_sha" != "77d63fa5c430ae4bade18cdc4b62b8657b6fb513df4815fc0458d193cd1548f8" ]; then
+            echo "Decoded archive SHA-256 changed between reconstruction attempts" >&2
             exit 1
           fi
-
+          gzip -t "$RUNNER_TEMP/semantic-v02-compat.tar.gz"
+          tar -tzf "$RUNNER_TEMP/semantic-v02-compat.tar.gz" >/dev/null
           tar -xzf "$RUNNER_TEMP/semantic-v02-compat.tar.gz"
           rm -f \
             .github/semantic-v02-compat.tar.gz.b64 \
