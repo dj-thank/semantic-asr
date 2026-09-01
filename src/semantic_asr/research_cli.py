@@ -48,8 +48,7 @@ def research_ledger_markdown(payload: dict[str, Any]) -> str:
     for source in payload["sources"]:
         location = f" — {source['primary_url']}" if source.get("primary_url") else ""
         lines.append(
-            f"- **{source['source_id']}** [{source['status']}]: "
-            f"{source['title']}{location}"
+            f"- **{source['source_id']}** [{source['status']}]: {source['title']}{location}"
         )
     lines.extend(("", "## Architecture translations", ""))
     for translation in payload["translations"]:
