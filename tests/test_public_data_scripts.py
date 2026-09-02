@@ -103,11 +103,17 @@ def test_prepare_materializes_exact_asset_only_in_external_destination(
         def __init__(self, *, decode):
             assert decode is False
 
+    class FakeArray:
+        ndim = 1
+
+        def __len__(self):
+            return 16
+
     class FakeSoundFile:
         @staticmethod
         def read(_source, *, dtype):
             assert dtype == "float32"
-            return prepare.np.zeros(16, dtype=prepare.np.float32), 16000
+            return FakeArray(), 16000
 
         @staticmethod
         def write(path, array, rate, *, subtype):
@@ -116,6 +122,7 @@ def test_prepare_materializes_exact_asset_only_in_external_destination(
             Path(path).write_bytes(b"WAV")
 
     monkeypatch.setattr(prepare, "Audio", FakeAudio)
+    monkeypatch.setattr(prepare, "np", object())
     monkeypatch.setattr(prepare, "load_dataset", lambda *_args, **_kwargs: FakeDataset())
     monkeypatch.setattr(prepare, "sf", FakeSoundFile)
     monkeypatch.setattr(prepare, "resample_poly", lambda array, *_args: array)
