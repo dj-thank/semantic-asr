@@ -29,6 +29,12 @@ qwen = [
   "qwen-asr>=0.0.6,<0.1",
   "librosa>=0.10",
 ]
+public-data = [
+  "datasets>=2.20",
+  "numpy>=1.26",
+  "scipy>=1.12",
+  "soundfile>=0.12",
+]
 train = [
   "torch>=2.4",
   "transformers>=4.51",

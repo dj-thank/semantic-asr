@@ -177,6 +177,12 @@ Qwen3-ASR／Forced Aligner:
 python -m pip install -e '.[asr,qwen]'
 ```
 
+公開 Hugging Face データセットからローカル検証用 WAV/manifest を作る場合:
+
+```bash
+python -m pip install -e '.[public-data]'
+```
+
 CrossEncoder／Qwen3 reranker:
 
 ```bash
@@ -217,12 +223,21 @@ semantic-asr research-smoke --output runs/research-smoke.json
 
 ## 実音声で動かす（2026-09-02 以降）
 
-公開テストセットから権利注記付き manifest を作り、N-best 候補を生成し、分割・学習・較正・ベンチマークまでを CLI で回します。
+公開テストセットから権利注記付き manifest を作り、N-best 候補を生成し、分割・学習・較正・ベンチマークまでを CLI で回します。公開データ extra は `datasets`、`numpy`、`scipy`、`soundfile` を含みます。
+
+WAV、参照文、絶対 `audioPath` を含む manifest の materialization は明示的なローカル操作です。出力先は checkout の外に置き、`--allow-raw-export` を必ず付けてください（`data/reazon` など checkout 内の出力は拒否されます）。
 
 ```bash
-python scripts/prepare_public_manifest.py reazonspeech-test --output-dir data/reazon --limit 600 --dataset-revision dd08bfb9dfc1cef4e4d0609fd78c3755d48b926f
-semantic-asr generate-candidates data/reazon/manifest.jsonl   --output runs/reazon/all-candidates.jsonl   --ranker-output runs/reazon/all-ranker.jsonl   --model large-v3-turbo --model-revision 0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf   --runtime-revision "$(git rev-parse HEAD)+faster-whisper-1.2.1+ctranslate2-4.8.2"   --device cpu --compute-type int8 --cpu-threads 6   --beam-size 12 --hypotheses 12
+python scripts/prepare_public_manifest.py reazonspeech-test --output-dir ../semantic-asr-public-data/reazon --limit 600 --dataset-revision dd08bfb9dfc1cef4e4d0609fd78c3755d48b926f --allow-raw-export
+semantic-asr generate-candidates ../semantic-asr-public-data/reazon/manifest.jsonl   --output runs/reazon/all-candidates.jsonl   --ranker-output runs/reazon/all-ranker.jsonl   --model large-v3-turbo --model-revision 0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf   --runtime-revision "$(git rev-parse HEAD)+faster-whisper-1.2.1+ctranslate2-4.8.2"   --device cpu --compute-type int8 --cpu-threads 6   --beam-size 12 --hypotheses 12
 python scripts/run_real_audio_pipeline.py   --candidates "runs/reazon/all-candidates.jsonl"   --output-dir runs/reazon/pipeline
+```
+
+Qwen3-ASR の second-ear probe は既定では参照文・仮説を出力しません。確認用の JSONL も checkout 外へ置き、参照文・仮説が必要なローカル研究時だけ `--local-research-output` を明示します。
+
+```bash
+python scripts/probe_second_ear.py ../semantic-asr-public-data/reazon/manifest.jsonl --output ../semantic-asr-public-data/reazon/second-ear.jsonl
+python scripts/probe_second_ear.py ../semantic-asr-public-data/reazon/manifest.jsonl --output ../semantic-asr-public-data/reazon/second-ear-local.jsonl --local-research-output
 ```
 
 `generate-candidates` は既定で loop guard（30 秒 window への padding、duration 依存の token 上限、圧縮率・反復 n-gram・文字数予算による degenerate 判定、温度 fallback）を有効にします。`--no-loop-guard` で v0.2 の挙動に戻せます。`--extra-samples N` でサンプル候補を追加し、sample-based MBR を試せます。
@@ -387,14 +402,14 @@ cost:
 
 ## 公開データと権利
 
-公開されていることと、学習・派生特徴・再配布が許されることは同義ではありません。`allow / deny / review`を操作ごとに持つrights registryを実行時に検査します。
+公開されていることと、学習・派生特徴・再配布が許されることは同義ではありません。`allow / deny / review`を操作ごとに持つrights registryを実行時に検査します。manifest preparation の権利既定値は `review` で、リポジトリが exact revision まで明示的に対応した公開 asset だけが自動的に `allow` になります。その他の asset は明示的な `--rights-decision allow` と利用者の確認が必要です。
 
 ```bash
 semantic-asr rights data/rights_registry.example.json \
   jmdict-current derive_features
 ```
 
-`review`は「たぶん使える」ではなく処理停止です。
+`prepare_public_manifest.py` に `--rights-registry` を渡すと、`derive_features` と `redistribute_raw` の両方が `allow` であることを既存 registry に要求します。`review` は「たぶん使える」ではなく処理停止です。生成 WAV、参照文、絶対パスを含む成果物は公開せず、checkout 外の local-research ディレクトリでのみ扱ってください。`.gitignore` にも代表的な誤出力先を記載していますが、ignore は権利確認や公開許可の代わりではありません。
 
 ## Koemo
 
