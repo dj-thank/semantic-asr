@@ -83,6 +83,35 @@ WAVs, reference-bearing manifests, local probe logs, and model outputs in an ext
 local-research directory; representative `public-data/`, `data/public/`, and
 `data/reazon/` paths are ignored as a last-resort guard, not as authorization.
 
+## Candidate generation and the post-candidate pipeline
+
+Candidate JSONL produced from a reference-bearing manifest includes the reference and N-best
+hypotheses.  Keep it, the ranker manifest, and every post-candidate pipeline artifact in the
+same external local-research directory; an ignored `runs/` path inside the checkout is not a
+safe destination.  The pipeline requires an explicit `--allow-raw-export` authorization for
+reference-bearing input/output and rejects an output directory that resolves into the checkout
+(including through symlinks) or to a filesystem root.
+
+```bash
+semantic-asr generate-candidates \
+  ../semantic-asr-public-data/reazon/manifest.jsonl \
+  --output ../semantic-asr-public-data/reazon/all-candidates.jsonl \
+  --ranker-output ../semantic-asr-public-data/reazon/all-ranker.jsonl \
+  --model large-v3-turbo \
+  --model-revision EXACT_MODEL_REVISION
+
+python scripts/run_real_audio_pipeline.py \
+  --candidates "../semantic-asr-public-data/reazon/all-candidates.jsonl" \
+  --output-dir ../semantic-asr-public-data/reazon/pipeline \
+  --allow-raw-export
+```
+
+Before writing any derived output, the pipeline checks each candidate row for rights evidence.
+`rightsDecision` must be `allow` and a non-empty `license`, `licenseId`, or
+`generation.licenseId` must be present.  Missing, `review`, and `deny` evidence fails closed.
+Reference-free metadata-only rows retain the existing safe command path and do not require the
+raw-export flag; an explicit rights field on such a row is still validated.
+
 ## Candidate sources
 
 ### Common Voice

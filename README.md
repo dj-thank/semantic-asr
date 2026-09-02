@@ -229,9 +229,16 @@ WAV、参照文、絶対 `audioPath` を含む manifest の materialization は�
 
 ```bash
 python scripts/prepare_public_manifest.py reazonspeech-test --output-dir ../semantic-asr-public-data/reazon --limit 600 --dataset-revision dd08bfb9dfc1cef4e4d0609fd78c3755d48b926f --allow-raw-export
-semantic-asr generate-candidates ../semantic-asr-public-data/reazon/manifest.jsonl   --output runs/reazon/all-candidates.jsonl   --ranker-output runs/reazon/all-ranker.jsonl   --model large-v3-turbo --model-revision 0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf   --runtime-revision "$(git rev-parse HEAD)+faster-whisper-1.2.1+ctranslate2-4.8.2"   --device cpu --compute-type int8 --cpu-threads 6   --beam-size 12 --hypotheses 12
-python scripts/run_real_audio_pipeline.py   --candidates "runs/reazon/all-candidates.jsonl"   --output-dir runs/reazon/pipeline
+semantic-asr generate-candidates ../semantic-asr-public-data/reazon/manifest.jsonl   --output ../semantic-asr-public-data/reazon/all-candidates.jsonl   --ranker-output ../semantic-asr-public-data/reazon/all-ranker.jsonl   --model large-v3-turbo --model-revision 0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf   --runtime-revision "$(git rev-parse HEAD)+faster-whisper-1.2.1+ctranslate2-4.8.2"   --device cpu --compute-type int8 --cpu-threads 6   --beam-size 12 --hypotheses 12
+python scripts/run_real_audio_pipeline.py   --candidates "../semantic-asr-public-data/reazon/all-candidates.jsonl"   --output-dir ../semantic-asr-public-data/reazon/pipeline   --allow-raw-export
 ```
+
+`generate-candidates` の候補 JSONL と post-candidate pipeline の成果物は参照文・仮説を
+含むため、`runs/` など checkout 内には保存しません。pipeline は reference-bearing input を
+処理するとき `--allow-raw-export`（local-research authorization）を要求し、各行の
+`rightsDecision=allow` と `license`/`licenseId`（生成物では `generation.licenseId`）を確認します。
+`review`、`deny`、権利情報の欠落は停止します。出力先は symlink 解決後も checkout 外で、
+filesystem root ではない必要があります。
 
 Qwen3-ASR の second-ear probe は既定では参照文・仮説を出力しません。確認用の JSONL も checkout 外へ置き、参照文・仮説が必要なローカル研究時だけ `--local-research-output` を明示します。
 
