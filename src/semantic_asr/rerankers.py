@@ -5,10 +5,12 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 from typing import Any, Protocol
 
 from .contracts import CandidateEvidence
 from .mbr import critical_units
+from .revisions import resolve_hugging_face_revision, verify_artifact_sha256
 
 
 class CandidateRanker(Protocol):
@@ -22,6 +24,18 @@ class CandidateRanker(Protocol):
         consensus: str = "",
         contradiction: str = "",
     ) -> Mapping[str, float]: ...
+
+
+def _digest(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 FEATURE_ALIASES: dict[str, str] = {
@@ -54,6 +68,49 @@ def _finite(value: float | None, default: float = 0.0) -> float:
     if value is None or not math.isfinite(float(value)):
         return default
     return float(value)
+
+
+def _resolve_ranker_identity(
+    model: str,
+    model_revision: str | None,
+    model_artifact_sha256: str | None,
+    artifact_sha256: str | None,
+) -> tuple[str | None, str | None]:
+    """Resolve an immutable remote revision or verify a local ranker artifact.
+
+    A ranker is loaded by the user-facing v0.2 transcriber, so an unpinned Hub
+    identifier would make both generation and its cache non-reproducible.  Existing
+    local directories/files are accepted only with a digest of the exact bytes that
+    the loader will consume; the two identity forms are intentionally exclusive.
+    """
+
+    if (
+        model_artifact_sha256 is not None
+        and artifact_sha256 is not None
+        and model_artifact_sha256.lower() != artifact_sha256.lower()
+    ):
+        raise ValueError("model_artifact_sha256 and artifact_sha256 disagree")
+    supplied_artifact = model_artifact_sha256 or artifact_sha256
+    local = Path(model).expanduser()
+    is_local = local.is_file() or local.is_dir()
+    if is_local:
+        if model_revision is not None:
+            raise ValueError(
+                "a local ranker artifact cannot claim a Hub revision; provide its verified SHA-256"
+            )
+        if supplied_artifact is None:
+            raise ValueError("a verified local ranker artifact SHA-256 is required")
+        return None, verify_artifact_sha256(
+            local,
+            supplied_artifact,
+            identifier="local ranker artifact",
+        )
+    if supplied_artifact is not None:
+        raise ValueError("ranker artifact SHA-256 is only valid for a local model")
+    return (
+        resolve_hugging_face_revision(model, model_revision, {}),
+        None,
+    )
 
 
 def _character_ngrams(text: str, size: int = 2) -> set[str]:
@@ -167,6 +224,8 @@ class LinearCandidateRanker:
     def __init__(self, profile: LinearRankerProfile) -> None:
         self.profile = profile
         self.name = f"linear:{profile.name}:{profile.digest[:12]}"
+        self.model_name = profile.name
+        self.config_digest = profile.digest
 
     def _score_one(self, candidate: CandidateEvidence, *, context: str) -> float:
         features = candidate_features(candidate, context=context)
@@ -220,6 +279,10 @@ class CrossEncoderCandidateRanker:
         self,
         model: str,
         *,
+        model_revision: str | None = None,
+        model_artifact_sha256: str | None = None,
+        artifact_sha256: str | None = None,
+        runtime_revision: str | None = None,
         device: str = "cpu",
         batch_size: int = 16,
         max_length: int | None = None,
@@ -228,6 +291,13 @@ class CrossEncoderCandidateRanker:
             "与えられた文脈と既存の音響候補集合に整合する順に評価してください。"
         ),
     ) -> None:
+        model = str(model)
+        model_revision, model_artifact_sha256 = _resolve_ranker_identity(
+            model,
+            model_revision,
+            model_artifact_sha256,
+            artifact_sha256,
+        )
         try:
             import torch.nn as nn
             from sentence_transformers import CrossEncoder
@@ -238,12 +308,33 @@ class CrossEncoderCandidateRanker:
             "num_labels": 1,
             "activation_fn": nn.Identity(),
         }
+        if model_revision is not None:
+            kwargs["revision"] = model_revision
         if max_length is not None:
             kwargs["max_length"] = int(max_length)
         self.model_name = model
         self.name = f"cross-encoder:{model}"
         self.batch_size = int(batch_size)
         self.instruction = instruction
+        self.model_revision = model_revision
+        self.model_artifact_sha256 = model_artifact_sha256
+        self.runtime_revision = (
+            None if runtime_revision is None else str(runtime_revision).strip() or None
+        )
+        self.config_digest = _digest(
+            {
+                "schema": "semantic-asr-ranker-config-v1",
+                "backend": "cross-encoder",
+                "model": self.model_name,
+                "modelRevision": self.model_revision,
+                "modelArtifactSha256": self.model_artifact_sha256,
+                "runtimeRevision": self.runtime_revision,
+                "device": str(device),
+                "batchSize": self.batch_size,
+                "maxLength": None if max_length is None else int(max_length),
+                "instruction": self.instruction,
+            }
+        )
         self.model = CrossEncoder(model, **kwargs)
 
     def score(
@@ -285,6 +376,10 @@ class Qwen3CandidateRanker:
         self,
         model: str = "Qwen/Qwen3-Reranker-0.6B",
         *,
+        model_revision: str | None = None,
+        model_artifact_sha256: str | None = None,
+        artifact_sha256: str | None = None,
+        runtime_revision: str | None = None,
         device_map: str = "auto",
         dtype: str = "auto",
         batch_size: int = 8,
@@ -295,6 +390,13 @@ class Qwen3CandidateRanker:
             "Do not reward grammar correction unsupported by the candidate evidence."
         ),
     ) -> None:
+        model = str(model)
+        model_revision, model_artifact_sha256 = _resolve_ranker_identity(
+            model,
+            model_revision,
+            model_artifact_sha256,
+            artifact_sha256,
+        )
         try:
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -303,11 +405,23 @@ class Qwen3CandidateRanker:
         self._torch = torch
         self.model_name = model
         self.name = f"qwen3-reranker:{model}"
+        self.model_revision = model_revision
+        self.model_artifact_sha256 = model_artifact_sha256
+        self.runtime_revision = (
+            None if runtime_revision is None else str(runtime_revision).strip() or None
+        )
         self.batch_size = max(1, int(batch_size))
         self.max_length = int(max_length)
         self.instruction = instruction
-        self.tokenizer = AutoTokenizer.from_pretrained(model, padding_side="left")
-        model_kwargs: dict[str, Any] = {"device_map": device_map}
+        self.device_map = str(device_map)
+        self.dtype = str(dtype)
+        revision_kwargs = {} if model_revision is None else {"revision": model_revision}
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model,
+            padding_side="left",
+            **revision_kwargs,
+        )
+        model_kwargs: dict[str, Any] = {"device_map": self.device_map, **revision_kwargs}
         if dtype != "auto":
             aliases = {
                 "float16": torch.float16,
@@ -321,6 +435,21 @@ class Qwen3CandidateRanker:
                 raise ValueError(f"unsupported dtype: {dtype}")
             model_kwargs["torch_dtype"] = aliases[dtype.lower()]
         self.model = AutoModelForCausalLM.from_pretrained(model, **model_kwargs).eval()
+        self.config_digest = _digest(
+            {
+                "schema": "semantic-asr-ranker-config-v1",
+                "backend": "qwen3",
+                "model": self.model_name,
+                "modelRevision": self.model_revision,
+                "modelArtifactSha256": self.model_artifact_sha256,
+                "runtimeRevision": self.runtime_revision,
+                "deviceMap": self.device_map,
+                "dtype": self.dtype,
+                "batchSize": self.batch_size,
+                "maxLength": self.max_length,
+                "instruction": self.instruction,
+            }
+        )
         self._yes_id = self._single_token_id("yes")
         self._no_id = self._single_token_id("no")
 
@@ -427,5 +556,18 @@ def apply_reranker_scores(
         metadata["evidenceScores"] = score_rows
         metadata["rerankerSource"] = ranker.name
         metadata["rerankerRawLogit"] = score
+        metadata["rerankerModel"] = getattr(ranker, "model_name", None)
+        metadata["rerankerModelRevision"] = getattr(ranker, "model_revision", None)
+        metadata["rerankerModelArtifactSha256"] = getattr(
+            ranker,
+            "model_artifact_sha256",
+            None,
+        )
+        metadata["rerankerRuntimeRevision"] = getattr(ranker, "runtime_revision", None)
+        metadata["rerankerConfigDigest"] = getattr(
+            ranker,
+            "config_digest",
+            getattr(ranker, "configuration_digest", None),
+        )
         output.append(replace(candidate, metadata=metadata))
     return output

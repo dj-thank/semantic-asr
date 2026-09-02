@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -16,7 +18,11 @@ from semantic_asr.ranker_training import (
     evaluate_ranker,
     train_pairwise_ranker,
 )
-from semantic_asr.rerankers import LinearCandidateRanker
+from semantic_asr.rerankers import (
+    CrossEncoderCandidateRanker,
+    LinearCandidateRanker,
+    Qwen3CandidateRanker,
+)
 from semantic_asr.score_semantics import (
     EvidenceScore,
     ScoreKind,
@@ -96,6 +102,106 @@ def test_hashed_probability_cache_backoff_and_roundtrip() -> None:
             key=b"0123456789abcdef",
         )
         assert restored.lookup([1, 2], 3).log_probability == pytest.approx(exact.log_probability)
+
+
+def test_cross_encoder_requires_and_binds_model_identity(monkeypatch, tmp_path) -> None:
+    model = tmp_path / "cross-encoder"
+    model.mkdir()
+    (model / "config.json").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="verified local ranker artifact"):
+        CrossEncoderCandidateRanker(str(model))
+
+    torch = ModuleType("torch")
+    torch_nn = ModuleType("torch.nn")
+
+    class _Identity:
+        pass
+
+    torch_nn.Identity = _Identity  # type: ignore[attr-defined]
+    torch.nn = torch_nn  # type: ignore[attr-defined]
+    sentence_transformers = ModuleType("sentence_transformers")
+    calls: dict[str, object] = {}
+
+    class _CrossEncoder:
+        def __init__(self, model_name: str, **kwargs: object) -> None:
+            calls.update({"model": model_name, **kwargs})
+
+    sentence_transformers.CrossEncoder = _CrossEncoder  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "torch.nn", torch_nn)
+    monkeypatch.setitem(sys.modules, "sentence_transformers", sentence_transformers)
+    revision = "0123456789abcdef0123456789abcdef01234567"
+    ranker = CrossEncoderCandidateRanker(
+        "publisher/cross-encoder",
+        model_revision=revision,
+        runtime_revision="runtime-cross",
+        device="cpu",
+        batch_size=4,
+    )
+
+    assert calls["revision"] == revision
+    assert ranker.model_revision == revision
+    assert ranker.model_artifact_sha256 is None
+    assert ranker.runtime_revision == "runtime-cross"
+    assert len(ranker.config_digest) == 64
+
+
+def test_qwen_ranker_requires_and_binds_model_identity(monkeypatch, tmp_path) -> None:
+    model = tmp_path / "qwen-ranker"
+    model.mkdir()
+    (model / "config.json").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="verified local ranker artifact"):
+        Qwen3CandidateRanker(str(model))
+
+    torch = ModuleType("torch")
+    torch.float16 = object()  # type: ignore[attr-defined]
+    torch.bfloat16 = object()  # type: ignore[attr-defined]
+    torch.float32 = object()  # type: ignore[attr-defined]
+    transformers = ModuleType("transformers")
+    tokenizer_calls: dict[str, object] = {}
+    model_calls: dict[str, object] = {}
+
+    class _Tokenizer:
+        def encode(self, _value: str, **_kwargs: object) -> list[int]:
+            return [1]
+
+    class _AutoTokenizer:
+        @classmethod
+        def from_pretrained(cls, model_name: str, **kwargs: object) -> _Tokenizer:
+            tokenizer_calls.update({"model": model_name, **kwargs})
+            return _Tokenizer()
+
+    class _LoadedModel:
+        def eval(self) -> _LoadedModel:
+            return self
+
+    class _AutoModel:
+        @classmethod
+        def from_pretrained(cls, model_name: str, **kwargs: object) -> _LoadedModel:
+            model_calls.update({"model": model_name, **kwargs})
+            return _LoadedModel()
+
+    transformers.AutoTokenizer = _AutoTokenizer  # type: ignore[attr-defined]
+    transformers.AutoModelForCausalLM = _AutoModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+    revision = "fedcba9876543210fedcba9876543210fedcba98"
+    ranker = Qwen3CandidateRanker(
+        model="publisher/qwen-ranker",
+        model_revision=revision,
+        runtime_revision="runtime-qwen",
+        device_map="cpu",
+        dtype="auto",
+    )
+
+    assert tokenizer_calls["revision"] == revision
+    assert model_calls["revision"] == revision
+    assert ranker.model_revision == revision
+    assert ranker.model_artifact_sha256 is None
+    assert ranker.runtime_revision == "runtime-qwen"
+    assert len(ranker.config_digest) == 64
 
 
 class _FakeBase:

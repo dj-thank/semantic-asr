@@ -150,7 +150,13 @@ def plan_windows(
 
 
 def _adapter_model(adapter: ASRAdapter) -> str:
-    return str(getattr(adapter, "model_name", getattr(adapter, "name", type(adapter).__name__)))
+    return str(
+        getattr(
+            adapter,
+            "model_name",
+            getattr(adapter, "model", getattr(adapter, "name", type(adapter).__name__)),
+        )
+    )
 
 
 _PROVENANCE_FIELDS = (
@@ -216,6 +222,21 @@ def _nested_adapter(adapter: object, name: str) -> object | None:
     return value if value is not None and value is not adapter else None
 
 
+def _legacy_cache_identity_allowed(adapter: object, *, depth: int = 0) -> bool:
+    if getattr(adapter, "allow_legacy_cache_identity", False) is True:
+        return True
+    if depth >= 2:
+        return False
+    nested = _nested_adapter(adapter, "base")
+    return nested is not None and _legacy_cache_identity_allowed(nested, depth=depth + 1)
+
+
+def _explicit_service_identity(adapter: object) -> bool:
+    """Recognize loopback teacher clients whose endpoint/model are the identity."""
+
+    return all(getattr(adapter, name, None) for name in ("model", "endpoint", "protocol"))
+
+
 def _first_provenance_value(adapter: object, name: str, *, depth: int = 0) -> Any:
     value = getattr(adapter, name, None)
     if value is not None:
@@ -234,9 +255,10 @@ def _first_provenance_value(adapter: object, name: str, *, depth: int = 0) -> An
 def _adapter_cache_provenance(adapter: object, request: DecodeRequest) -> dict[str, Any]:
     """Return model/runtime/config identity shared by all long-form cache paths.
 
-    Legacy adapters that predate the provenance attributes remain cacheable under a
-    deterministic class/name/model/request domain.  They carry no synthetic revision;
-    adapters that expose a revision or verified artifact bind it explicitly.
+    Production adapters must expose either an immutable model revision or a verified
+    local artifact digest.  The only legacy escape hatch is an explicit
+    ``allow_legacy_cache_identity`` marker on an in-memory test adapter; this avoids
+    silently reusing a cache for an unbound model while keeping small fixtures useful.
     """
 
     settings: dict[str, Any] = {
@@ -258,15 +280,31 @@ def _adapter_cache_provenance(adapter: object, request: DecodeRequest) -> dict[s
         settings["ranker"] = _jsonable_provenance(
             {
                 "type": f"{type(ranker).__module__}.{type(ranker).__qualname__}",
-                "model": getattr(ranker, "model", None),
+                "model": getattr(ranker, "model_name", getattr(ranker, "model_id", None)),
                 "name": getattr(ranker, "name", None),
                 "revision": getattr(ranker, "model_revision", None),
+                "artifactSha256": getattr(ranker, "model_artifact_sha256", None),
                 "runtime": getattr(ranker, "runtime_revision", None),
+                "configDigest": getattr(
+                    ranker,
+                    "config_digest",
+                    getattr(ranker, "configuration_digest", None),
+                ),
             }
         )
     model_revision = _first_provenance_value(adapter, "model_revision")
     runtime_revision = _first_provenance_value(adapter, "runtime_revision")
     artifact_sha256 = _first_provenance_value(adapter, "model_artifact_sha256")
+    if (
+        model_revision is None
+        and artifact_sha256 is None
+        and not _legacy_cache_identity_allowed(adapter)
+        and not _explicit_service_identity(adapter)
+    ):
+        raise ValueError(
+            "model identity is required for cache use; provide an exact Hub revision "
+            "or verified local artifact SHA-256"
+        )
     settings["modelRevision"] = model_revision
     settings["runtimeRevision"] = runtime_revision
     settings["modelArtifactSha256"] = artifact_sha256

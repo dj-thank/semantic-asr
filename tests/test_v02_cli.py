@@ -257,3 +257,25 @@ def test_advanced_transcribe_cli_carries_model_provenance_options() -> None:
     assert args.runtime_revision == "runtime-r2"
     assert args.qwen_model_revision == "2" * 40
     assert args.qwen_aligner_revision == "3" * 40
+
+
+def test_advanced_transcribe_cli_carries_ranker_provenance_options() -> None:
+    args = build_advanced_parser().parse_args(
+        [
+            "transcribe-v2",
+            "audio.wav",
+            "--ranker-backend",
+            "cross-encoder",
+            "--ranker-model",
+            "publisher/ranker",
+            "--ranker-model-revision",
+            "4" * 40,
+            "--ranker-model-artifact-sha256",
+            "a" * 64,
+            "--ranker-runtime-revision",
+            "runtime-ranker",
+        ]
+    )
+    assert args.ranker_model_revision == "4" * 40
+    assert args.ranker_model_artifact_sha256 == "a" * 64
+    assert args.ranker_runtime_revision == "runtime-ranker"

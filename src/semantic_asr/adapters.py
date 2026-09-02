@@ -47,8 +47,11 @@ class ASRAdapter(Protocol):
 
 
 class MockASRAdapter:
+    """In-memory fixture adapter; safe legacy cache identity is explicit."""
+
     name = "mock"
     model_name = "mock"
+    allow_legacy_cache_identity = True
 
     def __init__(self, candidates: list[CandidateEvidence]) -> None:
         self.candidates = candidates
@@ -125,8 +128,15 @@ def window_frames(model: Any) -> int:
     return int(frames) if frames else 3000
 
 
+def _is_local_artifact(path: str | Path) -> bool:
+    """Return whether *path* names an existing local model artifact."""
+
+    source = Path(path).expanduser()
+    return source.is_file() or source.is_dir()
+
+
 def _validate_local_snapshot_revision(path: str, revision: str | None) -> None:
-    if revision is None or not Path(path).is_dir():
+    if revision is None or not _is_local_artifact(path):
         return
     raise ValueError(
         "a local model directory cannot claim a Hub revision; use the Hub ID and revision "
@@ -143,7 +153,7 @@ def _local_artifact_digest(
 ) -> str | None:
     """Verify a local directory digest while keeping Hub revisions separate."""
 
-    local = Path(model).expanduser().is_dir()
+    local = _is_local_artifact(model)
     if local and artifact_sha256 is None and required:
         raise ValueError(f"a verified local model directory requires {identifier} SHA-256")
     if artifact_sha256 is None:
@@ -176,35 +186,29 @@ class FasterWhisperAdapter:
         runtime_revision: str | None = None,
         cpu_threads: int = 0,
     ) -> None:
-        try:
-            from faster_whisper import WhisperModel
-        except ImportError as exc:  # pragma: no cover - optional runtime
-            raise RuntimeError("install semantic-asr with the 'asr' extra") from exc
-        local_model = Path(model).expanduser().is_dir()
-        _validate_local_snapshot_revision(model, model_revision)
-        if model_revision is not None and not local_model:
-            model_revision = resolve_hugging_face_revision(
-                model,
-                model_revision,
-                FASTER_WHISPER_MODEL_REVISIONS,
-            )
-        elif model_revision is None and not local_model and model in FASTER_WHISPER_MODEL_REVISIONS:
-            model_revision = resolve_hugging_face_revision(
-                model,
-                None,
-                FASTER_WHISPER_MODEL_REVISIONS,
-            )
         if (
             model_artifact_sha256 is not None
             and artifact_sha256 is not None
             and model_artifact_sha256.lower() != artifact_sha256.lower()
         ):
             raise ValueError("model_artifact_sha256 and artifact_sha256 disagree")
+        local_model = _is_local_artifact(model)
+        _validate_local_snapshot_revision(model, model_revision)
+        if not local_model:
+            model_revision = resolve_hugging_face_revision(
+                model,
+                model_revision,
+                FASTER_WHISPER_MODEL_REVISIONS,
+            )
         model_artifact_sha256 = _local_artifact_digest(
             model,
             model_artifact_sha256 or artifact_sha256,
             required=True,
         )
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as exc:  # pragma: no cover - optional runtime
+            raise RuntimeError("install semantic-asr with the 'asr' extra") from exc
         self.model_name = model
         self.model_revision = model_revision
         self.model_artifact_sha256 = model_artifact_sha256
@@ -514,31 +518,21 @@ class Qwen3ASRAdapter:
         forced_aligner_artifact_sha256: str | None = None,
         runtime_revision: str | None = None,
     ) -> None:
-        try:
-            from qwen_asr import Qwen3ASRModel
-        except ImportError as exc:  # pragma: no cover - optional runtime
-            raise RuntimeError("install semantic-asr with the 'qwen' extra") from exc
-        local_model = Path(model).expanduser().is_dir()
-        local_aligner = Path(forced_aligner).expanduser().is_dir()
-        _validate_local_snapshot_revision(model, model_revision)
-        if model_revision is not None and not local_model:
-            model_revision = resolve_hugging_face_revision(
-                model,
-                model_revision,
-                QWEN_ASR_MODEL_REVISIONS,
-            )
-        elif model_revision is None and not local_model and model in QWEN_ASR_MODEL_REVISIONS:
-            model_revision = resolve_hugging_face_revision(
-                model,
-                None,
-                QWEN_ASR_MODEL_REVISIONS,
-            )
         if (
             model_artifact_sha256 is not None
             and artifact_sha256 is not None
             and model_artifact_sha256.lower() != artifact_sha256.lower()
         ):
             raise ValueError("model_artifact_sha256 and artifact_sha256 disagree")
+        local_model = _is_local_artifact(model)
+        local_aligner = _is_local_artifact(forced_aligner)
+        _validate_local_snapshot_revision(model, model_revision)
+        if not local_model:
+            model_revision = resolve_hugging_face_revision(
+                model,
+                model_revision,
+                QWEN_ASR_MODEL_REVISIONS,
+            )
         model_artifact_sha256 = _local_artifact_digest(
             model,
             model_artifact_sha256 or artifact_sha256,
@@ -546,37 +540,22 @@ class Qwen3ASRAdapter:
         )
 
         _validate_local_snapshot_revision(forced_aligner, forced_aligner_revision)
-        if forced_aligner_revision is not None and not local_aligner:
+        if not local_aligner:
             forced_aligner_revision = resolve_hugging_face_revision(
                 forced_aligner,
                 forced_aligner_revision,
-                QWEN_FORCED_ALIGNER_REVISIONS,
-            )
-        elif (
-            forced_aligner_revision is None
-            and not local_aligner
-            and return_timestamps
-            and forced_aligner in QWEN_FORCED_ALIGNER_REVISIONS
-        ):
-            forced_aligner_revision = resolve_hugging_face_revision(
-                forced_aligner,
-                None,
                 QWEN_FORCED_ALIGNER_REVISIONS,
             )
         forced_aligner_artifact_sha256 = _local_artifact_digest(
             forced_aligner,
             forced_aligner_artifact_sha256,
             identifier="forced aligner artifact",
-            required=return_timestamps,
+            required=True,
         )
-        if (
-            return_timestamps
-            and forced_aligner_revision is None
-            and forced_aligner_artifact_sha256 is None
-        ):
-            raise ValueError(
-                "a Qwen timestamp run requires an exact aligner revision or verified artifact"
-            )
+        try:
+            from qwen_asr import Qwen3ASRModel
+        except ImportError as exc:  # pragma: no cover - optional runtime
+            raise RuntimeError("install semantic-asr with the 'qwen' extra") from exc
         self.model_name = model
         self.model_revision = model_revision
         self.model_artifact_sha256 = model_artifact_sha256
@@ -602,7 +581,7 @@ class Qwen3ASRAdapter:
             kwargs["dtype"] = resolved_dtype
         if return_timestamps:
             resolved_aligner = forced_aligner
-            if forced_aligner_revision is not None and not Path(forced_aligner).is_dir():
+            if forced_aligner_revision is not None and not _is_local_artifact(forced_aligner):
                 try:
                     from huggingface_hub import snapshot_download
                 except ImportError as exc:  # pragma: no cover - qwen-asr dependency boundary
@@ -619,7 +598,7 @@ class Qwen3ASRAdapter:
                 **({"dtype": resolved_dtype} if resolved_dtype is not None else {}),
             }
         resolved_model = model
-        if model_revision is not None and not Path(model).is_dir():
+        if model_revision is not None and not _is_local_artifact(model):
             try:
                 from huggingface_hub import snapshot_download
             except ImportError as exc:  # pragma: no cover - qwen-asr dependency boundary
@@ -728,35 +707,29 @@ class Qwen3ForcedAlignerAdapter:
         artifact_sha256: str | None = None,
         runtime_revision: str | None = None,
     ) -> None:
-        try:
-            from qwen_asr import Qwen3ForcedAligner
-        except ImportError as exc:  # pragma: no cover - optional runtime
-            raise RuntimeError("install semantic-asr with the 'qwen' extra") from exc
-        local_model = Path(model).expanduser().is_dir()
-        _validate_local_snapshot_revision(model, model_revision)
-        if model_revision is not None and not local_model:
-            model_revision = resolve_hugging_face_revision(
-                model,
-                model_revision,
-                QWEN_FORCED_ALIGNER_REVISIONS,
-            )
-        elif model_revision is None and not local_model and model in QWEN_FORCED_ALIGNER_REVISIONS:
-            model_revision = resolve_hugging_face_revision(
-                model,
-                None,
-                QWEN_FORCED_ALIGNER_REVISIONS,
-            )
         if (
             model_artifact_sha256 is not None
             and artifact_sha256 is not None
             and model_artifact_sha256.lower() != artifact_sha256.lower()
         ):
             raise ValueError("model_artifact_sha256 and artifact_sha256 disagree")
+        local_model = _is_local_artifact(model)
+        _validate_local_snapshot_revision(model, model_revision)
+        if not local_model:
+            model_revision = resolve_hugging_face_revision(
+                model,
+                model_revision,
+                QWEN_FORCED_ALIGNER_REVISIONS,
+            )
         model_artifact_sha256 = _local_artifact_digest(
             model,
             model_artifact_sha256 or artifact_sha256,
             required=True,
         )
+        try:
+            from qwen_asr import Qwen3ForcedAligner
+        except ImportError as exc:  # pragma: no cover - optional runtime
+            raise RuntimeError("install semantic-asr with the 'qwen' extra") from exc
         kwargs: dict[str, Any] = {"device_map": device_map}
         resolved_dtype = _torch_dtype(dtype)
         if resolved_dtype is not None:

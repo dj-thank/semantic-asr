@@ -4,7 +4,10 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from semantic_asr.adapters import DecodeRequest
+from semantic_asr.advanced_adapters import AdaptiveRerankingAdapter
 from semantic_asr.cache import EvidenceCache
 from semantic_asr.contracts import CandidateEvidence
 from semantic_asr.longform import SemanticASRTranscriber, plan_windows
@@ -15,6 +18,8 @@ from semantic_asr.teachers import DelayedTeacherPolicy, TeacherResult
 class FakeAdapter:
     name = "fake-whisper"
     model_name = "fixture"
+    # Explicitly marks this in-memory fixture as safe for the legacy cache identity.
+    allow_legacy_cache_identity = True
 
     def __init__(self) -> None:
         self.requests: list[DecodeRequest] = []
@@ -82,6 +87,8 @@ class RevisionedFakeAdapter(FakeAdapter):
 
 class FakeTeacher:
     model = "fake-qwen"
+    # Explicitly marks this in-memory fixture as safe for the legacy cache identity.
+    allow_legacy_cache_identity = True
 
     def probabilities(self, candidates, **kwargs):
         clean = next(candidate for candidate in candidates if "学校に" in candidate.text)
@@ -93,6 +100,26 @@ class FakeTeacher:
             protocol="fixture",
             entropy=0.72,
             abstained=False,
+        )
+
+
+def test_unbound_runtime_adapter_cannot_use_legacy_cache_identity() -> None:
+    class UnboundAdapter:
+        name = "unbound"
+        model_name = "floating-model"
+
+        def decode(self, request: DecodeRequest) -> list[CandidateEvidence]:
+            raise AssertionError("cache identity must fail before inference")
+
+    transcriber = SemanticASRTranscriber(UnboundAdapter())
+    request = DecodeRequest(audio_path="fixture.wav", start_ms=0, end_ms=1_000)
+    with pytest.raises(ValueError, match="model identity"):
+        transcriber._cache_key(
+            namespace="base-window",
+            adapter=transcriber.base_adapter,
+            request=request,
+            audio_sha256="a" * 64,
+            context="",
         )
 
 
@@ -187,6 +214,60 @@ def test_longform_cache_separates_model_revisions_and_decode_settings() -> None:
             assert first_hit is False
             assert second_hit is False
             assert cache.count("base-window") == 2
+
+
+def test_longform_cache_binds_ranker_revision_artifact_and_config() -> None:
+    class Ranker:
+        name = "ranker"
+        model_name = "ranker-model"
+        runtime_revision = "runtime-r1"
+
+        def __init__(self, revision: str, config_digest: str) -> None:
+            self.model_revision = revision
+            self.model_artifact_sha256 = None
+            self.config_digest = config_digest
+
+        def score(self, candidates, **kwargs):
+            return {candidate.candidate_id: 0.0 for candidate in candidates}
+
+    request = DecodeRequest(
+        audio_path="fixture.wav",
+        language="ja",
+        beam_size=5,
+        hypotheses=5,
+        start_ms=0,
+        end_ms=1_000,
+    )
+    first = SemanticASRTranscriber(
+        AdaptiveRerankingAdapter(
+            FakeAdapter(),
+            Ranker("r1", "a" * 64),
+            maximum_hypotheses=2,
+        )
+    )
+    second = SemanticASRTranscriber(
+        AdaptiveRerankingAdapter(
+            FakeAdapter(),
+            Ranker("r2", "b" * 64),
+            maximum_hypotheses=2,
+        )
+    )
+    first_key = first._cache_key(
+        namespace="base-window",
+        adapter=first.base_adapter,
+        request=request,
+        audio_sha256="a" * 64,
+        context="",
+    )
+    second_key = second._cache_key(
+        namespace="base-window",
+        adapter=second.base_adapter,
+        request=request,
+        audio_sha256="a" * 64,
+        context="",
+    )
+    assert first_key.decode_config_sha256 != second_key.decode_config_sha256
+    assert first_key.score_domain != second_key.score_domain
 
 
 def test_legacy_adapter_cache_key_remains_deterministic() -> None:

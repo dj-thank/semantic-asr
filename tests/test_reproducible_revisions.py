@@ -45,6 +45,20 @@ def test_faster_whisper_revision_is_bound_to_the_loaded_model(monkeypatch) -> No
     assert calls["cpu_threads"] == 6
 
 
+def test_unknown_faster_whisper_hub_model_requires_an_exact_revision(monkeypatch) -> None:
+    module = ModuleType("faster_whisper")
+
+    class _WhisperModel:
+        def __init__(self, _model: str, **_kwargs: object) -> None:
+            raise AssertionError("unknown floating Hub model must fail before loading")
+
+    module.WhisperModel = _WhisperModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", module)
+
+    with pytest.raises(ValueError, match="exact 40-character revision"):
+        FasterWhisperAdapter(model="publisher/unknown-model", device="cpu")
+
+
 def test_qwen_revision_resolves_one_snapshot_for_model_and_processor(monkeypatch) -> None:
     snapshot_calls: dict[str, object] = {}
     model_calls: dict[str, object] = {}
@@ -87,6 +101,21 @@ def test_qwen_revision_resolves_one_snapshot_for_model_and_processor(monkeypatch
     assert adapter.model_revision == snapshot_calls["revision"]
 
 
+def test_unknown_qwen_hub_model_requires_an_exact_revision(monkeypatch) -> None:
+    qwen = ModuleType("qwen_asr")
+
+    class _Qwen3ASRModel:
+        @classmethod
+        def from_pretrained(cls, _model: str, **_kwargs: object) -> object:
+            raise AssertionError("unknown floating Hub model must fail before loading")
+
+    qwen.Qwen3ASRModel = _Qwen3ASRModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "qwen_asr", qwen)
+
+    with pytest.raises(ValueError, match="exact 40-character revision"):
+        Qwen3ASRAdapter(model="publisher/unknown-qwen", dtype="auto", device_map="cpu")
+
+
 def test_forced_aligner_uses_the_known_exact_revision(monkeypatch) -> None:
     calls: dict[str, object] = {}
     qwen = ModuleType("qwen_asr")
@@ -111,6 +140,25 @@ def test_forced_aligner_uses_the_known_exact_revision(monkeypatch) -> None:
     assert calls["model"] == "Qwen/Qwen3-ForcedAligner-0.6B"
     assert calls["revision"] == QWEN_FORCED_ALIGNER_REVISIONS["Qwen/Qwen3-ForcedAligner-0.6B"]
     assert adapter.model_revision == calls["revision"]
+
+
+def test_unknown_forced_aligner_hub_model_requires_an_exact_revision(monkeypatch) -> None:
+    qwen = ModuleType("qwen_asr")
+
+    class _Qwen3ForcedAligner:
+        @classmethod
+        def from_pretrained(cls, _model: str, **_kwargs: object) -> object:
+            raise AssertionError("unknown floating Hub model must fail before loading")
+
+    qwen.Qwen3ForcedAligner = _Qwen3ForcedAligner  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "qwen_asr", qwen)
+
+    with pytest.raises(ValueError, match="exact 40-character revision"):
+        Qwen3ForcedAlignerAdapter(
+            model="publisher/unknown-aligner",
+            dtype="auto",
+            device_map="cpu",
+        )
 
 
 def test_local_model_directory_uses_a_separate_verified_artifact_digest(

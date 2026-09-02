@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class SchemaFakeAdapter:
     name = "schema-fake"
     model_name = "fixture"
+    # Explicitly marks this in-memory fixture as safe for the legacy cache identity.
+    allow_legacy_cache_identity = True
 
     def decode(self, request: DecodeRequest):
         return [

@@ -478,12 +478,18 @@ def _build_ranker(args: argparse.Namespace):
             raise ValueError("--ranker-model is required for the cross-encoder backend")
         return CrossEncoderCandidateRanker(
             args.ranker_model,
+            model_revision=args.ranker_model_revision,
+            model_artifact_sha256=args.ranker_model_artifact_sha256,
+            runtime_revision=args.ranker_runtime_revision or args.runtime_revision,
             device=args.ranker_device,
             batch_size=args.ranker_batch_size,
         )
     if args.ranker_backend == "qwen3":
         return Qwen3CandidateRanker(
             model=args.ranker_model or "Qwen/Qwen3-Reranker-0.6B",
+            model_revision=args.ranker_model_revision,
+            model_artifact_sha256=args.ranker_model_artifact_sha256,
+            runtime_revision=args.ranker_runtime_revision or args.runtime_revision,
             device_map=args.ranker_device,
             dtype=args.ranker_dtype,
             batch_size=args.ranker_batch_size,
@@ -745,6 +751,17 @@ def build_advanced_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("--ranker-profile")
     transcribe.add_argument("--ranker-calibration")
     transcribe.add_argument("--ranker-model")
+    transcribe.add_argument(
+        "--ranker-model-revision",
+        "--ranker-revision",
+        dest="ranker_model_revision",
+    )
+    transcribe.add_argument(
+        "--ranker-model-artifact-sha256",
+        "--ranker-artifact-sha256",
+        dest="ranker_model_artifact_sha256",
+    )
+    transcribe.add_argument("--ranker-runtime-revision")
     transcribe.add_argument("--ranker-device", default="cpu")
     transcribe.add_argument("--ranker-dtype", default="auto")
     transcribe.add_argument("--ranker-batch-size", type=int, default=8)
