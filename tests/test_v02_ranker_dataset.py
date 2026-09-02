@@ -97,3 +97,32 @@ def test_pairwise_and_listwise_cli_accept_reference_only_train_manifest() -> Non
             json.loads(listwise.read_text(encoding="utf-8"))["schemaVersion"]
             == "listwise-semantic-mwer-v1"
         )
+
+
+def test_load_jsonl_examples_skips_single_candidate_rows(tmp_path) -> None:
+    import json
+
+    from semantic_asr.ranker_training import load_jsonl_examples
+
+    rows = [
+        {
+            "exampleId": "single",
+            "split": "train",
+            "reference": "はい",
+            "candidates": [{"candidate_id": "a", "text": "はい", "acoustic": -0.1}],
+        },
+        {
+            "exampleId": "pair",
+            "split": "train",
+            "reference": "はい",
+            "candidates": [
+                {"candidate_id": "a", "text": "はい", "acoustic": -0.1},
+                {"candidate_id": "b", "text": "いいえ", "acoustic": -0.3},
+            ],
+        },
+    ]
+    path = tmp_path / "train.jsonl"
+    path.write_text("
+".join(json.dumps(row, ensure_ascii=False) for row in rows), "utf-8")
+    examples = load_jsonl_examples(path)
+    assert [example.example_id for example in examples] == ["pair"]
