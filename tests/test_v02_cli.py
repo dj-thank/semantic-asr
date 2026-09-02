@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from semantic_asr.cli_v2 import main
+from semantic_asr.cli_v2 import build_advanced_parser, main
 
 
 def test_ranker_calibration_cli_writes_runtime_profile() -> None:
@@ -236,3 +236,24 @@ def test_advanced_cli_discovers_effort_profiles() -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["transcribe-v2", "--help"])
     assert exc_info.value.code == 0
+
+
+def test_advanced_transcribe_cli_carries_model_provenance_options() -> None:
+    args = build_advanced_parser().parse_args(
+        [
+            "transcribe-v2",
+            "audio.wav",
+            "--model-revision",
+            "1" * 40,
+            "--runtime-revision",
+            "runtime-r2",
+            "--qwen-model-revision",
+            "2" * 40,
+            "--qwen-aligner-revision",
+            "3" * 40,
+        ]
+    )
+    assert args.model_revision == "1" * 40
+    assert args.runtime_revision == "runtime-r2"
+    assert args.qwen_model_revision == "2" * 40
+    assert args.qwen_aligner_revision == "3" * 40

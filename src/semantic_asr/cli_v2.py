@@ -513,6 +513,9 @@ def command_transcribe_v2(args: argparse.Namespace) -> int:
 
     base = PathPreservingFasterWhisperAdapter(
         model=args.model,
+        model_revision=args.model_revision,
+        model_artifact_sha256=args.model_artifact_sha256,
+        runtime_revision=args.runtime_revision,
         device=args.device,
         compute_type=args.compute_type,
         patience=args.patience,
@@ -531,6 +534,9 @@ def command_transcribe_v2(args: argparse.Namespace) -> int:
     second_ear = (
         Qwen3ASRAdapter(
             model=args.qwen_model,
+            model_revision=args.qwen_model_revision,
+            model_artifact_sha256=args.qwen_model_artifact_sha256,
+            runtime_revision=args.runtime_revision,
             dtype=args.qwen_dtype,
             device_map=args.qwen_device_map,
             return_timestamps=args.qwen_timestamps,
@@ -541,6 +547,9 @@ def command_transcribe_v2(args: argparse.Namespace) -> int:
     aligner = (
         Qwen3ForcedAlignerAdapter(
             model=args.qwen_aligner_model,
+            model_revision=args.qwen_aligner_revision,
+            model_artifact_sha256=args.qwen_aligner_artifact_sha256,
+            runtime_revision=args.runtime_revision,
             dtype=args.qwen_dtype,
             device_map=args.qwen_device_map,
         )
@@ -712,6 +721,9 @@ def build_advanced_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("--duration-ms", type=int)
     transcribe.add_argument("--language", default="ja")
     transcribe.add_argument("--model", default="large-v3-turbo")
+    transcribe.add_argument("--model-revision")
+    transcribe.add_argument("--model-artifact-sha256")
+    transcribe.add_argument("--runtime-revision")
     transcribe.add_argument("--device", default="auto")
     transcribe.add_argument("--compute-type", default="default")
     transcribe.add_argument("--window-ms", type=int, default=28_000)
@@ -757,6 +769,8 @@ def build_advanced_parser() -> argparse.ArgumentParser:
         default=None,
     )
     transcribe.add_argument("--qwen-model", default="Qwen/Qwen3-ASR-0.6B")
+    transcribe.add_argument("--qwen-model-revision")
+    transcribe.add_argument("--qwen-model-artifact-sha256")
     transcribe.add_argument("--qwen-device-map", default="cuda:0")
     transcribe.add_argument("--qwen-dtype", default="float16")
     transcribe.add_argument("--qwen-timestamps", action="store_true")
@@ -765,6 +779,8 @@ def build_advanced_parser() -> argparse.ArgumentParser:
         "--qwen-aligner-model",
         default="Qwen/Qwen3-ForcedAligner-0.6B",
     )
+    transcribe.add_argument("--qwen-aligner-revision")
+    transcribe.add_argument("--qwen-aligner-artifact-sha256")
     transcribe.add_argument("--teacher-model")
     transcribe.add_argument(
         "--teacher-protocol",
