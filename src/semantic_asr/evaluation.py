@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
@@ -23,6 +24,24 @@ CRITICAL_ENTITY_PATTERN = re.compile(
 )
 NEGATION_PATTERN = re.compile(r"(?:ない|なく|なかった|ません|ませんでした|じゃない|ではない|ぬ|ず)")
 FILLERS = ("えー", "ええと", "えっと", "あの", "その", "まあ", "うーん", "んー")
+ANNOTATED_FILLER_PATTERN = re.compile(r"\(F\s+([^()]*)\)")
+ANNOTATED_DISFLUENCY_PATTERN = re.compile(r"\(D2?\s+([^()]*)\)")
+ANNOTATED_UNCERTAIN_PATTERN = re.compile(r"\(\?\s+([^()]*)\)")
+ANNOTATED_INAUDIBLE_PATTERN = re.compile(r"\(\?\)")
+ANNOTATED_MASK_PATTERN = re.compile(r"\[[A-Z]+_[0-9]+\]")
+_FILLER_VARIANTS = (
+    "えーっと",
+    "えっとー",
+    "えーと",
+    "えっと",
+    "あのー",
+    "あのう",
+    "えー",
+    "あの",
+)
+_FILLER_VARIANT_PATTERN = re.compile(
+    "|".join(re.escape(value) for value in sorted(_FILLER_VARIANTS, key=len, reverse=True))
+)
 
 
 def edit_distance(reference: Sequence[str], hypothesis: Sequence[str]) -> int:
@@ -75,6 +94,93 @@ def lenient_cer(reference: str, hypothesis: str) -> float | None:
     return error_rate(
         normalize_characters_lenient(reference),
         normalize_characters_lenient(hypothesis),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceAnnotationCounts:
+    filler_events: int
+    disfluency_events: int
+    uncertain_spans: int
+    masked_spans: int
+
+    @property
+    def exact_cer_safe(self) -> bool:
+        return self.uncertain_spans == 0 and self.masked_spans == 0
+
+
+def reference_annotation_counts(text: str) -> ReferenceAnnotationCounts:
+    value = unicodedata.normalize("NFKC", str(text or ""))
+    return ReferenceAnnotationCounts(
+        filler_events=len(ANNOTATED_FILLER_PATTERN.findall(value)),
+        disfluency_events=len(ANNOTATED_DISFLUENCY_PATTERN.findall(value)),
+        uncertain_spans=(
+            len(ANNOTATED_UNCERTAIN_PATTERN.findall(value))
+            + len(ANNOTATED_INAUDIBLE_PATTERN.findall(value))
+        ),
+        masked_spans=len(ANNOTATED_MASK_PATTERN.findall(value)),
+    )
+
+
+def spoken_reference_surface(text: str) -> str:
+    """Remove annotation wrappers while preserving every transcribed spoken span."""
+
+    value = unicodedata.normalize("NFKC", str(text or ""))
+    for pattern in (
+        ANNOTATED_FILLER_PATTERN,
+        ANNOTATED_DISFLUENCY_PATTERN,
+        ANNOTATED_UNCERTAIN_PATTERN,
+    ):
+        value = pattern.sub(lambda match: match.group(1), value)
+    value = ANNOTATED_INAUDIBLE_PATTERN.sub("", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+@dataclass(frozen=True, slots=True)
+class FillerEventScore:
+    expected_events: int
+    observed_events: int
+    matched_events: int
+    precision: float
+    recall: float
+    f1: float
+
+
+def _canonical_filler(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).replace(" ", "")
+    return "あの" if normalized.startswith("あの") else "え"
+
+
+def _surface_filler_events(text: str) -> list[str]:
+    value = unicodedata.normalize("NFKC", str(text or ""))
+    return [_canonical_filler(match.group(0)) for match in _FILLER_VARIANT_PATTERN.finditer(value)]
+
+
+def filler_event_score(
+    annotated_reference: str,
+    hypothesis: str,
+) -> FillerEventScore | None:
+    expected = [
+        _canonical_filler(value) for value in ANNOTATED_FILLER_PATTERN.findall(annotated_reference)
+    ]
+    if not expected:
+        expected = _surface_filler_events(spoken_reference_surface(annotated_reference))
+    observed = _surface_filler_events(hypothesis)
+    if not expected and not observed:
+        return None
+    expected_counts = Counter(expected)
+    observed_counts = Counter(observed)
+    matched = sum((expected_counts & observed_counts).values())
+    precision = matched / len(observed) if observed else 0.0
+    recall = matched / len(expected) if expected else 0.0
+    f1 = 0.0 if precision + recall == 0 else 2 * precision * recall / (precision + recall)
+    return FillerEventScore(
+        expected_events=len(expected),
+        observed_events=len(observed),
+        matched_events=matched,
+        precision=precision,
+        recall=recall,
+        f1=f1,
     )
 
 
@@ -326,6 +432,8 @@ class EvaluationResult:
     punctuation_f1: float | None
     disfluency_preservation: float | None
     unsupported_correction: float
+    filler_events: FillerEventScore | None = None
+    reference_annotations: ReferenceAnnotationCounts | None = None
 
 
 def evaluate_transcript(
@@ -338,19 +446,49 @@ def evaluate_transcript(
     reference_mora: Sequence[str] | None = None,
     observed_mora: Sequence[str] | None = None,
     supported_normalization_spans: Sequence[tuple[int, int]] = (),
+    annotated_reference: str | None = None,
 ) -> EvaluationResult:
+    annotation_counts = (
+        reference_annotation_counts(annotated_reference)
+        if annotated_reference is not None
+        else None
+    )
+    exact_reference_safe = annotation_counts is None or annotation_counts.exact_cer_safe
+    metric_reference = (
+        spoken_reference_surface(annotated_reference)
+        if annotated_reference is not None
+        else reference
+    )
     return EvaluationResult(
-        cer=cer(reference, observed),
+        cer=cer(metric_reference, observed) if exact_reference_safe else None,
         kana_cer=kana_cer(reference_reading, observed_reading),
         mora_error_rate=mora_error_rate(reference_mora, observed_mora),
-        number_error_rate=number_error_rate(reference, observed),
-        date_time_error_rate=date_time_error_rate(reference, observed),
-        currency_error_rate=currency_error_rate(reference, observed),
-        negation_error_rate=negation_error_rate(reference, observed),
-        critical_entity_error_rate=critical_entity_error_rate(reference, observed),
-        punctuation_f1=punctuation_f1(reference, observed),
-        disfluency_preservation=disfluency_preservation_rate(reference, observed),
+        number_error_rate=(
+            number_error_rate(metric_reference, observed) if exact_reference_safe else None
+        ),
+        date_time_error_rate=(
+            date_time_error_rate(metric_reference, observed) if exact_reference_safe else None
+        ),
+        currency_error_rate=(
+            currency_error_rate(metric_reference, observed) if exact_reference_safe else None
+        ),
+        negation_error_rate=(
+            negation_error_rate(metric_reference, observed) if exact_reference_safe else None
+        ),
+        critical_entity_error_rate=(
+            critical_entity_error_rate(metric_reference, observed) if exact_reference_safe else None
+        ),
+        punctuation_f1=(
+            punctuation_f1(metric_reference, observed) if exact_reference_safe else None
+        ),
+        disfluency_preservation=disfluency_preservation_rate(metric_reference, observed),
         unsupported_correction=unsupported_correction_rate(
             observed, normalized, supported_normalization_spans
         ),
+        filler_events=(
+            filler_event_score(annotated_reference, observed)
+            if annotated_reference is not None
+            else None
+        ),
+        reference_annotations=annotation_counts,
     )

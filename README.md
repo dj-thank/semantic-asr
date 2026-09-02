@@ -229,6 +229,8 @@ python scripts/run_real_audio_pipeline.py   --candidates "runs/reazon/all-candid
 
 既知の標準モデル・公開データは immutable Hugging Face commit に固定されます。別モデルや別データでは exact 40 文字 commit を明示してください。`modelRevision` は実際の loader に渡され、metadata だけ異なる値を名乗る生成は停止します。境界診断は report 専用で、candidate 選択や primary strict CER には接続されません。
 
+長い生成は `<output>.partial` に1発話ずつ flush します。中断後に同じ manifest・model revision・generation config で再実行すると、audio/config/provenance を検証した完全なprefixだけを再利用します。不一致があれば上書きや暗黙再開をせず停止し、全件完了後にだけ final JSONL へ atomic promotion します。
+
 測定記録と発見した欠陥は [`docs/RESEARCH_2026-09-02.md`](docs/RESEARCH_2026-09-02.md) を参照してください。
 現状からの技術選定、deep Module の seam、モデル／context／confidence／edge の優先順位は [`docs/ARCHITECTURE_ROADMAP_2026-09-02.md`](docs/ARCHITECTURE_ROADMAP_2026-09-02.md) にまとめています。
 

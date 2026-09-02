@@ -13,6 +13,8 @@
 - Added diagnostic-only contiguous-boundary alignment and fixed length-ratio slices. They quantify reference-window overrun but never affect candidate selection or the primary strict CER.
 - Tested calibration-selected in-domain n-grams and reference-free Qwen uncertainty gates; neither improved the locked test, so both remain rejected/held rather than becoming defaults.
 - Added an evidence-backed architecture and technology roadmap: keep the measured Whisper primary, test cached causal-LM probabilities before building a cache, require exogenous entity catalogs and no-bias/distractor arms, and defer GPU/edge profiles until exact-head measurements exist.
+- Added annotation-aware spoken-reference and filler-event evaluation helpers so filler/repair content is preserved in the observed transcript and scored separately from readable normalization.
+- Candidate generation now flushes each verified row to a resumable `.partial` checkpoint and atomically promotes the complete JSONL; a late model/runtime failure no longer discards an hour of completed clips.
 - Pinned eight 2025–2026 primary sources and three falsifiable translations in the research registry; see `docs/RESEARCH_2026-09-02.md`.
 
 ## 0.2.0 — 2026-08-31

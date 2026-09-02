@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -170,24 +171,32 @@ def verify_manifest_isolation(records: Sequence[AudioManifestRecord]) -> None:
             raise ValueError(f"{kind} leakage across splits: {identifier} -> {leaking[identifier]}")
 
 
+def _bind_generation_config(
+    adapter: ASRAdapter,
+    config: CandidateGenerationConfig | None,
+) -> CandidateGenerationConfig:
+    bound = config or CandidateGenerationConfig()
+    adapter_revision = getattr(adapter, "model_revision", None)
+    if bound.model_revision is not None and bound.model_revision != adapter_revision:
+        raise ValueError(
+            "candidate-generation model revision does not match the loaded adapter revision"
+        )
+    if bound.model_revision is None and adapter_revision is not None:
+        bound = replace(bound, model_revision=str(adapter_revision))
+    return bound
+
+
 def generate_candidates(
     record: AudioManifestRecord,
     adapter: ASRAdapter,
     *,
     config: CandidateGenerationConfig | None = None,
 ) -> GeneratedCandidateRecord:
-    config = config or CandidateGenerationConfig()
+    config = _bind_generation_config(adapter, config)
     if config.fail_on_non_allow_rights and record.rights_decision != "allow":
         raise PermissionError(
             f"sample {record.sample_id} rights decision is {record.rights_decision!r}"
         )
-    adapter_revision = getattr(adapter, "model_revision", None)
-    if config.model_revision is not None and config.model_revision != adapter_revision:
-        raise ValueError(
-            "candidate-generation model revision does not match the loaded adapter revision"
-        )
-    if config.model_revision is None and adapter_revision is not None:
-        config = replace(config, model_revision=str(adapter_revision))
     source = Path(record.audio_path).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(source)
@@ -248,6 +257,137 @@ def generate_manifest(
 ) -> list[GeneratedCandidateRecord]:
     verify_manifest_isolation(records)
     return [generate_candidates(record, adapter, config=config) for record in records]
+
+
+def _load_checkpoint_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        value = json.loads(line)
+        if not isinstance(value, dict):
+            raise ValueError(f"checkpoint row {line_number} must be an object")
+        rows.append(value)
+    return rows
+
+
+def _validate_checkpoint_prefix(
+    records: Sequence[AudioManifestRecord],
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    config: CandidateGenerationConfig,
+) -> None:
+    if len(rows) > len(records):
+        raise ValueError("checkpoint contains more rows than the input manifest")
+    for index, row in enumerate(rows):
+        record = records[index]
+        if row.get("sampleId") != record.sample_id:
+            raise ValueError(f"checkpoint sample order mismatch at row {index + 1}")
+        if row.get("split") != record.split:
+            raise ValueError(f"checkpoint split mismatch at row {index + 1}")
+        if row.get("reference") != record.reference:
+            raise ValueError(f"checkpoint reference mismatch at row {index + 1}")
+        if row.get("datasetName") != record.dataset_name:
+            raise ValueError(f"checkpoint dataset mismatch at row {index + 1}")
+        if row.get("datasetRevision") != record.dataset_revision:
+            raise ValueError(f"checkpoint dataset revision mismatch at row {index + 1}")
+        generation = row.get("generation")
+        if not isinstance(generation, Mapping) or generation.get("configSha256") != config.digest:
+            raise ValueError(f"checkpoint configuration mismatch at row {index + 1}")
+        source = Path(record.audio_path).expanduser().resolve()
+        if row.get("audioSha256") != sha256_file(source):
+            raise ValueError(f"checkpoint audio digest mismatch at row {index + 1}")
+        candidates = row.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            raise ValueError(f"checkpoint candidates missing at row {index + 1}")
+        if config.model_revision is not None and any(
+            not isinstance(candidate, Mapping)
+            or not isinstance(candidate.get("metadata"), Mapping)
+            or candidate["metadata"].get("modelRevision") != config.model_revision
+            for candidate in candidates
+        ):
+            raise ValueError(f"checkpoint model revision mismatch at row {index + 1}")
+
+
+def generate_manifest_to_checkpoint(
+    records: Sequence[AudioManifestRecord],
+    adapter: ASRAdapter,
+    *,
+    checkpoint_path: str | Path,
+    config: CandidateGenerationConfig | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Generate one durable row at a time and resume only a verified manifest prefix."""
+
+    verify_manifest_isolation(records)
+    bound_config = _bind_generation_config(adapter, config)
+    checkpoint = Path(checkpoint_path)
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    rows = _load_checkpoint_rows(checkpoint)
+    _validate_checkpoint_prefix(records, rows, config=bound_config)
+    if progress is not None and rows:
+        progress(len(rows), len(records))
+    with checkpoint.open("a", encoding="utf-8", newline="\n") as handle:
+        for record in records[len(rows) :]:
+            generated = generate_candidates(record, adapter, config=bound_config)
+            row = generated.as_benchmark_row()
+            handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+            rows.append(row)
+            if progress is not None:
+                progress(len(rows), len(records))
+    return rows
+
+
+def _ranker_row_from_benchmark(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "exampleId": row["sampleId"],
+        "groupId": row["groupId"],
+        "split": row["split"],
+        "reference": row["reference"],
+        "context": "",
+        "candidates": row["candidates"],
+        "audioSha256": row["audioSha256"],
+        "datasetName": row.get("datasetName"),
+        "datasetRevision": row.get("datasetRevision"),
+    }
+
+
+def finalize_generated_checkpoint(
+    checkpoint_path: str | Path,
+    *,
+    output_path: str | Path,
+    ranker_path: str | Path | None = None,
+) -> None:
+    """Promote a complete checkpoint last, after any derived ranker file is durable."""
+
+    checkpoint = Path(checkpoint_path)
+    rows = _load_checkpoint_rows(checkpoint)
+    if not rows:
+        raise ValueError("generated checkpoint is empty")
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if ranker_path is not None:
+        ranker = Path(ranker_path)
+        ranker.parent.mkdir(parents=True, exist_ok=True)
+        ranker_partial = Path(str(ranker) + ".partial")
+        with ranker_partial.open("w", encoding="utf-8", newline="\n") as handle:
+            for row in rows:
+                handle.write(
+                    json.dumps(
+                        _ranker_row_from_benchmark(row),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(ranker_partial, ranker)
+    os.replace(checkpoint, output)
 
 
 def audio_record_from_row(row: Mapping[str, Any], *, line_number: int = 0) -> AudioManifestRecord:

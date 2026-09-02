@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -16,9 +17,9 @@ from .deployment_gate import (
 from .enrichment import EnrichmentConfig, enrich_manifest_rows, load_second_ear
 from .experiment_runner import (
     CandidateGenerationConfig,
-    generate_manifest,
+    finalize_generated_checkpoint,
+    generate_manifest_to_checkpoint,
     load_audio_manifest,
-    write_generated_manifests,
 )
 from .fusion_io import load_fusion_examples, write_learned_fusion_result
 from .learned_fusion import LearnedFusionConfig, train_constrained_fusion
@@ -260,18 +261,35 @@ def command_generate_candidates(args: argparse.Namespace) -> int:
         model_revision=model_revision,
         runtime_revision=args.runtime_revision,
     )
-    generated = generate_manifest(records, adapter, config=config)
-    write_generated_manifests(
-        generated,
-        benchmark_path=args.output,
+    output = Path(args.output)
+    checkpoint = Path(str(output) + ".partial")
+    generated = generate_manifest_to_checkpoint(
+        records,
+        adapter,
+        config=config,
+        checkpoint_path=checkpoint,
+        progress=lambda completed, total: print(
+            json.dumps(
+                {"generatedCandidates": completed, "totalCandidates": total},
+                separators=(",", ":"),
+            ),
+            file=sys.stderr,
+            flush=True,
+        ),
+    )
+    if len(generated) != len(records):
+        raise RuntimeError("generated checkpoint is incomplete")
+    finalize_generated_checkpoint(
+        checkpoint,
+        output_path=output,
         ranker_path=args.ranker_output,
     )
     print(
         json.dumps(
             {
                 "status": "ok",
-                "samples": len(generated),
-                "groups": len({record.group_id for record in generated}),
+                "samples": len(records),
+                "groups": len({record.group_id for record in records}),
                 "output": str(Path(args.output)),
                 "rankerOutput": args.ranker_output,
                 "adapter": adapter.name,

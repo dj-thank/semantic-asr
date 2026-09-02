@@ -47,12 +47,29 @@ Only seams with two justified adapters should become public ports. Today that me
 second-ear decoders and frozen-file versus in-memory context catalogs. Clock, budget, audit sink,
 and streaming remain internal seams until a second implementation is actually needed.
 
+### Design It Twice comparison
+
+Four independent Interface designs were compared:
+
+1. **Minimal recognizer:** one `recognize(request)` entry point maximizes Depth and keeps safety
+   local, but a generic diagnostics dictionary and constructor wiring still leak knowledge.
+2. **Flexible session:** `open/push/finish` covers streaming, multiple decoders and budgets, but
+   makes every offline caller learn a lifecycle before a second streaming Adapter is proven.
+3. **Default-caller facade:** `transcribe(audio, profile=...)` makes the measured CPU case trivial
+   and moves variation into immutable profiles; it has the best present-day Leverage.
+4. **Ports & adapters:** Decoder, Scorer and Context ports localize external dependencies well,
+   but Clock/Budget/Provenance ports would be hypothetical with only one current implementation.
+
+The selected hybrid is design 3 externally and the justified subset of design 4 internally. A
+private minimal recognizer owns orchestration. Streaming session state, remote context services,
+and additional public ports are added only when a second Adapter makes each seam real.
+
 ## Technology selection
 
 | Need | Selection | Status and evidence | Stop / promotion condition |
 |---|---|---|---|
 | CPU offline primary | faster-whisper large-v3-turbo, CTranslate2 int8 | **keep**; only stack measured end-to-end here (`0.2518` strict utterance mean, `0.1162` lenient corpus) | replace only on same immutable manifest with strict and non-boundary slices non-inferior |
-| High-quality independent ear | Qwen3-ASR-1.7B | **experiment on GPU**; the 1.7B AuT+LLM model is stronger than 0.6B in the official report, supports Japanese and unified offline/streaming | same 600 clips, exact revision, first measure standalone CER; enter fusion only if at least non-inferior and complementary |
+| High-quality independent ear | Qwen3-ASR-1.7B on CUDA/ROCm/vLLM | **experiment on a supported GPU runtime**; the 1.7B AuT+LLM model is stronger than 0.6B in the official report, supports Japanese and unified offline/streaming | same 600 clips, exact revision, first measure standalone CER; enter fusion only if at least non-inferior and complementary |
 | Current Qwen 0.6B | single-hypothesis contradiction signal | **do not promote**; all-on insertion is harmful and the best calibration-selected gate changed three rows without strict gain | retain probe infrastructure only; no default weight or candidate authoring |
 | Japanese CPU/edge adapter | ReazonSpeech-k2-v2 via sherpa-onnx (159M Zipformer RNN-T, ONNX) | **benchmark as a deployment adapter**, not as a claimed quality upgrade; architecturally independent and portable | test exact model on the immutable 600 clips plus latency/RAM; do not infer from vendor benchmark normalization |
 | Very small edge lane | Moonshine tiny Japanese (27M) | **defer to device profile**; attractive size, but not evidence for better reranking or broadcast accuracy | require device RTF/RAM and the same strict/lenient/entity slices |
@@ -69,6 +86,12 @@ Qwen3-ASR uses an AuT audio encoder, projector, and causal LLM with dynamic atte
 the official high-level wrapper returns one transcript (plus language and optional transcript-
 conditioned alignment), not a calibrated N-best confidence contract. Therefore it belongs behind a
 decoder Adapter and must not impersonate the CTranslate2 score Interface.
+
+The local RX 7600 XT is usable through DirectML for ordinary tensor operations, but the pinned
+Qwen3-ASR-0.6B failed a one-clip probe across its variable-length audio path and text embedding
+path. Bounded workarounds for `masked_scatter` and CPU audio-tower/GPU decoder placement exposed
+additional DirectML backend incompatibilities. Do not download or claim the 1.7B run on this
+runtime; use a supported CUDA/ROCm/vLLM host or an official converted artifact instead.
 
 Retrieval-based contextual ASR is converging on a common pattern: retrieve a small phrase set,
 inject it as context, and explicitly train or gate a `NO_BIAS` path. Many published headline gains
@@ -96,6 +119,24 @@ model:
 2. `context-bias`: an exogenous catalog frozen before audio evaluation, with relevant-context,
    distractor-only, homophone, catalog-missing and no-context arms.
 
+The evaluation corpus roles must also be separated:
+
+| Corpus | Proper role | Why / limitation |
+|---|---|---|
+| ReazonSpeech locked 600 | broadcast content regression and candidate-oracle baseline | public and already measured, but caption/segment boundaries are imperfect and only 6/116 test references contain a detected filler |
+| HTH Japanese casual conversation preview | immediate verbatim-fidelity pilot | 69 human-checked native casual utterances / 324 s, with 16 explicitly tagged filler events and 4 repairs; preview terms have no clear repository license, so keep results local and do not redistribute |
+| HTH full 120 h | candidate production-grade casual-speech audit set | human-verified, filler/disfluency tags and speaker-separated dialogue; commercial access is a separate human decision |
+| Corpus of Spontaneous Japanese (CSJ) | strongest established spontaneous-speech gold set | 661 h, orthographic/phonetic transcripts and explicit filled-pause/repair tags; paid/application-controlled, with commercial use reviewed separately |
+| J-CHAT | large-scale pretraining/domain exposure only | native in-the-wild dialogue at large scale, but transcripts are produced by ReazonSpeech-NeMo rather than human gold |
+| STUDIES | scripted dialogue/prosody checks | open research-use studio dialogue from actors reading prepared lines, not an unscripted filler benchmark |
+
+Verbatim evaluation has three independent outputs. `spoken_reference_surface` removes only
+annotation wrappers while preserving filler and repair content. Strict/content CER excludes rows
+with inaudible, uncertain, or anonymized spans unless a masked-span scorer is explicitly used.
+Tagged-filler precision/recall/F1 is reported separately; a readable normalized transcript may
+remove fillers only as a distinct downstream product output and never feeds back into observed
+transcript scoring.
+
 Primary gates remain strict corpus CER and strict utterance-mean CER on identical audio/reference
 boundaries. Report lenient corpus CER for comparability, entity/number/negation errors for product
 risk, and fixed boundary/length diagnostics for explanation. Thresholds, model choice, context size,
@@ -117,6 +158,9 @@ experiment.
 6. **Deep Module migration:** introduce the one-call facade, route one CLI vertical slice through
    it, then move pooling/context/gating/provenance behind the seam while keeping low-level research
    functions available.
+7. **Verbatim audit expansion:** use the 69-row HTH preview as a local pilot now; promote only after
+   the audio-to-transcript mapping, filler tags, uncertain spans and usage rights are all bound.
+   Acquire CSJ or the full human-verified casual corpus only at an explicit human/cost decision.
 
 ## Sources used for selection
 
@@ -140,6 +184,9 @@ paper pages were excluded from decision-grade evidence.
 - Moonshine tiny specialized ASR: <https://arxiv.org/abs/2509.02523>
 - faster-whisper: <https://github.com/SYSTRAN/faster-whisper>
 - CTranslate2: <https://github.com/OpenNMT/CTranslate2>
+- Corpus of Spontaneous Japanese: <https://clrd.ninjal.ac.jp/csj/en/data-index.html>
+- HTH casual-conversation preview: <https://huggingface.co/datasets/HTH-inc/japanese-casual-conversational-speech-golden-dataset-preview>
+- Japanese disfluency labeling: <https://www.isca-archive.org/interspeech_2022/horii22_interspeech.html>
 
 All recommendations remain `LOCAL_PASS` planning or local measurement. They do not establish device,
 provider, public-release, or human-approval state.

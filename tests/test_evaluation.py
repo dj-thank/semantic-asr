@@ -12,10 +12,13 @@ from semantic_asr.evaluation import (
     edit_distance,
     evaluate_confidence,
     evaluate_transcript,
+    filler_event_score,
     negation_error_rate,
     number_error_rate,
     oracle_cer,
     punctuation_f1,
+    reference_annotation_counts,
+    spoken_reference_surface,
     unsupported_correction_rate,
 )
 
@@ -64,6 +67,52 @@ def test_best_contiguous_alignment_matches_bruteforce_for_short_sequences() -> N
                         actual.retained_start,
                         actual.retained_end,
                     ) == expected
+
+
+def test_spoken_reference_surface_preserves_fillers_and_repairs() -> None:
+    annotated = "(F えー) (D 東京に)大阪へ行きます(? 舞い)(?)"
+    assert spoken_reference_surface(annotated) == "えー 東京に大阪へ行きます舞い"
+    counts = reference_annotation_counts(annotated + "[PERSON_01]")
+    assert counts.filler_events == 1
+    assert counts.disfluency_events == 1
+    assert counts.uncertain_spans == 2
+    assert counts.masked_spans == 1
+
+
+def test_filler_event_score_matches_variant_families_without_deleting_them() -> None:
+    score = filler_event_score("(F えー)そうですね(F あのー)", "えっとそうですね")
+    assert score is not None
+    assert score.expected_events == 2
+    assert score.observed_events == 1
+    assert score.matched_events == 1
+    assert score.precision == 1.0
+    assert score.recall == 0.5
+    assert score.f1 == pytest.approx(2 / 3)
+
+
+def test_full_evaluation_uses_spoken_surface_and_reports_filler_events() -> None:
+    result = evaluate_transcript(
+        reference="そうですね",
+        annotated_reference="(F えー)そうですね",
+        observed="えっとそうですね",
+        normalized="えっとそうですね",
+    )
+    assert result.cer == pytest.approx(2 / 7)
+    assert result.filler_events is not None
+    assert result.filler_events.f1 == 1.0
+
+
+def test_full_evaluation_refuses_exact_cer_for_uncertain_annotated_spans() -> None:
+    result = evaluate_transcript(
+        reference="明日は舞い上がる",
+        annotated_reference="明日は(? 舞い)上がる",
+        observed="明日は舞い上がる",
+        normalized="明日は舞い上がる",
+    )
+    assert result.cer is None
+    assert result.critical_entity_error_rate is None
+    assert result.reference_annotations is not None
+    assert result.reference_annotations.exact_cer_safe is False
 
 
 def test_semantic_critical_metrics() -> None:

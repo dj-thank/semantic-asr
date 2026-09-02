@@ -11,7 +11,9 @@ from semantic_asr.contracts import CandidateEvidence
 from semantic_asr.experiment_runner import (
     AudioManifestRecord,
     CandidateGenerationConfig,
+    finalize_generated_checkpoint,
     generate_candidates,
+    generate_manifest_to_checkpoint,
     verify_manifest_isolation,
     write_generated_manifests,
 )
@@ -143,6 +145,88 @@ def test_manifest_isolation_rejects_near_duplicate_leakage() -> None:
     ]
     with pytest.raises(ValueError, match="near-duplicate leakage"):
         verify_manifest_isolation(records)
+
+
+def test_resumable_generation_keeps_verified_prefix_after_failure(tmp_path) -> None:
+    records = []
+    for index in range(2):
+        audio = tmp_path / f"audio-{index}.wav"
+        audio.write_bytes(f"RIFF-{index}".encode())
+        records.append(
+            AudioManifestRecord(
+                sample_id=f"sample-{index}",
+                group_id=f"speaker-{index}",
+                source_id=f"source-{index}",
+                split="test",
+                audio_path=str(audio),
+                reference=f"参照{index}",
+                rights_decision="allow",
+            )
+        )
+
+    class _FailSecond(_MockAdapter):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def decode(self, request: DecodeRequest) -> list[CandidateEvidence]:
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("fixture interruption")
+            return super().decode(request)
+
+    checkpoint = tmp_path / "candidates.jsonl.partial"
+    config = CandidateGenerationConfig(beam_size=3, hypotheses=3)
+    with pytest.raises(RuntimeError, match="fixture interruption"):
+        generate_manifest_to_checkpoint(
+            records,
+            _FailSecond(),
+            config=config,
+            checkpoint_path=checkpoint,
+        )
+    assert len(checkpoint.read_text(encoding="utf-8").splitlines()) == 1
+
+    resumed = _MockAdapter()
+    rows = generate_manifest_to_checkpoint(
+        records,
+        resumed,
+        config=config,
+        checkpoint_path=checkpoint,
+    )
+    assert len(rows) == 2
+    output = tmp_path / "candidates.jsonl"
+    ranker = tmp_path / "ranker.jsonl"
+    finalize_generated_checkpoint(
+        checkpoint,
+        output_path=output,
+        ranker_path=ranker,
+    )
+    assert output.is_file()
+    assert ranker.is_file()
+    assert not checkpoint.exists()
+    assert [json.loads(line)["sampleId"] for line in output.read_text("utf-8").splitlines()] == [
+        "sample-0",
+        "sample-1",
+    ]
+
+
+def test_resumable_generation_rejects_a_different_configuration(tmp_path) -> None:
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"RIFF")
+    records = [_record(audio)]
+    checkpoint = tmp_path / "candidates.jsonl.partial"
+    generate_manifest_to_checkpoint(
+        records,
+        _MockAdapter(),
+        config=CandidateGenerationConfig(beam_size=3, hypotheses=3),
+        checkpoint_path=checkpoint,
+    )
+    with pytest.raises(ValueError, match="checkpoint configuration"):
+        generate_manifest_to_checkpoint(
+            records,
+            _MockAdapter(),
+            config=CandidateGenerationConfig(beam_size=4, hypotheses=3),
+            checkpoint_path=checkpoint,
+        )
 
 
 def test_generated_benchmark_and_ranker_manifests_are_compatible_jsonl() -> None:
