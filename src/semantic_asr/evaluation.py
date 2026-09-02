@@ -56,6 +56,28 @@ def cer(reference: str, hypothesis: str) -> float | None:
     return error_rate(normalize_characters(reference), normalize_characters(hypothesis))
 
 
+def normalize_characters_lenient(text: str) -> list[str]:
+    """NFKC characters without whitespace, punctuation, or symbols.
+
+    Published Japanese ASR numbers (kotoba-whisper, Neosophie 2026) strip punctuation before
+    computing CER. The strict metric keeps punctuation because observed transcripts must not
+    silently lose it; this lenient variant exists only for comparability with such reports.
+    """
+
+    return [
+        character
+        for character in normalize_characters(text)
+        if not unicodedata.category(character).startswith(("P", "S"))
+    ]
+
+
+def lenient_cer(reference: str, hypothesis: str) -> float | None:
+    return error_rate(
+        normalize_characters_lenient(reference),
+        normalize_characters_lenient(hypothesis),
+    )
+
+
 def kana_cer(reference_reading: str | None, hypothesis_reading: str | None) -> float | None:
     if reference_reading is None or hypothesis_reading is None:
         return None

@@ -6,7 +6,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .advanced_adapters import PathPreservingFasterWhisperAdapter
+from .advanced_adapters import LoopGuardConfig, PathPreservingFasterWhisperAdapter
 from .deployment_gate import (
     DeploymentGatePolicy,
     deployment_evaluation_from_dict,
@@ -153,6 +153,9 @@ def command_train_fusion(args: argparse.Namespace) -> int:
 
 def command_generate_candidates(args: argparse.Namespace) -> int:
     records = load_audio_manifest(args.input)
+    fallback_temperatures = tuple(
+        float(value) for value in str(args.fallback_temperatures or "").split(",") if value.strip()
+    )
     adapter = PathPreservingFasterWhisperAdapter(
         model=args.model,
         device=args.device,
@@ -161,6 +164,18 @@ def command_generate_candidates(args: argparse.Namespace) -> int:
         patience=args.patience,
         repetition_penalty=args.repetition_penalty,
         no_repeat_ngram_size=args.no_repeat_ngram_size,
+        loop_guard=LoopGuardConfig(
+            enabled=not args.no_loop_guard,
+            max_tokens_per_second=args.max_tokens_per_second,
+            max_tokens_floor=args.max_tokens_floor,
+            compression_ratio_threshold=args.compression_ratio_threshold,
+            log_prob_threshold=args.log_prob_threshold,
+            fallback_temperatures=fallback_temperatures,
+            fallback_samples=args.fallback_samples,
+            drop_degenerate=not args.keep_degenerate,
+            max_characters_per_second=args.max_characters_per_second,
+        ),
+        without_timestamps=args.without_timestamps,
     )
     hotwords = tuple(
         value.strip()
@@ -304,6 +319,32 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--initial-prompt")
     generate.add_argument("--hotwords")
     generate.add_argument("--return-timestamps", action="store_true")
+    generate.add_argument(
+        "--no-loop-guard",
+        action="store_true",
+        help="Disable the duration-aware token budget, degeneracy check, and sampled fallback.",
+    )
+    generate.add_argument("--max-tokens-per-second", type=float, default=14.0)
+    generate.add_argument("--max-tokens-floor", type=int, default=32)
+    generate.add_argument("--compression-ratio-threshold", type=float, default=2.4)
+    generate.add_argument("--log-prob-threshold", type=float, default=-1.0)
+    generate.add_argument(
+        "--fallback-temperatures",
+        default="0.2,0.4,0.6,0.8,1.0",
+        help="Comma-separated sampling temperatures tried when the beam stage is degenerate.",
+    )
+    generate.add_argument("--fallback-samples", type=int, default=5)
+    generate.add_argument("--max-characters-per-second", type=float, default=12.0)
+    generate.add_argument(
+        "--without-timestamps",
+        action="store_true",
+        help="Decode with <|notimestamps|> (the v0.2 behaviour); loops far more on short clips.",
+    )
+    generate.add_argument(
+        "--keep-degenerate",
+        action="store_true",
+        help="Keep degenerate paths in the pool (demoted) instead of dropping them.",
+    )
     generate.add_argument(
         "--allow-review-rights",
         action="store_true",

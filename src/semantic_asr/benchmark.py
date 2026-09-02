@@ -12,7 +12,12 @@ from typing import Any, Literal
 
 from .cascade import CascadeConfig, run_candidate_cascade
 from .contracts import CandidateEvidence
-from .evaluation import cer
+from .evaluation import (
+    cer,
+    lenient_cer,
+    normalize_characters,
+    normalize_characters_lenient,
+)
 from .mbr import critical_units
 
 SplitName = Literal["train", "calibration", "test"]
@@ -59,6 +64,11 @@ class BenchmarkRow:
     rank_regret: float
     adaptive_k: int
     requires_additional_evidence: bool
+    reference_characters: int = 0
+    reference_characters_lenient: int = 0
+    baseline_lenient_cer: float = 0.0
+    cascade_lenient_cer: float = 0.0
+    mbr_lenient_cer: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +89,8 @@ class BenchmarkSlice:
     mbr_cer: float
     rank_regret: float
     mean_adaptive_k: float
+    corpus_cer: dict[str, float] | None = None
+    lenient_corpus_cer: dict[str, float] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +107,13 @@ class BenchmarkReport:
     cascade_improvement: BootstrapInterval
     slices: dict[str, BenchmarkSlice]
     rows: tuple[BenchmarkRow, ...]
+    corpus_cer: dict[str, float] | None = None
+    lenient_corpus_cer: dict[str, float] | None = None
+    metric_note: str = (
+        "utterance-mean CER keeps punctuation (strict); corpus_cer weights utterances by "
+        "reference length; lenient variants strip punctuation and symbols for comparison "
+        "with published Japanese ASR numbers."
+    )
     claim_boundary: str = (
         "A report is evidence only for the exact immutable manifest, models, "
         "runtime, split policy, and configuration used to produce it."
@@ -183,6 +202,13 @@ def evaluate_utterance(
         previous = value
     maximum_oracle = oracle[max(oracle)]
     cascade_value = _cer(record.reference, cascade_candidate.text)
+    lenient_reference = normalize_characters_lenient(record.reference)
+
+    def _lenient(text: str) -> float:
+        if not lenient_reference:
+            return 0.0
+        return float(lenient_cer(record.reference, text) or 0.0)
+
     return BenchmarkRow(
         sample_id=record.sample_id,
         group_id=record.group_id,
@@ -198,6 +224,11 @@ def evaluate_utterance(
         rank_regret=max(0.0, cascade_value - maximum_oracle),
         adaptive_k=decision.adaptive_k.k,
         requires_additional_evidence=decision.requires_additional_evidence,
+        reference_characters=len(normalize_characters(record.reference)),
+        reference_characters_lenient=len(lenient_reference),
+        baseline_lenient_cer=_lenient(baseline.text),
+        cascade_lenient_cer=_lenient(cascade_candidate.text),
+        mbr_lenient_cer=_lenient(mbr_candidate.text),
     )
 
 
@@ -248,6 +279,21 @@ def paired_group_bootstrap(
     )
 
 
+def _corpus_cer(rows: Sequence[BenchmarkRow], *, lenient: bool) -> dict[str, float]:
+    """Length-weighted CER: total edits divided by total reference characters."""
+
+    length_attribute = "reference_characters_lenient" if lenient else "reference_characters"
+    suffix = "_lenient_cer" if lenient else "_cer"
+    total = sum(getattr(row, length_attribute) for row in rows)
+    output: dict[str, float] = {}
+    for system in ("baseline", "cascade", "mbr"):
+        edits = sum(
+            getattr(row, f"{system}{suffix}") * getattr(row, length_attribute) for row in rows
+        )
+        output[system] = edits / total if total else 0.0
+    return output
+
+
 def _slice(rows: Sequence[BenchmarkRow]) -> BenchmarkSlice:
     if not rows:
         raise ValueError("benchmark slice must not be empty")
@@ -258,6 +304,8 @@ def _slice(rows: Sequence[BenchmarkRow]) -> BenchmarkSlice:
         mbr_cer=fmean(row.mbr_cer for row in rows),
         rank_regret=fmean(row.rank_regret for row in rows),
         mean_adaptive_k=fmean(row.adaptive_k for row in rows),
+        corpus_cer=_corpus_cer(rows, lenient=False),
+        lenient_corpus_cer=_corpus_cer(rows, lenient=True),
     )
 
 
@@ -307,6 +355,8 @@ def run_benchmark(
         ),
         slices=slices,
         rows=rows,
+        corpus_cer=_corpus_cer(rows, lenient=False),
+        lenient_corpus_cer=_corpus_cer(rows, lenient=True),
     )
 
 

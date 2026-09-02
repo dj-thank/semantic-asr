@@ -99,6 +99,27 @@ def test_benchmark_reports_monotonic_oracle_curve_and_group_bootstrap() -> None:
     assert "critical" in report.slices
     assert "domain:meeting" in report.slices
     assert report.mean_adaptive_k >= 1
+    assert set(report.corpus_cer) == {"baseline", "cascade", "mbr"}
+    assert report.slices["all"].corpus_cer == report.corpus_cer
+    assert 0.0 <= report.lenient_corpus_cer["baseline"] <= report.corpus_cer["baseline"] + 1e-9
+
+
+def test_lenient_cer_ignores_punctuation_but_strict_does_not() -> None:
+    records = [
+        _record(
+            "punct",
+            "speaker-p",
+            "source-p",
+            "はい、そうです。",
+            ["はいそうです", "はい、そうです。"],
+        )
+    ]
+    report = run_benchmark(records, ks=(1, 2), bootstrap_iterations=10, seed=1)
+    row = report.rows[0]
+    assert row.baseline_cer > 0.0
+    assert row.baseline_lenient_cer == 0.0
+    assert row.reference_characters == 8
+    assert row.reference_characters_lenient == 6
 
 
 def test_final_benchmark_rejects_non_test_split() -> None:

@@ -62,6 +62,37 @@ def _digest_text(value: str | None) -> str | None:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def pad_features_to_window(features: Any, nb_max_frames: int) -> Any:
+    """Zero-pad (or trim) log-mel features to one full Whisper window.
+
+    Whisper was trained on 30 s windows. ``faster_whisper.transcribe`` pads every segment
+    with ``pad_or_trim`` before encoding; calling the encoder on an unpadded short clip makes
+    the decoder hallucinate and loop until ``max_length``. Every direct-generate adapter in
+    this package must therefore pad before ``encode``.
+    """
+
+    import numpy as np
+
+    array = np.asarray(features)
+    if array.ndim == 2:
+        array = np.expand_dims(array, 0)
+    if nb_max_frames < 1:
+        raise ValueError("nb_max_frames must be positive")
+    frames = array.shape[-1]
+    if frames == nb_max_frames:
+        return array
+    if frames > nb_max_frames:
+        return array[..., :nb_max_frames]
+    padding = [(0, 0)] * (array.ndim - 1) + [(0, nb_max_frames - frames)]
+    return np.pad(array, padding, mode="constant")
+
+
+def window_frames(model: Any) -> int:
+    extractor = getattr(model, "feature_extractor", None)
+    frames = getattr(extractor, "nb_max_frames", None)
+    return int(frames) if frames else 3000
+
+
 class FasterWhisperAdapter:
     """One-window CTranslate2 N-best adapter built on faster-whisper internals.
 
@@ -142,9 +173,7 @@ class FasterWhisperAdapter:
         features = self.model.feature_extractor(waveform)
         if isinstance(features, tuple):
             features = features[0]
-        features = np.asarray(features)
-        if features.ndim == 2:
-            features = np.expand_dims(features, 0)
+        features = pad_features_to_window(np.asarray(features), window_frames(self.model))
         encoded = self.model.encode(features)
 
         initial_tokens = tokenizer.encode(request.initial_prompt) if request.initial_prompt else []

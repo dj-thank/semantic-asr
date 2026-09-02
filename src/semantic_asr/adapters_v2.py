@@ -197,12 +197,12 @@ class FasterWhisperPathAdapter:
             task="transcribe",
             language=language,
         )
+        from .adapters import pad_features_to_window, window_frames
+
         features = self.model.feature_extractor(waveform)
         if isinstance(features, tuple):
             features = features[0]
-        features = np.asarray(features)
-        if features.ndim == 2:
-            features = np.expand_dims(features, 0)
+        features = pad_features_to_window(np.asarray(features), window_frames(self.model))
         encoded = self.model.encode(features)
         prompt = self._prompt(tokenizer, request)
 
