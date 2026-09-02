@@ -72,6 +72,14 @@ class FakeAdapter:
         ]
 
 
+class RevisionedFakeAdapter(FakeAdapter):
+    def __init__(self, revision: str, *, length_penalty: float = 1.0) -> None:
+        super().__init__()
+        self.model_revision = revision
+        self.runtime_revision = "runtime-r1"
+        self.length_penalty = length_penalty
+
+
 class FakeTeacher:
     model = "fake-qwen"
 
@@ -120,6 +128,87 @@ def test_longform_selective_decode_and_cache() -> None:
             assert second.diagnostics["cacheHitCount"] > 0
             assert first.observed_text == second.observed_text
             assert "学校を" in first.observed_text
+
+
+def test_longform_cache_separates_model_revisions_and_decode_settings() -> None:
+    request = DecodeRequest(
+        audio_path="fixture.wav",
+        language="ja",
+        beam_size=5,
+        hypotheses=5,
+        start_ms=0,
+        end_ms=1_000,
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        cache_path = Path(directory) / "cache.sqlite3"
+        with EvidenceCache(cache_path) as cache:
+            first = SemanticASRTranscriber(
+                RevisionedFakeAdapter("r1", length_penalty=1.0),
+                cache=cache,
+            )
+            second = SemanticASRTranscriber(
+                RevisionedFakeAdapter("r2", length_penalty=1.1),
+                cache=cache,
+            )
+            first_key = first._cache_key(
+                namespace="base-window",
+                adapter=first.base_adapter,
+                request=request,
+                audio_sha256="a" * 64,
+                context="",
+            )
+            second_key = second._cache_key(
+                namespace="base-window",
+                adapter=second.base_adapter,
+                request=request,
+                audio_sha256="a" * 64,
+                context="",
+            )
+            assert first_key.model_revision == "r1"
+            assert second_key.model_revision == "r2"
+            assert first_key.runtime_revision == second_key.runtime_revision == "runtime-r1"
+            assert first_key.decode_config_sha256 != second_key.decode_config_sha256
+            assert first_key.score_domain != second_key.score_domain
+
+            _, first_hit = first._decode(
+                first.base_adapter,
+                request,
+                namespace="base-window",
+                audio_sha256="a" * 64,
+                context="",
+            )
+            _, second_hit = second._decode(
+                second.base_adapter,
+                request,
+                namespace="base-window",
+                audio_sha256="a" * 64,
+                context="",
+            )
+            assert first_hit is False
+            assert second_hit is False
+            assert cache.count("base-window") == 2
+
+
+def test_legacy_adapter_cache_key_remains_deterministic() -> None:
+    request = DecodeRequest(audio_path="fixture.wav", start_ms=0, end_ms=1_000)
+    transcriber = SemanticASRTranscriber(FakeAdapter())
+    first = transcriber._cache_key(
+        namespace="base-window",
+        adapter=transcriber.base_adapter,
+        request=request,
+        audio_sha256="a" * 64,
+        context="",
+    )
+    second = transcriber._cache_key(
+        namespace="base-window",
+        adapter=transcriber.base_adapter,
+        request=request,
+        audio_sha256="a" * 64,
+        context="",
+    )
+    assert first.model_revision is None
+    assert first.runtime_revision is None
+    assert first.digest == second.digest
 
 
 def test_teacher_changes_only_normalized_layer() -> None:
