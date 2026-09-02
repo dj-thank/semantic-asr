@@ -345,6 +345,9 @@ def test_resumable_generation_rejects_a_corrupt_terminated_row(tmp_path) -> None
         ("generation.licenseId", "other-license", "license"),
         ("generation.adapter", "other-adapter", "adapter"),
         ("generation.model", "other-model", "model"),
+        ("candidate.generationAdapter", "other-adapter", "candidate adapter"),
+        ("candidate.generationModel", "other-model", "candidate model"),
+        ("candidate.modelRevision", "other-revision", "model revision"),
         ("candidate.runtimeRevision", "other-runtime", "runtime revision"),
         ("candidate.audioSha256", "0" * 64, "candidate audio"),
     ],
@@ -460,6 +463,29 @@ def test_finalize_revalidates_candidate_integrity_against_manifest(tmp_path) -> 
     assert not output.exists()
 
 
+def test_finalize_rejects_duplicate_candidate_ids(tmp_path) -> None:
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"RIFF")
+    record = _record(audio)
+    checkpoint = tmp_path / "candidates.jsonl.partial"
+    output = tmp_path / "candidates.jsonl"
+    config = CandidateGenerationConfig(beam_size=3, hypotheses=3)
+    adapter = _MockAdapter()
+    generate_manifest_to_checkpoint([record], adapter, config=config, checkpoint_path=checkpoint)
+    row = json.loads(checkpoint.read_text("utf-8"))
+    row["candidates"].append(dict(row["candidates"][0]))
+    checkpoint.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="candidate IDs repeat"):
+        finalize_generated_checkpoint(
+            checkpoint,
+            output_path=output,
+            records=[record],
+            adapter=adapter,
+            config=config,
+        )
+
+
 def test_generation_binds_adapter_runtime_and_local_artifact(tmp_path) -> None:
     class _LocalAdapter(_MockAdapter):
         model_revision = None
@@ -532,3 +558,6 @@ def test_generated_benchmark_and_ranker_manifests_are_compatible_jsonl() -> None
         assert benchmark_row["reference"] == "料金は3000円です"
         assert ranker_row["exampleId"] == "sample-1"
         assert ranker_row["audioSha256"] == generated.audio_sha256
+        assert ranker_row["generation"]["modelRevision"] == _MockAdapter.model_revision
+        assert ranker_row["generation"]["runtimeRevision"] is None
+        assert ranker_row["generation"]["modelArtifactSha256"] is None

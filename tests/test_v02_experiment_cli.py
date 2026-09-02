@@ -22,16 +22,17 @@ def _candidate(candidate_id: str, text: str, rank: int) -> dict[str, object]:
 def _manifest_rows() -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for split, index in (("train", 1), ("calibration", 2), ("test", 3)):
+        reference = f"料金は{index}000円です"
         rows.append(
             {
                 "sampleId": f"sample-{split}",
                 "groupId": f"speaker-{split}",
                 "sourceId": f"source-{split}",
                 "split": split,
-                "reference": "料金は3000円です",
+                "reference": reference,
                 "candidates": [
-                    _candidate("wrong", "料金は30000円です", 1),
-                    _candidate("correct", "料金は3000円です", 2),
+                    _candidate("wrong", f"料金は{index}0000円です", 1),
+                    _candidate("correct", reference, 2),
                 ],
                 "domain": f"domain-{index}",
             }
@@ -183,8 +184,8 @@ def test_experiment_cli_partition_score_calibrate_and_apply() -> None:
 def test_partition_and_rerank_round_trip_preserves_unsafe_annotation_metadata() -> None:
     rows = _manifest_rows()
     annotations = {
-        "sample-train": "(F えー)料金は3000円です",
-        "sample-calibration": "料金は(? 3000円)です",
+        "sample-train": "(F えー)料金は1000円です",
+        "sample-calibration": "料金は(? 2000円)です",
         "sample-test": "[PERSON_01]",
         "sample-test-masked": "[MASK]",
     }

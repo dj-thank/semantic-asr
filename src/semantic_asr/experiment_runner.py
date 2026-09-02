@@ -157,6 +157,9 @@ class GeneratedCandidateRecord:
             "generation": {
                 "adapter": self.adapter,
                 "model": self.model,
+                "modelRevision": self.candidates[0].metadata.get("modelRevision"),
+                "modelArtifactSha256": self.candidates[0].metadata.get("modelArtifactSha256"),
+                "runtimeRevision": self.candidates[0].metadata.get("runtimeRevision"),
                 "configSha256": self.generation_config_sha256,
                 "elapsedMs": self.elapsed_ms,
                 "licenseId": self.license_id,
@@ -290,6 +293,8 @@ def generate_candidates(
                 "experimentSampleId": record.sample_id,
                 "audioSha256": audio_sha256,
                 "generationConfigSha256": config.digest,
+                "generationAdapter": adapter.name,
+                "generationModel": model,
                 "modelRevision": config.model_revision,
                 "modelArtifactSha256": config.model_artifact_sha256,
                 "runtimeRevision": config.runtime_revision,
@@ -470,10 +475,14 @@ def _validate_checkpoint_prefix(
         candidates = row.get("candidates")
         if not isinstance(candidates, list) or not candidates:
             raise ValueError(f"checkpoint candidates missing at row {index + 1}")
+        candidate_ids: set[str] = set()
         for candidate in candidates:
             if not isinstance(candidate, Mapping):
                 raise ValueError(f"checkpoint candidate invalid at row {index + 1}")
-            CandidateEvidence.from_dict(candidate)
+            parsed_candidate = CandidateEvidence.from_dict(candidate)
+            if parsed_candidate.candidate_id in candidate_ids:
+                raise ValueError(f"checkpoint candidate IDs repeat at row {index + 1}")
+            candidate_ids.add(parsed_candidate.candidate_id)
             metadata = candidate.get("metadata")
             if not isinstance(metadata, Mapping):
                 raise ValueError(f"checkpoint candidate metadata missing at row {index + 1}")
@@ -483,11 +492,15 @@ def _validate_checkpoint_prefix(
                 raise ValueError(f"checkpoint candidate audio mismatch at row {index + 1}")
             if metadata.get("generationConfigSha256") != config.digest:
                 raise ValueError(f"checkpoint candidate configuration mismatch at row {index + 1}")
+            if metadata.get("generationAdapter") != adapter.name:
+                raise ValueError(f"checkpoint candidate adapter mismatch at row {index + 1}")
+            if metadata.get("generationModel") != str(getattr(adapter, "model_name", adapter.name)):
+                raise ValueError(f"checkpoint candidate model mismatch at row {index + 1}")
             if metadata.get("runtimeRevision") != config.runtime_revision:
                 raise ValueError(f"checkpoint runtime revision mismatch at row {index + 1}")
             if metadata.get("modelArtifactSha256") != config.model_artifact_sha256:
                 raise ValueError(f"checkpoint model artifact mismatch at row {index + 1}")
-        if config.model_revision is not None and any(
+        if any(
             not isinstance(candidate, Mapping)
             or not isinstance(candidate.get("metadata"), Mapping)
             or candidate["metadata"].get("modelRevision") != config.model_revision

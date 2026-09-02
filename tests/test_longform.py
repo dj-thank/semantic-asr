@@ -270,6 +270,31 @@ def test_longform_cache_binds_ranker_revision_artifact_and_config() -> None:
     assert first_key.score_domain != second_key.score_domain
 
 
+def test_longform_cache_rejects_a_floating_nested_ranker() -> None:
+    class FloatingRanker:
+        name = "floating-ranker"
+        model_name = "publisher/floating-ranker"
+
+        def score(self, candidates, **kwargs):
+            return {candidate.candidate_id: 0.0 for candidate in candidates}
+
+    adapter = AdaptiveRerankingAdapter(
+        FakeAdapter(),
+        FloatingRanker(),
+        maximum_hypotheses=2,
+    )
+    transcriber = SemanticASRTranscriber(adapter)
+    request = DecodeRequest(audio_path="fixture.wav", start_ms=0, end_ms=1_000)
+    with pytest.raises(ValueError, match="ranker identity"):
+        transcriber._cache_key(
+            namespace="base-window",
+            adapter=adapter,
+            request=request,
+            audio_sha256="a" * 64,
+            context="",
+        )
+
+
 def test_legacy_adapter_cache_key_remains_deterministic() -> None:
     request = DecodeRequest(audio_path="fixture.wav", start_ms=0, end_ms=1_000)
     transcriber = SemanticASRTranscriber(FakeAdapter())

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import random
@@ -151,6 +152,7 @@ def verify_split_isolation(records: Sequence[BenchmarkUtterance]) -> None:
         "group": defaultdict(set),
         "source": defaultdict(set),
         "near-duplicate": defaultdict(set),
+        "reference": defaultdict(set),
     }
     for record in records:
         if record.sample_id in seen_samples:
@@ -160,6 +162,10 @@ def verify_split_isolation(records: Sequence[BenchmarkUtterance]) -> None:
         indices["source"][record.source_id].add(record.split)
         if record.near_duplicate_id:
             indices["near-duplicate"][record.near_duplicate_id].add(record.split)
+        reference_digest = hashlib.sha256(
+            "".join(normalize_characters(record.reference)).encode("utf-8")
+        ).hexdigest()
+        indices["reference"][reference_digest].add(record.split)
     for kind, rows in indices.items():
         leaking = {
             identifier: sorted(splits) for identifier, splits in rows.items() if len(splits) > 1

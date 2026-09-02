@@ -277,19 +277,33 @@ def _adapter_cache_provenance(adapter: object, request: DecodeRequest) -> dict[s
         settings["base"] = _adapter_cache_provenance(nested, request)["decode_settings"]
     ranker = _nested_adapter(adapter, "ranker")
     if ranker is not None:
+        ranker_revision = getattr(ranker, "model_revision", None)
+        ranker_artifact = getattr(ranker, "model_artifact_sha256", None)
+        ranker_config = getattr(
+            ranker,
+            "config_digest",
+            getattr(ranker, "configuration_digest", None),
+        )
+        if (
+            ranker_revision is None
+            and ranker_artifact is None
+            and ranker_config is None
+            and not _legacy_cache_identity_allowed(ranker)
+            and not _explicit_service_identity(ranker)
+        ):
+            raise ValueError(
+                "ranker identity is required for cache use; provide an exact Hub revision, "
+                "verified local artifact SHA-256, or immutable configuration digest"
+            )
         settings["ranker"] = _jsonable_provenance(
             {
                 "type": f"{type(ranker).__module__}.{type(ranker).__qualname__}",
                 "model": getattr(ranker, "model_name", getattr(ranker, "model_id", None)),
                 "name": getattr(ranker, "name", None),
-                "revision": getattr(ranker, "model_revision", None),
-                "artifactSha256": getattr(ranker, "model_artifact_sha256", None),
+                "revision": ranker_revision,
+                "artifactSha256": ranker_artifact,
                 "runtime": getattr(ranker, "runtime_revision", None),
-                "configDigest": getattr(
-                    ranker,
-                    "config_digest",
-                    getattr(ranker, "configuration_digest", None),
-                ),
+                "configDigest": ranker_config,
             }
         )
     model_revision = _first_provenance_value(adapter, "model_revision")

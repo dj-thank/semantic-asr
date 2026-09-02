@@ -62,6 +62,15 @@ def test_split_isolation_rejects_source_leakage() -> None:
         verify_split_isolation(records)
 
 
+def test_split_isolation_recomputes_reference_leakage_without_near_duplicate_id() -> None:
+    records = [
+        _record("train", "speaker-a", "source-a", "東 京です", ["東京です"], split="train"),
+        _record("test", "speaker-b", "source-b", "東京です", ["東京です"], split="test"),
+    ]
+    with pytest.raises(ValueError, match="reference leakage"):
+        verify_split_isolation(records)
+
+
 def test_benchmark_reports_monotonic_oracle_curve_and_group_bootstrap() -> None:
     records = [
         _record(

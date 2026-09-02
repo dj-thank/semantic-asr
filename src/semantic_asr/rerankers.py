@@ -258,6 +258,7 @@ class StaticCandidateRanker:
     """Deterministic fixture ranker used by tests and integrations."""
 
     name = "static"
+    allow_legacy_cache_identity = True
 
     def __init__(self, scores: Mapping[str, float]) -> None:
         self.scores = {str(key): float(value) for key, value in scores.items()}
