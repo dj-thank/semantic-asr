@@ -11,6 +11,7 @@ from semantic_asr.contracts import CandidateEvidence
 from semantic_asr.experiment_runner import (
     AudioManifestRecord,
     CandidateGenerationConfig,
+    _checkpoint_writer_lock,
     finalize_generated_checkpoint,
     generate_candidates,
     generate_manifest_to_checkpoint,
@@ -198,6 +199,8 @@ def test_resumable_generation_keeps_verified_prefix_after_failure(tmp_path) -> N
     finalize_generated_checkpoint(
         checkpoint,
         output_path=output,
+        expected_rows=len(records),
+        expected_config_sha256=rows[0]["generation"]["configSha256"],
         ranker_path=ranker,
     )
     assert output.is_file()
@@ -287,6 +290,114 @@ def test_resumable_generation_rejects_a_corrupt_terminated_row(tmp_path) -> None
             config=CandidateGenerationConfig(beam_size=3, hypotheses=3),
             checkpoint_path=checkpoint,
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("groupId", "other-group", "group"),
+        ("sourceId", "other-source", "source"),
+        ("domain", "other-domain", "domain"),
+        ("nearDuplicateId", "other-near-duplicate", "near-duplicate"),
+        ("rightsDecision", "review", "rights"),
+        ("generation.licenseId", "other-license", "license"),
+        ("generation.adapter", "other-adapter", "adapter"),
+        ("generation.model", "other-model", "model"),
+        ("candidate.runtimeRevision", "other-runtime", "runtime revision"),
+        ("candidate.audioSha256", "0" * 64, "candidate audio"),
+    ],
+)
+def test_resumable_generation_rejects_changed_identity_fields(
+    tmp_path, field: str, value: str, message: str
+) -> None:
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"RIFF")
+    record = _record(audio)
+    checkpoint = tmp_path / "candidates.jsonl.partial"
+    config = CandidateGenerationConfig(
+        beam_size=3,
+        hypotheses=3,
+        runtime_revision="runtime-r1",
+    )
+    generate_manifest_to_checkpoint(
+        [record],
+        _MockAdapter(),
+        config=config,
+        checkpoint_path=checkpoint,
+    )
+    row = json.loads(checkpoint.read_text("utf-8"))
+    if field.startswith("generation."):
+        row["generation"][field.split(".", 1)[1]] = value
+    elif field.startswith("candidate."):
+        row["candidates"][0]["metadata"][field.split(".", 1)[1]] = value
+    else:
+        row[field] = value
+    checkpoint.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        generate_manifest_to_checkpoint(
+            [record],
+            _MockAdapter(),
+            config=config,
+            checkpoint_path=checkpoint,
+        )
+
+
+def test_finalize_rejects_an_incomplete_or_different_config_checkpoint(tmp_path) -> None:
+    records = []
+    for index in range(2):
+        audio = tmp_path / f"finalize-audio-{index}.wav"
+        audio.write_bytes(f"RIFF-finalize-{index}".encode())
+        records.append(
+            AudioManifestRecord(
+                sample_id=f"finalize-{index}",
+                group_id=f"speaker-{index}",
+                source_id=f"source-{index}",
+                split="test",
+                audio_path=str(audio),
+                reference=f"参照{index}",
+                rights_decision="allow",
+            )
+        )
+    checkpoint = tmp_path / "candidates.jsonl.partial"
+    output = tmp_path / "candidates.jsonl"
+    config = CandidateGenerationConfig(beam_size=3, hypotheses=3)
+    generate_manifest_to_checkpoint(
+        records[:1],
+        _MockAdapter(),
+        config=config,
+        checkpoint_path=checkpoint,
+    )
+
+    with pytest.raises(ValueError, match="row count"):
+        finalize_generated_checkpoint(
+            checkpoint,
+            output_path=output,
+            expected_rows=2,
+            expected_config_sha256=config.digest,
+        )
+    assert checkpoint.is_file()
+    assert not output.exists()
+
+    with pytest.raises(ValueError, match="configuration"):
+        finalize_generated_checkpoint(
+            checkpoint,
+            output_path=output,
+            expected_rows=1,
+            expected_config_sha256="0" * 64,
+        )
+    assert checkpoint.is_file()
+    assert not output.exists()
+
+
+def test_checkpoint_writer_lock_refuses_a_second_writer(tmp_path) -> None:
+    checkpoint = tmp_path / "candidates.jsonl.partial"
+    with (
+        _checkpoint_writer_lock(checkpoint),
+        pytest.raises(RuntimeError, match="active writer"),
+        _checkpoint_writer_lock(checkpoint),
+    ):
+        pass
 
 
 def test_generated_benchmark_and_ranker_manifests_are_compatible_jsonl() -> None:

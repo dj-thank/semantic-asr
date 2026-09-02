@@ -282,6 +282,8 @@ def command_generate_candidates(args: argparse.Namespace) -> int:
     finalize_generated_checkpoint(
         checkpoint,
         output_path=output,
+        expected_rows=len(records),
+        expected_config_sha256=config.digest,
         ranker_path=args.ranker_output,
     )
     print(

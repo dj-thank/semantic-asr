@@ -5,6 +5,7 @@ import json
 import os
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -83,6 +84,7 @@ class GeneratedCandidateRecord:
     model: str
     generation_config_sha256: str
     elapsed_ms: int
+    rights_decision: RightsDecision
     license_id: str | None
     dataset_name: str | None
     dataset_revision: str | None
@@ -96,6 +98,8 @@ class GeneratedCandidateRecord:
             raise ValueError("generated record requires candidates")
         if self.elapsed_ms < 0:
             raise ValueError("generation elapsed time must be non-negative")
+        if self.rights_decision not in {"allow", "deny", "review"}:
+            raise ValueError("unknown generated-record rights decision")
 
     def as_benchmark_row(self) -> dict[str, Any]:
         return {
@@ -109,6 +113,7 @@ class GeneratedCandidateRecord:
             "audioSha256": self.audio_sha256,
             "datasetName": self.dataset_name,
             "datasetRevision": self.dataset_revision,
+            "rightsDecision": self.rights_decision,
             "candidates": [candidate.as_dict() for candidate in self.candidates],
             "generation": {
                 "adapter": self.adapter,
@@ -130,6 +135,17 @@ class GeneratedCandidateRecord:
             "audioSha256": self.audio_sha256,
             "datasetName": self.dataset_name,
             "datasetRevision": self.dataset_revision,
+            "rightsDecision": self.rights_decision,
+            "sourceId": self.source_id,
+            "domain": self.domain,
+            "nearDuplicateId": self.near_duplicate_id,
+            "generation": {
+                "adapter": self.adapter,
+                "model": self.model,
+                "configSha256": self.generation_config_sha256,
+                "elapsedMs": self.elapsed_ms,
+                "licenseId": self.license_id,
+            },
         }
 
 
@@ -243,6 +259,7 @@ def generate_candidates(
         model=model,
         generation_config_sha256=config.digest,
         elapsed_ms=elapsed_ms,
+        rights_decision=record.rights_decision,
         license_id=record.license_id,
         dataset_name=record.dataset_name,
         dataset_revision=record.dataset_revision,
@@ -309,10 +326,51 @@ def _load_checkpoint_rows(
     return rows
 
 
+@contextmanager
+def _checkpoint_writer_lock(checkpoint: Path):
+    """Hold an OS-released advisory lock for one checkpoint writer/finalizer."""
+
+    lock_path = Path(str(checkpoint) + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+b")
+    try:
+        if handle.seek(0, os.SEEK_END) == 0:
+            handle.write(b"\0")
+            handle.flush()
+            os.fsync(handle.fileno())
+        handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise RuntimeError(f"checkpoint already has an active writer: {checkpoint}") from exc
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
 def _validate_checkpoint_prefix(
     records: Sequence[AudioManifestRecord],
     rows: Sequence[Mapping[str, Any]],
     *,
+    adapter: ASRAdapter,
     config: CandidateGenerationConfig,
 ) -> None:
     if len(rows) > len(records):
@@ -321,10 +379,20 @@ def _validate_checkpoint_prefix(
         record = records[index]
         if row.get("sampleId") != record.sample_id:
             raise ValueError(f"checkpoint sample order mismatch at row {index + 1}")
+        if row.get("groupId") != record.group_id:
+            raise ValueError(f"checkpoint group mismatch at row {index + 1}")
+        if row.get("sourceId") != record.source_id:
+            raise ValueError(f"checkpoint source mismatch at row {index + 1}")
         if row.get("split") != record.split:
             raise ValueError(f"checkpoint split mismatch at row {index + 1}")
         if row.get("reference") != record.reference:
             raise ValueError(f"checkpoint reference mismatch at row {index + 1}")
+        if row.get("domain") != record.domain:
+            raise ValueError(f"checkpoint domain mismatch at row {index + 1}")
+        if row.get("nearDuplicateId") != record.near_duplicate_id:
+            raise ValueError(f"checkpoint near-duplicate mismatch at row {index + 1}")
+        if row.get("rightsDecision") != record.rights_decision:
+            raise ValueError(f"checkpoint rights mismatch at row {index + 1}")
         if row.get("datasetName") != record.dataset_name:
             raise ValueError(f"checkpoint dataset mismatch at row {index + 1}")
         if row.get("datasetRevision") != record.dataset_revision:
@@ -332,12 +400,34 @@ def _validate_checkpoint_prefix(
         generation = row.get("generation")
         if not isinstance(generation, Mapping) or generation.get("configSha256") != config.digest:
             raise ValueError(f"checkpoint configuration mismatch at row {index + 1}")
+        if generation.get("adapter") != adapter.name:
+            raise ValueError(f"checkpoint adapter mismatch at row {index + 1}")
+        if generation.get("model") != str(getattr(adapter, "model_name", adapter.name)):
+            raise ValueError(f"checkpoint model mismatch at row {index + 1}")
+        if generation.get("licenseId") != record.license_id:
+            raise ValueError(f"checkpoint license mismatch at row {index + 1}")
         source = Path(record.audio_path).expanduser().resolve()
-        if row.get("audioSha256") != sha256_file(source):
+        audio_sha256 = sha256_file(source)
+        if row.get("audioSha256") != audio_sha256:
             raise ValueError(f"checkpoint audio digest mismatch at row {index + 1}")
         candidates = row.get("candidates")
         if not isinstance(candidates, list) or not candidates:
             raise ValueError(f"checkpoint candidates missing at row {index + 1}")
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                raise ValueError(f"checkpoint candidate invalid at row {index + 1}")
+            CandidateEvidence.from_dict(candidate)
+            metadata = candidate.get("metadata")
+            if not isinstance(metadata, Mapping):
+                raise ValueError(f"checkpoint candidate metadata missing at row {index + 1}")
+            if metadata.get("experimentSampleId") != record.sample_id:
+                raise ValueError(f"checkpoint candidate sample mismatch at row {index + 1}")
+            if metadata.get("audioSha256") != audio_sha256:
+                raise ValueError(f"checkpoint candidate audio mismatch at row {index + 1}")
+            if metadata.get("generationConfigSha256") != config.digest:
+                raise ValueError(f"checkpoint candidate configuration mismatch at row {index + 1}")
+            if metadata.get("runtimeRevision") != config.runtime_revision:
+                raise ValueError(f"checkpoint runtime revision mismatch at row {index + 1}")
         if config.model_revision is not None and any(
             not isinstance(candidate, Mapping)
             or not isinstance(candidate.get("metadata"), Mapping)
@@ -361,20 +451,21 @@ def generate_manifest_to_checkpoint(
     bound_config = _bind_generation_config(adapter, config)
     checkpoint = Path(checkpoint_path)
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
-    rows = _load_checkpoint_rows(checkpoint, repair_unterminated_tail=True)
-    _validate_checkpoint_prefix(records, rows, config=bound_config)
-    if progress is not None and rows:
-        progress(len(rows), len(records))
-    with checkpoint.open("a", encoding="utf-8", newline="\n") as handle:
-        for record in records[len(rows) :]:
-            generated = generate_candidates(record, adapter, config=bound_config)
-            row = generated.as_benchmark_row()
-            handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-            rows.append(row)
-            if progress is not None:
-                progress(len(rows), len(records))
+    with _checkpoint_writer_lock(checkpoint):
+        rows = _load_checkpoint_rows(checkpoint, repair_unterminated_tail=True)
+        _validate_checkpoint_prefix(records, rows, adapter=adapter, config=bound_config)
+        if progress is not None and rows:
+            progress(len(rows), len(records))
+        with checkpoint.open("a", encoding="utf-8", newline="\n") as handle:
+            for record in records[len(rows) :]:
+                generated = generate_candidates(record, adapter, config=bound_config)
+                row = generated.as_benchmark_row()
+                handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+                rows.append(row)
+                if progress is not None:
+                    progress(len(rows), len(records))
     return rows
 
 
@@ -389,6 +480,11 @@ def _ranker_row_from_benchmark(row: Mapping[str, Any]) -> dict[str, Any]:
         "audioSha256": row["audioSha256"],
         "datasetName": row.get("datasetName"),
         "datasetRevision": row.get("datasetRevision"),
+        "rightsDecision": row.get("rightsDecision"),
+        "sourceId": row.get("sourceId"),
+        "domain": row.get("domain"),
+        "nearDuplicateId": row.get("nearDuplicateId"),
+        "generation": row.get("generation"),
     }
 
 
@@ -396,34 +492,50 @@ def finalize_generated_checkpoint(
     checkpoint_path: str | Path,
     *,
     output_path: str | Path,
+    expected_rows: int,
+    expected_config_sha256: str,
     ranker_path: str | Path | None = None,
 ) -> None:
     """Promote a complete checkpoint last, after any derived ranker file is durable."""
 
     checkpoint = Path(checkpoint_path)
-    rows = _load_checkpoint_rows(checkpoint)
-    if not rows:
-        raise ValueError("generated checkpoint is empty")
-    output = Path(output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    if ranker_path is not None:
-        ranker = Path(ranker_path)
-        ranker.parent.mkdir(parents=True, exist_ok=True)
-        ranker_partial = Path(str(ranker) + ".partial")
-        with ranker_partial.open("w", encoding="utf-8", newline="\n") as handle:
-            for row in rows:
-                handle.write(
-                    json.dumps(
-                        _ranker_row_from_benchmark(row),
-                        ensure_ascii=False,
-                        separators=(",", ":"),
+    with _checkpoint_writer_lock(checkpoint):
+        rows = _load_checkpoint_rows(checkpoint)
+        if not rows:
+            raise ValueError("generated checkpoint is empty")
+        if len(rows) != expected_rows:
+            raise ValueError(
+                "generated checkpoint row count mismatch: "
+                f"expected {expected_rows}, got {len(rows)}"
+            )
+        if len(expected_config_sha256) != 64:
+            raise ValueError("expected configuration digest must be SHA-256 hex")
+        if any(
+            not isinstance(row.get("generation"), Mapping)
+            or row["generation"].get("configSha256") != expected_config_sha256
+            for row in rows
+        ):
+            raise ValueError("generated checkpoint configuration mismatch")
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if ranker_path is not None:
+            ranker = Path(ranker_path)
+            ranker.parent.mkdir(parents=True, exist_ok=True)
+            ranker_partial = Path(str(ranker) + ".partial")
+            with ranker_partial.open("w", encoding="utf-8", newline="\n") as handle:
+                for row in rows:
+                    handle.write(
+                        json.dumps(
+                            _ranker_row_from_benchmark(row),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        + "\n"
                     )
-                    + "\n"
-                )
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(ranker_partial, ranker)
-    os.replace(checkpoint, output)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(ranker_partial, ranker)
+        os.replace(checkpoint, output)
 
 
 def audio_record_from_row(row: Mapping[str, Any], *, line_number: int = 0) -> AudioManifestRecord:
