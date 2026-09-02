@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -38,8 +39,23 @@ def test_second_ear_agreement_sets_cross_model() -> None:
     rows = enrich_candidates(_candidates(), second_ear=ear, config=EnrichmentConfig())
     assert rows[0].cross_model == 1.0
     assert rows[1].cross_model < 1.0
-    assert rows[0].metadata["secondEarText"] == "料金は三千円です。"
+    assert "secondEarText" not in rows[0].metadata
+    assert (
+        rows[0].metadata["secondEarTextSha256"]
+        == hashlib.sha256("料金は三千円です。".encode()).hexdigest()
+    )
+    assert rows[0].metadata["secondEarSampleId"] == "s"
     assert rows[0].metadata["secondEarRevision"] == "qwen-revision"
+
+
+def test_second_ear_text_requires_explicit_research_opt_in() -> None:
+    ear = SecondEarHypothesis(sample_id="s", texts=("料金は三千円です。",))
+    rows = enrich_candidates(
+        _candidates(),
+        second_ear=ear,
+        config=EnrichmentConfig(retain_second_ear_text=True),
+    )
+    assert rows[0].metadata["secondEarText"] == "料金は三千円です。"
 
 
 def test_ngram_lexical_is_normalised_within_set() -> None:
@@ -82,6 +98,8 @@ def test_second_ear_candidate_is_appended_once() -> None:
     assert rows[-1].cross_model is None
     assert rows[-1].metadata["secondEarAgreement"] is None
     assert rows[-1].metadata["crossModelEligible"] is False
+    assert "secondEarText" not in rows[-1].metadata
+    assert len(rows[-1].metadata["secondEarTextSha256"]) == 64
     assert all(row.hypothesis_count == 3 for row in rows)
     duplicate = enrich_candidates(
         _candidates(),
@@ -101,3 +119,6 @@ def test_manifest_rows_round_trip() -> None:
     out = enrich_manifest_rows([row], second_ear=ear, config=EnrichmentConfig())
     assert out[0]["candidates"][0]["cross_model"] == 1.0
     assert out[0]["enrichment"]["secondEar"] == "qwen3-asr"
+    assert out[0]["enrichment"]["secondEarSampleId"] == "s"
+    assert "secondEarText" not in out[0]["enrichment"]
+    assert len(out[0]["enrichment"]["secondEarTextSha256"]) == 64

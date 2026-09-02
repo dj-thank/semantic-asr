@@ -13,11 +13,13 @@ This module adds two independent evidence streams to an existing candidate JSONL
 
 Optionally the second-ear hypothesis itself is appended as a candidate. It is acoustically
 grounded (it is an ASR output), so it may enter the observed-eligible pool, but it carries no
-Whisper decoder score and is tagged with its own source and score domain.
+Whisper decoder score and is tagged with its own source and score domain. Second-ear text is
+represented by a digest in metadata by default; retaining it is an explicit local-research opt-in.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -99,10 +101,18 @@ def _normalise_within_set(values: Sequence[float | None]) -> list[float | None]:
 
 @dataclass(frozen=True, slots=True)
 class EnrichmentConfig:
+    """Controls evidence enrichment and its privacy-preserving output contract."""
+
     add_second_ear_candidate: bool = False
     second_ear_source: str = "qwen3-asr"
     ngram_model: NGramLanguageModel | None = None
     ngram_name: str = "ngram"
+    # Local research-only opt-in; normal manifests retain a digest, not transcript text.
+    retain_second_ear_text: bool = False
+
+
+def _text_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def enrich_candidates(
@@ -130,17 +140,21 @@ def enrich_candidates(
     enriched: list[CandidateEvidence] = []
     for candidate, raw_ngram, lexical in zip(rows, ngram_values, lexical_values, strict=True):
         metadata: dict[str, Any] = dict(candidate.metadata)
+        metadata.pop("secondEarText", None)
         cross_model = candidate.cross_model
         if second_text is not None:
             score = agreement(candidate.text, second_text)
             metadata.update(
                 {
                     "secondEarSource": config.second_ear_source,
-                    "secondEarText": second_text,
+                    "secondEarTextSha256": _text_sha256(second_text),
                     "secondEarAgreement": score,
+                    "secondEarSampleId": second_ear.sample_id,
                     "secondEarRevision": second_ear.model_revision,
                 }
             )
+            if config.retain_second_ear_text:
+                metadata["secondEarText"] = second_text
             cross_model = score
         if raw_ngram is not None:
             metadata.update(
@@ -169,6 +183,26 @@ def enrich_candidates(
                     ngram_value = config.ngram_model.score(second_text).average_log_probability
                 except ValueError:
                     ngram_value = None
+            second_ear_metadata: dict[str, Any] = {
+                "adapter": config.second_ear_source,
+                "scoreDomain": f"{config.second_ear_source}|second-ear",
+                "secondEarSource": config.second_ear_source,
+                "secondEarTextSha256": _text_sha256(second_text),
+                "secondEarAgreement": None,
+                "crossModelEligible": False,
+                "secondEarSampleId": second_ear.sample_id,
+                "secondEarRevision": second_ear.model_revision,
+                "secondEarCandidate": True,
+                "ngramAverageLogProbability": ngram_value,
+                "ngramSourceSha256": (
+                    config.ngram_model.source_sha256 if config.ngram_model is not None else None
+                ),
+                "ngramSourceRevision": (
+                    config.ngram_model.source_revision if config.ngram_model is not None else None
+                ),
+            }
+            if config.retain_second_ear_text:
+                second_ear_metadata["secondEarText"] = second_text
             enriched.append(
                 CandidateEvidence(
                     candidate_id=f"{config.second_ear_source}:0001",
@@ -176,27 +210,7 @@ def enrich_candidates(
                     rank=len(enriched) + 1,
                     hypothesis_count=len(enriched) + 1,
                     source=config.second_ear_source,
-                    metadata={
-                        "adapter": config.second_ear_source,
-                        "scoreDomain": f"{config.second_ear_source}|second-ear",
-                        "secondEarSource": config.second_ear_source,
-                        "secondEarText": second_text,
-                        "secondEarAgreement": None,
-                        "crossModelEligible": False,
-                        "secondEarRevision": second_ear.model_revision,
-                        "secondEarCandidate": True,
-                        "ngramAverageLogProbability": ngram_value,
-                        "ngramSourceSha256": (
-                            config.ngram_model.source_sha256
-                            if config.ngram_model is not None
-                            else None
-                        ),
-                        "ngramSourceRevision": (
-                            config.ngram_model.source_revision
-                            if config.ngram_model is not None
-                            else None
-                        ),
-                    },
+                    metadata=second_ear_metadata,
                 )
             )
             enriched = [
@@ -214,20 +228,22 @@ def enrich_manifest_rows(
     output: list[dict[str, Any]] = []
     for row in rows:
         payload = dict(row)
+        sample_id = str(payload.get("sampleId"))
+        sample = second_ear.get(sample_id)
         candidates = [CandidateEvidence.from_dict(dict(value)) for value in payload["candidates"]]
         enriched = enrich_candidates(
             candidates,
-            second_ear=second_ear.get(str(payload.get("sampleId"))),
+            second_ear=sample,
             config=config,
         )
         payload["candidates"] = [candidate.as_dict() for candidate in enriched]
         payload["enrichment"] = {
-            "secondEar": config.second_ear_source if second_ear else None,
-            "secondEarRevision": (
-                second_ear[str(payload.get("sampleId"))].model_revision
-                if str(payload.get("sampleId")) in second_ear
-                else None
+            "secondEar": config.second_ear_source if sample else None,
+            "secondEarSampleId": sample.sample_id if sample else None,
+            "secondEarTextSha256": (
+                _text_sha256(sample.texts[0]) if sample and sample.texts else None
             ),
+            "secondEarRevision": sample.model_revision if sample else None,
             "secondEarCandidateAdded": bool(
                 config.add_second_ear_candidate
                 and any(candidate.metadata.get("secondEarCandidate") for candidate in enriched)

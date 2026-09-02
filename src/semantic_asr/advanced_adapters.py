@@ -182,6 +182,24 @@ def apply_loop_guard(
     ]
 
 
+def _single_generated_result(generated: Sequence[Any]) -> Any:
+    """Require one utterance wrapper from a direct CTranslate2 ``generate`` call."""
+
+    if len(generated) != 1:
+        raise RuntimeError("expected exactly one generated utterance")
+    return generated[0]
+
+
+def _best_stage_row(rows: Sequence[CandidateEvidence]) -> CandidateEvidence | None:
+    """Return the highest-scoring generated row, or ``None`` when a stage was empty."""
+
+    return max(
+        rows,
+        key=lambda row: row.sequence_score if row.sequence_score is not None else -math.inf,
+        default=None,
+    )
+
+
 class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
     """CTranslate2 Whisper N-best with decoder-path probability aggregation."""
 
@@ -431,9 +449,7 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
                 max_length=max_length,
                 **generate_kwargs,
             )
-            if len(generated) != 1:
-                raise RuntimeError("expected exactly one generated utterance")
-            result = generated[0]
+            result = _single_generated_result(generated)
             score_domain = self._stage_score_domain(
                 request,
                 language=language,
@@ -454,7 +470,7 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
                 common_metadata=common_metadata,
                 duration_seconds=duration_seconds,
             )
-            best = max(stage_rows, key=lambda row: row.sequence_score or -math.inf, default=None)
+            best = _best_stage_row(stage_rows)
             stage_log.append(
                 {
                     "stage": stage_id,
@@ -485,7 +501,7 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
                 no_repeat_ngram_size=self.no_repeat_ngram_size,
                 max_length=max_length,
             )
-            result = generated[0]
+            result = _single_generated_result(generated)
             stage_rows = self._rows_from_result(
                 result,
                 tokenizer=tokenizer,
@@ -510,13 +526,14 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
                 common_metadata=common_metadata,
                 duration_seconds=duration_seconds,
             )
+            best = _best_stage_row(stage_rows)
             stage_log.append(
                 {
                     "stage": stage_id,
                     "temperature": temperature,
                     "paths": len(stage_rows),
                     "degeneratePaths": sum(1 for row in stage_rows if row.metadata["degenerate"]),
-                    "bestDegenerate": False,
+                    "bestDegenerate": bool(best is not None and best.metadata["degenerate"]),
                     "enrichment": True,
                 }
             )

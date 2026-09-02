@@ -4,6 +4,7 @@ import pytest
 
 from semantic_asr.advanced_adapters import (
     LoopGuardConfig,
+    _single_generated_result,
     apply_loop_guard,
     compression_ratio,
     repeated_ngram_fraction,
@@ -41,6 +42,14 @@ def test_enrichment_stage_is_optional() -> None:
     assert stage == ("mbr-sample-t0.7", 0.7)
     with pytest.raises(ValueError):
         LoopGuardConfig(extra_samples=-1)
+
+
+def test_generate_result_must_contain_exactly_one_utterance() -> None:
+    result = object()
+    assert _single_generated_result([result]) is result
+    for generated in ([], [object(), object()]):
+        with pytest.raises(RuntimeError, match="exactly one"):
+            _single_generated_result(generated)
 
 
 def test_degeneracy_reasons() -> None:

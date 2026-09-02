@@ -159,6 +159,33 @@ def test_all_degenerate_pool_is_provisional_but_keeps_diagnostics() -> None:
     assert observed.decision == "provisional"
 
 
+def test_primary_all_degenerate_stays_provisional_with_second_ear_candidate() -> None:
+    candidates = [
+        CandidateEvidence(
+            "loop",
+            "ループです",
+            acoustic=1.0,
+            mora=1.0,
+            lexical=1.0,
+            preservation=1.0,
+            cross_model=1.0,
+            metadata={"degenerate": True},
+        ),
+        CandidateEvidence(
+            "second-ear:0001",
+            "別の補助候補です",
+            metadata={"secondEarCandidate": True},
+        ),
+    ]
+
+    ranked = fuse_candidates(candidates)
+
+    assert ranked[0].gate.needs_relisten
+    assert ranked[0].gate.abstain
+    assert "all-candidates-degenerate" in ranked[0].gate.reasons
+    assert "all-primary-candidates-degenerate" in ranked[0].gate.reasons
+
+
 def test_cross_model_consensus_is_recorded_on_duplicate_text() -> None:
     merged = merge_candidates(
         [CandidateEvidence("w", "同じ文", acoustic=0.7, source="whisper")],
