@@ -50,6 +50,14 @@ def test_prepare_rights_allow_only_exact_asset_or_explicit_operator_decision() -
     assert prepare.resolve_rights_decision("jsut-basic5000", "1" * 40, requested="allow") == "allow"
 
 
+def test_reference_digest_groups_normalized_duplicates_into_one_split() -> None:
+    prepare = _load_script("prepare_public_manifest")
+    first = prepare.normalized_reference_digest("東 京です")
+    second = prepare.normalized_reference_digest("東京です")
+    assert first == second
+    assert prepare.assign_split(first, "fixed-seed") == prepare.assign_split(second, "fixed-seed")
+
+
 def test_prepare_rejects_checkout_output_even_when_ignored() -> None:
     prepare = _load_script("prepare_public_manifest")
     with pytest.raises(ValueError, match="outside the repository"):
@@ -130,8 +138,15 @@ def test_prepare_materializes_exact_asset_only_in_external_destination(
     row = json.loads((output_dir / "manifest.jsonl").read_text(encoding="utf-8"))
     assert row["reference"] == "参照文"
     assert row["rightsDecision"] == "allow"
-    assert row["audioPath"] == str((output_dir / "wav" / "reazonspeech-test-000000.wav").resolve())
-    assert (output_dir / "wav" / "reazonspeech-test-000000.wav").read_bytes() == b"WAV"
+    source_digest = prepare.hashlib.sha256(b"audio").hexdigest()
+    reference_digest = prepare.normalized_reference_digest("参照文")
+    expected_wav = output_dir / "wav" / f"reazonspeech-test-{source_digest[:16]}.wav"
+    assert row["audioPath"] == str(expected_wav.resolve())
+    assert row["sourceId"] == f"audio-sha256:{source_digest}"
+    assert row["groupId"] == f"audio-sha256:{source_digest}"
+    assert row["nearDuplicateId"] == f"reference-sha256:{reference_digest}"
+    assert row["split"] == prepare.assign_split(reference_digest, "semantic-asr-public-v1")
+    assert expected_wav.read_bytes() == b"WAV"
     summary = json.loads(capsys.readouterr().out)
     assert summary["rawExport"] is True
 

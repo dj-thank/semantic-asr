@@ -6,9 +6,10 @@ is supplied, and the output directory must resolve outside this checkout.  Right
 default to ``review``; the one dataset/revision explicitly supported by this
 repository is allowed only when no stricter registry decision is supplied.
 
-The public test sets used here carry no speaker labels, so ``groupId`` falls back
-to the sample identifier and the resulting split is *not* speaker-disjoint.  Record
-that limitation with any quality claim.
+The public test sets used here carry no speaker labels, so ``groupId`` is a stable
+audio digest and the resulting split is *not* speaker-disjoint. Exact normalized
+reference duplicates share a ``nearDuplicateId`` and split to prevent direct label
+leakage. Record the remaining speaker limitation with any quality claim.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import argparse
 import hashlib
 import io
 import json
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +76,17 @@ def assign_split(sample_id: str, seed: str) -> str:
     if bucket < 0.8:
         return "calibration"
     return "test"
+
+
+def normalized_reference_digest(value: str) -> str:
+    normalized = "".join(
+        character
+        for character in unicodedata.normalize("NFKC", str(value or ""))
+        if not character.isspace()
+    )
+    if not normalized:
+        raise ValueError("reference transcript is empty after normalization")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def exact_supported_public_asset(dataset: str, dataset_revision: str) -> bool:
@@ -234,26 +247,35 @@ def main() -> int:
 
     manifest_path = out / "manifest.jsonl"
     counts = {"train": 0, "calibration": 0, "test": 0}
+    seen_source_digests: set[str] = set()
     with manifest_path.open("w", encoding="utf-8") as handle:
-        for index, row in enumerate(dataset):
+        for row in dataset:
             audio = row["audio"]
+            audio_bytes = bytes(audio["bytes"])
+            source_digest = hashlib.sha256(audio_bytes).hexdigest()
+            if source_digest in seen_source_digests:
+                raise ValueError("public dataset contains duplicate audio bytes")
+            seen_source_digests.add(source_digest)
+            reference = str(row["transcription"]).strip()
+            reference_digest = normalized_reference_digest(reference)
             array, rate = soundfile_module.read(io.BytesIO(audio["bytes"]), dtype="float32")
             if array.ndim > 1:
                 array = array.mean(axis=1)
             if rate != 16000:
                 array = resample_poly_fn(array, 16000, rate).astype(numpy_module.float32)
-            sample_id = f"{args.dataset}-{index:06d}"
+            sample_id = f"{args.dataset}-{source_digest[:16]}"
             wav_path = wav_dir / f"{sample_id}.wav"
             soundfile_module.write(wav_path, array, 16000, subtype="PCM_16")
-            split = assign_split(sample_id, args.seed)
+            split = assign_split(reference_digest, args.seed)
             counts[split] += 1
             record = {
                 "sampleId": sample_id,
-                "groupId": sample_id,
-                "sourceId": sample_id,
+                "groupId": f"audio-sha256:{source_digest}",
+                "sourceId": f"audio-sha256:{source_digest}",
+                "nearDuplicateId": f"reference-sha256:{reference_digest}",
                 "split": split,
                 "audioPath": str(wav_path.resolve()),
-                "reference": str(row["transcription"]).strip(),
+                "reference": reference,
                 "domain": spec["domain"],
                 "rightsDecision": rights_decision,
                 "rightsAssetId": rights_asset_id,
