@@ -136,7 +136,7 @@ The evaluation corpus roles must also be separated:
 
 | Corpus | Proper role | Why / limitation |
 |---|---|---|
-| ReazonSpeech locked 600 | broadcast content regression and candidate-oracle baseline | public and already measured, but caption/segment boundaries are imperfect and only 6/116 test references contain a detected filler |
+| ReazonSpeech locked 600 | conditional legacy broadcast regression and candidate-oracle baseline | public and already measured, but caption/segment boundaries are imperfect, speaker IDs are absent, two normalized references cross train/calibration, and only 6/116 test references contain a detected filler; regenerate strict splits before promotion |
 | HTH Japanese casual conversation preview | immediate verbatim-fidelity pilot | 69 human-checked native casual utterances / 324 s, with 16 explicitly tagged filler events and 4 repairs; preview terms have no clear repository license, so keep results local and do not redistribute |
 | HTH full 120 h | candidate production-grade casual-speech audit set | human-verified, filler/disfluency tags and speaker-separated dialogue; commercial access is a separate human decision |
 | Corpus of Spontaneous Japanese (CSJ) | strongest established spontaneous-speech gold set | 661 h, orthographic/phonetic transcripts and explicit filled-pause/repair tags; paid/application-controlled, with commercial use reviewed separately |
