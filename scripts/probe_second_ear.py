@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from pathlib import Path
 
 from semantic_asr.adapters import DecodeRequest, Qwen3ASRAdapter
 
@@ -23,7 +24,7 @@ def main() -> int:
     started = time.perf_counter()
     adapter = Qwen3ASRAdapter(model=args.model, dtype=args.dtype, device_map=args.device_map)
     print(json.dumps({"loadSeconds": round(time.perf_counter() - started, 1)}), flush=True)
-    for line in open(args.manifest, encoding="utf-8"):
+    for line in Path(args.manifest).read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         row = json.loads(line)
