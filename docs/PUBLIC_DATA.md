@@ -56,9 +56,10 @@ When a registry is supplied, both `derive_features` and `redistribute_raw` must 
 `allow`; a CLI `allow` cannot override a registry `review` or `deny`.  The manifest keeps
 the registry asset ID in `rightsAssetId` and the operation decision in `rightsDecision`.
 
-The public test sets used here carry no speaker labels, so `groupId` falls back to the
-sample identifier and the resulting split is not speaker-disjoint.  Record that
-limitation with any quality claim.
+The public test sets used here carry no speaker labels, so `groupId` is a stable audio digest
+and the resulting split is not speaker-disjoint. Exact normalized-reference duplicates share a
+hashed `nearDuplicateId` and are assigned to one split, but that does not recover missing speaker
+lineage. Record the remaining limitation with any quality claim.
 
 ## Probe output
 
@@ -97,6 +98,7 @@ semantic-asr generate-candidates \
   ../semantic-asr-public-data/reazon/manifest.jsonl \
   --output ../semantic-asr-public-data/reazon/all-candidates.jsonl \
   --ranker-output ../semantic-asr-public-data/reazon/all-ranker.jsonl \
+  --allow-raw-export \
   --model large-v3-turbo \
   --model-revision EXACT_MODEL_REVISION
 

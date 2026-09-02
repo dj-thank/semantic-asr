@@ -229,7 +229,7 @@ WAV、参照文、絶対 `audioPath` を含む manifest の materialization は�
 
 ```bash
 python scripts/prepare_public_manifest.py reazonspeech-test --output-dir ../semantic-asr-public-data/reazon --limit 600 --dataset-revision dd08bfb9dfc1cef4e4d0609fd78c3755d48b926f --allow-raw-export
-semantic-asr generate-candidates ../semantic-asr-public-data/reazon/manifest.jsonl   --output ../semantic-asr-public-data/reazon/all-candidates.jsonl   --ranker-output ../semantic-asr-public-data/reazon/all-ranker.jsonl   --model large-v3-turbo --model-revision 0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf   --runtime-revision "$(git rev-parse HEAD)+faster-whisper-1.2.1+ctranslate2-4.8.2"   --device cpu --compute-type int8 --cpu-threads 6   --beam-size 12 --hypotheses 12
+semantic-asr generate-candidates ../semantic-asr-public-data/reazon/manifest.jsonl   --output ../semantic-asr-public-data/reazon/all-candidates.jsonl   --ranker-output ../semantic-asr-public-data/reazon/all-ranker.jsonl   --allow-raw-export   --model large-v3-turbo --model-revision 0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf   --runtime-revision "$(git rev-parse HEAD)+faster-whisper-1.2.1+ctranslate2-4.8.2"   --device cpu --compute-type int8 --cpu-threads 6   --beam-size 12 --hypotheses 12
 python scripts/run_real_audio_pipeline.py   --candidates "../semantic-asr-public-data/reazon/all-candidates.jsonl"   --output-dir ../semantic-asr-public-data/reazon/pipeline   --allow-raw-export
 ```
 
