@@ -11,6 +11,7 @@ from semantic_asr.adapters import (
     Qwen3ASRAdapter,
     Qwen3ForcedAlignerAdapter,
 )
+from semantic_asr.adapters_v2 import FasterWhisperPathAdapter
 from semantic_asr.contracts import CandidateEvidence
 from semantic_asr.experiment_runner import (
     AudioManifestRecord,
@@ -57,6 +58,32 @@ def test_unknown_faster_whisper_hub_model_requires_an_exact_revision(monkeypatch
 
     with pytest.raises(ValueError, match="exact 40-character revision"):
         FasterWhisperAdapter(model="publisher/unknown-model", device="cpu")
+
+
+def test_v2_path_adapter_requires_and_binds_exact_model_identity(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+    module = ModuleType("faster_whisper")
+
+    class _WhisperModel:
+        def __init__(self, model: str, **kwargs: object) -> None:
+            calls.update({"model": model, **kwargs})
+
+    module.WhisperModel = _WhisperModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", module)
+
+    with pytest.raises(ValueError, match="exact 40-character revision"):
+        FasterWhisperPathAdapter(model="publisher/unknown-model", device="cpu")
+
+    revision = "1" * 40
+    adapter = FasterWhisperPathAdapter(
+        model="publisher/unknown-model",
+        model_revision=revision,
+        runtime_revision="runtime-r1",
+        device="cpu",
+    )
+    assert calls["revision"] == revision
+    assert adapter.model_revision == revision
+    assert adapter.runtime_revision == "runtime-r1"
 
 
 def test_qwen_revision_resolves_one_snapshot_for_model_and_processor(monkeypatch) -> None:

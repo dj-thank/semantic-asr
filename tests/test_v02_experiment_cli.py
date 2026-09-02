@@ -231,9 +231,7 @@ def test_partition_and_rerank_round_trip_preserves_unsafe_annotation_metadata() 
                 json.loads(line)
                 for line in (split_dir / f"{split}.jsonl").read_text(encoding="utf-8").splitlines()
             ]
-            assert {
-                row["sampleId"]: row["annotatedReference"] for row in split_rows
-            } == {
+            assert {row["sampleId"]: row["annotatedReference"] for row in split_rows} == {
                 sample_id: annotation
                 for sample_id, annotation in annotations.items()
                 if sample_id.startswith(f"sample-{split}")
@@ -258,17 +256,13 @@ def test_partition_and_rerank_round_trip_preserves_unsafe_annotation_metadata() 
         reranked_rows = [
             json.loads(line) for line in reranked.read_text(encoding="utf-8").splitlines()
         ]
-        assert {
-            row["sampleId"]: row["annotatedReference"] for row in reranked_rows
-        } == {
+        assert {row["sampleId"]: row["annotatedReference"] for row in reranked_rows} == {
             "sample-test": annotations["sample-test"],
             "sample-test-masked": annotations["sample-test-masked"],
         }
 
         report = run_benchmark(load_benchmark_jsonl(reranked), ks=(1, 2), bootstrap_iterations=2)
-        assert {
-            row.sample_id: row.annotated_reference for row in report.rows
-        } == {
+        assert {row.sample_id: row.annotated_reference for row in report.rows} == {
             "sample-test": annotations["sample-test"],
             "sample-test-masked": annotations["sample-test-masked"],
         }
