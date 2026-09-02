@@ -32,7 +32,8 @@ def test_frontier_train_ngram_and_throttle_policy(capsys) -> None:
             == 0
         )
         payload = json.loads(model.read_text(encoding="utf-8"))
-        assert payload["schemaVersion"] == "ngram-v1"
+        assert payload["schemaVersion"] == "ngram-v2"
+        assert len(payload["sourceSha256"]) == 64
         assert payload["documentCount"] == 3
         assert main(["throttle-policy", "--effort", "edge-gpu"]) == 0
         stdout = capsys.readouterr().out

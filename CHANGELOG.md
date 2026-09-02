@@ -9,6 +9,10 @@
 - Ranker training now skips utterances with a single surviving candidate instead of aborting.
 - Added `scripts/prepare_public_manifest.py` (Hugging Face public test sets to rights-annotated manifests) and `scripts/run_real_audio_pipeline.py` (partition → train → calibrate → apply → benchmark through the CLI).
 - Added `enrich-candidates` (second-ear agreement as `cross_model`, n-gram score as `lexical`, optional second-ear candidate) and `scripts/probe_second_ear.py`; measured neutral or harmful on the locked test split and recorded as such.
+- Bound public-dataset, faster-whisper and Qwen loaders to immutable revisions; model/config provenance mismatches now fail before inference, and n-gram artifacts retain their input digest/revision.
+- Added diagnostic-only contiguous-boundary alignment and fixed length-ratio slices. They quantify reference-window overrun but never affect candidate selection or the primary strict CER.
+- Tested calibration-selected in-domain n-grams and reference-free Qwen uncertainty gates; neither improved the locked test, so both remain rejected/held rather than becoming defaults.
+- Added an evidence-backed architecture and technology roadmap: keep the measured Whisper primary, test cached causal-LM probabilities before building a cache, require exogenous entity catalogs and no-bias/distractor arms, and defer GPU/edge profiles until exact-head measurements exist.
 - Pinned eight 2025–2026 primary sources and three falsifiable translations in the research registry; see `docs/RESEARCH_2026-09-02.md`.
 
 ## 0.2.0 — 2026-08-31

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from semantic_asr.contracts import CandidateEvidence
 from semantic_asr.enrichment import (
     EnrichmentConfig,
@@ -7,6 +11,7 @@ from semantic_asr.enrichment import (
     agreement,
     enrich_candidates,
     enrich_manifest_rows,
+    load_second_ear,
 )
 from semantic_asr.ngram import NGramLanguageModel
 
@@ -25,21 +30,47 @@ def _candidates() -> list[CandidateEvidence]:
 
 
 def test_second_ear_agreement_sets_cross_model() -> None:
-    ear = SecondEarHypothesis(sample_id="s", texts=("料金は三千円です。",))
+    ear = SecondEarHypothesis(
+        sample_id="s",
+        texts=("料金は三千円です。",),
+        model_revision="qwen-revision",
+    )
     rows = enrich_candidates(_candidates(), second_ear=ear, config=EnrichmentConfig())
     assert rows[0].cross_model == 1.0
     assert rows[1].cross_model < 1.0
     assert rows[0].metadata["secondEarText"] == "料金は三千円です。"
+    assert rows[0].metadata["secondEarRevision"] == "qwen-revision"
 
 
 def test_ngram_lexical_is_normalised_within_set() -> None:
-    model = NGramLanguageModel(order=2, mode="character").fit(["料金は三千円です"] * 5)
+    model = NGramLanguageModel(
+        order=2,
+        mode="character",
+        source_sha256="a" * 64,
+        source_revision="corpus-revision",
+    ).fit(["料金は三千円です"] * 5)
     rows = enrich_candidates(
         _candidates(), second_ear=None, config=EnrichmentConfig(ngram_model=model)
     )
     assert rows[0].lexical == 1.0
     assert 0.0 <= rows[1].lexical < 1.0
     assert "ngramAverageLogProbability" in rows[0].metadata
+    assert rows[0].metadata["ngramSourceSha256"] == "a" * 64
+    assert rows[0].metadata["ngramSourceRevision"] == "corpus-revision"
+
+
+def test_second_ear_loader_rejects_revision_mismatch(tmp_path) -> None:
+    path = tmp_path / "ear.jsonl"
+    path.write_text(
+        json.dumps(
+            {"sampleId": "s", "hypotheses": ["はい"], "modelRevision": "actual"},
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="revision"):
+        load_second_ear(path, model_revision="claimed")
 
 
 def test_second_ear_candidate_is_appended_once() -> None:

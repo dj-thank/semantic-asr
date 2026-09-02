@@ -78,6 +78,77 @@ def lenient_cer(reference: str, hypothesis: str) -> float | None:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ContiguousAlignmentDiagnostic:
+    """Reference-to-hypothesis-window diagnostic; never a candidate-selection score."""
+
+    edits: int
+    reference_characters: int
+    hypothesis_characters: int
+    retained_start: int
+    retained_end: int
+    retained_characters: int
+    prefix_overrun_characters: int
+    suffix_overrun_characters: int
+    aligned_cer: float
+
+
+def best_contiguous_alignment(
+    reference: str,
+    hypothesis: str,
+) -> ContiguousAlignmentDiagnostic | None:
+    """Align the full strict reference to the best contiguous hypothesis window.
+
+    Prefix and suffix skips are free only for this diagnostic. The primary CER and all
+    candidate-selection paths remain unchanged. Ties prefer the longest retained window and
+    then the earliest start, so the result is deterministic.
+    """
+
+    expected = normalize_characters(reference)
+    observed = normalize_characters(hypothesis)
+    if not expected:
+        return None
+
+    # Each cell stores (edit cost, retained-window start). A zero-cost row-zero cell lets a
+    # contiguous window begin at any hypothesis boundary without charging the skipped prefix.
+    previous: list[tuple[int, int]] = [(row, 0) for row in range(len(expected) + 1)]
+    best = (len(expected), 0, 0, 0)
+    for end, observed_character in enumerate(observed, 1):
+        current: list[tuple[int, int]] = [(0, end)]
+        for row, expected_character in enumerate(expected, 1):
+            options = (
+                (previous[row][0] + 1, previous[row][1]),
+                (current[row - 1][0] + 1, current[row - 1][1]),
+                (
+                    previous[row - 1][0] + (expected_character != observed_character),
+                    previous[row - 1][1],
+                ),
+            )
+            current.append(min(options, key=lambda value: (value[0], -(end - value[1]), value[1])))
+        previous = current
+        candidate = (
+            current[len(expected)][0],
+            -(end - current[len(expected)][1]),
+            current[len(expected)][1],
+            end,
+        )
+        if candidate < best:
+            best = candidate
+
+    edits, _negative_retained, start, end = best
+    return ContiguousAlignmentDiagnostic(
+        edits=edits,
+        reference_characters=len(expected),
+        hypothesis_characters=len(observed),
+        retained_start=start,
+        retained_end=end,
+        retained_characters=end - start,
+        prefix_overrun_characters=start,
+        suffix_overrun_characters=len(observed) - end,
+        aligned_cer=edits / len(expected),
+    )
+
+
 def kana_cer(reference_reading: str | None, hypothesis_reading: str | None) -> float | None:
     if reference_reading is None or hypothesis_reading is None:
         return None

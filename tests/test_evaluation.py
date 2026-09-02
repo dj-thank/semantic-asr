@@ -1,11 +1,15 @@
+from itertools import product
+
 import pytest
 
 from semantic_asr.evaluation import (
+    best_contiguous_alignment,
     cer,
     critical_entity_error_rate,
     currency_error_rate,
     date_time_error_rate,
     disfluency_preservation_rate,
+    edit_distance,
     evaluate_confidence,
     evaluate_transcript,
     negation_error_rate,
@@ -18,6 +22,48 @@ from semantic_asr.evaluation import (
 
 def test_cer_uses_reference_character_count() -> None:
     assert cer("今日は3人です", "今日は2人です") == pytest.approx(1 / 7)
+
+
+def test_best_contiguous_alignment_reports_boundary_overrun_without_changing_text() -> None:
+    diagnostic = best_contiguous_alignment("中央区です", "前置き中央区です後")
+    assert diagnostic is not None
+    assert diagnostic.edits == 0
+    assert diagnostic.prefix_overrun_characters == 3
+    assert diagnostic.suffix_overrun_characters == 1
+    assert diagnostic.retained_characters == 5
+    assert diagnostic.aligned_cer == 0.0
+
+
+def test_best_contiguous_alignment_is_undefined_for_an_empty_reference() -> None:
+    assert best_contiguous_alignment(" \t", "文字") is None
+
+
+def test_best_contiguous_alignment_matches_bruteforce_for_short_sequences() -> None:
+    alphabet = "ab"
+    for reference_size in range(1, 4):
+        for hypothesis_size in range(4):
+            for reference_items in product(alphabet, repeat=reference_size):
+                reference = "".join(reference_items)
+                for hypothesis_items in product(alphabet, repeat=hypothesis_size):
+                    hypothesis = "".join(hypothesis_items)
+                    expected = min(
+                        (
+                            edit_distance(reference, hypothesis[start:end]),
+                            -(end - start),
+                            start,
+                            end,
+                        )
+                        for start in range(len(hypothesis) + 1)
+                        for end in range(start, len(hypothesis) + 1)
+                    )
+                    actual = best_contiguous_alignment(reference, hypothesis)
+                    assert actual is not None
+                    assert (
+                        actual.edits,
+                        -actual.retained_characters,
+                        actual.retained_start,
+                        actual.retained_end,
+                    ) == expected
 
 
 def test_semantic_critical_metrics() -> None:

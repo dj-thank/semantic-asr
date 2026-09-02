@@ -19,6 +19,8 @@ import soundfile as sf
 from datasets import Audio, load_dataset
 from scipy.signal import resample_poly
 
+from semantic_asr.revisions import PUBLIC_DATASET_REVISIONS, resolve_hugging_face_revision
+
 DATASETS = {
     "reazonspeech-test": {
         "path": "japanese-asr/ja_asr.reazonspeech_test",
@@ -54,14 +56,20 @@ def main() -> int:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--limit", type=int, default=0, help="0 = whole test split")
     parser.add_argument("--seed", default="semantic-asr-public-v1")
+    parser.add_argument("--dataset-revision")
     parser.add_argument("--rights-decision", default="allow", choices=["allow", "review", "deny"])
     args = parser.parse_args()
 
     spec = DATASETS[args.dataset]
+    dataset_revision = resolve_hugging_face_revision(
+        spec["path"],
+        args.dataset_revision,
+        PUBLIC_DATASET_REVISIONS,
+    )
     out = Path(args.output_dir)
     wav_dir = out / "wav"
     wav_dir.mkdir(parents=True, exist_ok=True)
-    dataset = load_dataset(spec["path"], split="test")
+    dataset = load_dataset(spec["path"], revision=dataset_revision, split="test")
     dataset = dataset.cast_column("audio", Audio(decode=False))
     if args.limit:
         dataset = dataset.shuffle(seed=20260902).select(range(min(args.limit, len(dataset))))
@@ -92,9 +100,21 @@ def main() -> int:
                 "rightsDecision": args.rights_decision,
                 "licenseId": spec["license"],
                 "durationSeconds": round(len(array) / 16000, 3),
+                "datasetName": spec["path"],
+                "datasetRevision": dataset_revision,
             }
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-    print(json.dumps({"manifest": str(manifest_path), "rows": len(dataset), "splits": counts}))
+    print(
+        json.dumps(
+            {
+                "manifest": str(manifest_path),
+                "rows": len(dataset),
+                "splits": counts,
+                "dataset": spec["path"],
+                "datasetRevision": dataset_revision,
+            }
+        )
+    )
     return 0
 
 

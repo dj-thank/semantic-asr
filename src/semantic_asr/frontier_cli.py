@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -29,6 +30,7 @@ from .listwise_training import (
 from .ngram import NGramLanguageModel
 from .pipeline import effort_profile
 from .ranker_training import load_jsonl_examples
+from .revisions import FASTER_WHISPER_MODEL_REVISIONS, resolve_hugging_face_revision
 from .throttling import RuntimePressure, ThrottleState, throttle_effort
 
 FRONTIER_COMMANDS = {
@@ -50,10 +52,9 @@ def _json(path: str | Path) -> dict[str, Any]:
 
 
 def command_train_ngram(args: argparse.Namespace) -> int:
+    source = Path(args.input)
     texts = [
-        line.strip()
-        for line in Path(args.input).read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        line.strip() for line in source.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
     if not texts:
         raise ValueError("n-gram corpus is empty")
@@ -62,6 +63,8 @@ def command_train_ngram(args: argparse.Namespace) -> int:
         mode=args.mode,
         alpha=args.alpha,
         lowercase_ascii=not args.preserve_ascii_case,
+        source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        source_revision=args.source_revision,
     ).fit(texts)
     model.save(args.output)
     print(
@@ -75,6 +78,8 @@ def command_train_ngram(args: argparse.Namespace) -> int:
                 "order": model.order,
                 "mode": model.mode,
                 "digest": model.digest,
+                "sourceSha256": model.source_sha256,
+                "sourceRevision": model.source_revision,
             },
             ensure_ascii=False,
             indent=2,
@@ -160,7 +165,13 @@ def command_enrich_candidates(args: argparse.Namespace) -> int:
         if line.strip()
     ]
     second_ear = (
-        load_second_ear(args.second_ear, source=args.second_ear_source) if args.second_ear else {}
+        load_second_ear(
+            args.second_ear,
+            source=args.second_ear_source,
+            model_revision=args.second_ear_revision,
+        )
+        if args.second_ear
+        else {}
     )
     ngram_model = NGramLanguageModel.load(args.ngram) if args.ngram else None
     config = EnrichmentConfig(
@@ -199,13 +210,20 @@ def command_enrich_candidates(args: argparse.Namespace) -> int:
 
 def command_generate_candidates(args: argparse.Namespace) -> int:
     records = load_audio_manifest(args.input)
+    model_revision = resolve_hugging_face_revision(
+        args.model,
+        args.model_revision,
+        FASTER_WHISPER_MODEL_REVISIONS,
+    )
     fallback_temperatures = tuple(
         float(value) for value in str(args.fallback_temperatures or "").split(",") if value.strip()
     )
     adapter = PathPreservingFasterWhisperAdapter(
         model=args.model,
+        model_revision=model_revision,
         device=args.device,
         compute_type=args.compute_type,
+        cpu_threads=args.cpu_threads,
         length_penalty=args.length_penalty,
         patience=args.patience,
         repetition_penalty=args.repetition_penalty,
@@ -239,7 +257,7 @@ def command_generate_candidates(args: argparse.Namespace) -> int:
         hotwords=hotwords,
         return_timestamps=args.return_timestamps,
         fail_on_non_allow_rights=not args.allow_review_rights,
-        model_revision=args.model_revision,
+        model_revision=model_revision,
         runtime_revision=args.runtime_revision,
     )
     generated = generate_manifest(records, adapter, config=config)
@@ -322,6 +340,7 @@ def build_parser() -> argparse.ArgumentParser:
     ngram.add_argument("--order", type=int, default=5)
     ngram.add_argument("--alpha", type=float, default=0.1)
     ngram.add_argument("--preserve-ascii-case", action="store_true")
+    ngram.add_argument("--source-revision")
     ngram.set_defaults(func=command_train_ngram)
 
     listwise = commands.add_parser("train-listwise-ranker")
@@ -354,6 +373,7 @@ def build_parser() -> argparse.ArgumentParser:
     enrich.add_argument("--output", required=True)
     enrich.add_argument("--second-ear", help="probe_second_ear.py JSONL output")
     enrich.add_argument("--second-ear-source", default="qwen3-asr")
+    enrich.add_argument("--second-ear-revision")
     enrich.add_argument(
         "--add-second-ear-candidate",
         action="store_true",
@@ -371,6 +391,12 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--runtime-revision")
     generate.add_argument("--device", default="auto")
     generate.add_argument("--compute-type", default="default")
+    generate.add_argument(
+        "--cpu-threads",
+        type=int,
+        default=0,
+        help="CTranslate2 CPU thread count; use a positive fixed value for reproducible runs.",
+    )
     generate.add_argument("--language", default="ja")
     generate.add_argument("--beam-size", type=int, default=12)
     generate.add_argument("--hypotheses", type=int, default=12)

@@ -13,6 +13,8 @@ from typing import Any, Literal
 from .cascade import CascadeConfig, run_candidate_cascade
 from .contracts import CandidateEvidence
 from .evaluation import (
+    ContiguousAlignmentDiagnostic,
+    best_contiguous_alignment,
     cer,
     lenient_cer,
     normalize_characters,
@@ -69,6 +71,7 @@ class BenchmarkRow:
     baseline_lenient_cer: float = 0.0
     cascade_lenient_cer: float = 0.0
     mbr_lenient_cer: float = 0.0
+    boundary_diagnostics: dict[str, ContiguousAlignmentDiagnostic] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +94,18 @@ class BenchmarkSlice:
     mean_adaptive_k: float
     corpus_cer: dict[str, float] | None = None
     lenient_corpus_cer: dict[str, float] | None = None
+    boundary_diagnostics: dict[str, BoundaryDiagnosticAggregate] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryDiagnosticAggregate:
+    aligned_corpus_cer: float
+    alignment_edit_reduction: int
+    overrun_rows: int
+    prefix_overrun_rows: int
+    prefix_overrun_characters: int
+    suffix_overrun_rows: int
+    suffix_overrun_characters: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,10 +124,12 @@ class BenchmarkReport:
     rows: tuple[BenchmarkRow, ...]
     corpus_cer: dict[str, float] | None = None
     lenient_corpus_cer: dict[str, float] | None = None
+    boundary_diagnostics: dict[str, BoundaryDiagnosticAggregate] | None = None
     metric_note: str = (
         "utterance-mean CER keeps punctuation (strict); corpus_cer weights utterances by "
         "reference length; lenient variants strip punctuation and symbols for comparison "
-        "with published Japanese ASR numbers."
+        "with published Japanese ASR numbers. Boundary alignment is diagnostic-only and never "
+        "changes candidate selection or the primary strict CER."
     )
     claim_boundary: str = (
         "A report is evidence only for the exact immutable manifest, models, "
@@ -209,6 +226,16 @@ def evaluate_utterance(
             return 0.0
         return float(lenient_cer(record.reference, text) or 0.0)
 
+    boundary_diagnostics = {
+        system: diagnostic
+        for system, text in (
+            ("baseline", baseline.text),
+            ("cascade", cascade_candidate.text),
+            ("mbr", mbr_candidate.text),
+        )
+        if (diagnostic := best_contiguous_alignment(record.reference, text)) is not None
+    }
+
     return BenchmarkRow(
         sample_id=record.sample_id,
         group_id=record.group_id,
@@ -229,6 +256,7 @@ def evaluate_utterance(
         baseline_lenient_cer=_lenient(baseline.text),
         cascade_lenient_cer=_lenient(cascade_candidate.text),
         mbr_lenient_cer=_lenient(mbr_candidate.text),
+        boundary_diagnostics=boundary_diagnostics,
     )
 
 
@@ -294,6 +322,36 @@ def _corpus_cer(rows: Sequence[BenchmarkRow], *, lenient: bool) -> dict[str, flo
     return output
 
 
+def _boundary_diagnostics(
+    rows: Sequence[BenchmarkRow],
+) -> dict[str, BoundaryDiagnosticAggregate]:
+    output: dict[str, BoundaryDiagnosticAggregate] = {}
+    for system in ("baseline", "cascade", "mbr"):
+        diagnostics = [
+            row.boundary_diagnostics[system]
+            for row in rows
+            if row.boundary_diagnostics is not None and system in row.boundary_diagnostics
+        ]
+        total_reference = sum(value.reference_characters for value in diagnostics)
+        aligned_edits = sum(value.edits for value in diagnostics)
+        strict_edits = round(
+            sum(getattr(row, f"{system}_cer") * row.reference_characters for row in rows)
+        )
+        output[system] = BoundaryDiagnosticAggregate(
+            aligned_corpus_cer=aligned_edits / total_reference if total_reference else 0.0,
+            alignment_edit_reduction=max(0, strict_edits - aligned_edits),
+            overrun_rows=sum(
+                value.prefix_overrun_characters > 0 or value.suffix_overrun_characters > 0
+                for value in diagnostics
+            ),
+            prefix_overrun_rows=sum(value.prefix_overrun_characters > 0 for value in diagnostics),
+            prefix_overrun_characters=sum(value.prefix_overrun_characters for value in diagnostics),
+            suffix_overrun_rows=sum(value.suffix_overrun_characters > 0 for value in diagnostics),
+            suffix_overrun_characters=sum(value.suffix_overrun_characters for value in diagnostics),
+        )
+    return output
+
+
 def _slice(rows: Sequence[BenchmarkRow]) -> BenchmarkSlice:
     if not rows:
         raise ValueError("benchmark slice must not be empty")
@@ -306,6 +364,7 @@ def _slice(rows: Sequence[BenchmarkRow]) -> BenchmarkSlice:
         mean_adaptive_k=fmean(row.adaptive_k for row in rows),
         corpus_cer=_corpus_cer(rows, lenient=False),
         lenient_corpus_cer=_corpus_cer(rows, lenient=True),
+        boundary_diagnostics=_boundary_diagnostics(rows),
     )
 
 
@@ -336,6 +395,21 @@ def run_benchmark(
         selected = [row for row in rows if predicate(row)]
         if selected:
             slices[label] = _slice(selected)
+    for label, lower, upper in (
+        ("length:short<0.75", 0.0, 0.75),
+        ("length:near[0.75,1.25)", 0.75, 1.25),
+        ("length:long>=1.25", 1.25, math.inf),
+    ):
+        selected = [
+            row
+            for row in rows
+            if row.boundary_diagnostics is not None
+            and (diagnostic := row.boundary_diagnostics.get("baseline")) is not None
+            and diagnostic.reference_characters > 0
+            and lower <= diagnostic.hypothesis_characters / diagnostic.reference_characters < upper
+        ]
+        if selected:
+            slices[label] = _slice(selected)
     return BenchmarkReport(
         sample_count=len(rows),
         group_count=len({row.group_id for row in rows}),
@@ -357,6 +431,7 @@ def run_benchmark(
         rows=rows,
         corpus_cer=_corpus_cer(rows, lenient=False),
         lenient_corpus_cer=_corpus_cer(rows, lenient=True),
+        boundary_diagnostics=_boundary_diagnostics(rows),
     )
 
 

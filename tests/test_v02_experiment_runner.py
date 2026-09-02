@@ -20,6 +20,7 @@ from semantic_asr.experiment_runner import (
 class _MockAdapter:
     name = "mock-asr"
     model_name = "mock-asr-v1"
+    model_revision = "fixture-model-sha"
 
     def decode(self, request: DecodeRequest) -> list[CandidateEvidence]:
         assert request.language == "ja"

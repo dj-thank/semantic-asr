@@ -22,7 +22,7 @@ dependencies = []
 
 [project.optional-dependencies]
 asr = [
-  "faster-whisper>=1.1,<2",
+  "faster-whisper>=1.2,<2",
   "numpy>=1.26",
 ]
 qwen = [

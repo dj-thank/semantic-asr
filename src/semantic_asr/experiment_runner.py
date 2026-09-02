@@ -4,7 +4,7 @@ import hashlib
 import json
 import time
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,6 +28,8 @@ class AudioManifestRecord:
     near_duplicate_id: str | None = None
     rights_decision: RightsDecision = "review"
     license_id: str | None = None
+    dataset_name: str | None = None
+    dataset_revision: str | None = None
 
     def __post_init__(self) -> None:
         if not self.sample_id or not self.group_id or not self.source_id:
@@ -38,6 +40,8 @@ class AudioManifestRecord:
             raise ValueError("audio path and reference are required")
         if self.rights_decision not in {"allow", "deny", "review"}:
             raise ValueError("unknown rights decision")
+        if bool(self.dataset_name) != bool(self.dataset_revision):
+            raise ValueError("dataset name and revision must be provided together")
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +83,8 @@ class GeneratedCandidateRecord:
     generation_config_sha256: str
     elapsed_ms: int
     license_id: str | None
+    dataset_name: str | None
+    dataset_revision: str | None
 
     def __post_init__(self) -> None:
         if len(self.audio_sha256) != 64:
@@ -100,6 +106,8 @@ class GeneratedCandidateRecord:
             "domain": self.domain,
             "nearDuplicateId": self.near_duplicate_id,
             "audioSha256": self.audio_sha256,
+            "datasetName": self.dataset_name,
+            "datasetRevision": self.dataset_revision,
             "candidates": [candidate.as_dict() for candidate in self.candidates],
             "generation": {
                 "adapter": self.adapter,
@@ -119,6 +127,8 @@ class GeneratedCandidateRecord:
             "context": "",
             "candidates": [candidate.as_dict() for candidate in self.candidates],
             "audioSha256": self.audio_sha256,
+            "datasetName": self.dataset_name,
+            "datasetRevision": self.dataset_revision,
         }
 
 
@@ -171,6 +181,13 @@ def generate_candidates(
         raise PermissionError(
             f"sample {record.sample_id} rights decision is {record.rights_decision!r}"
         )
+    adapter_revision = getattr(adapter, "model_revision", None)
+    if config.model_revision is not None and config.model_revision != adapter_revision:
+        raise ValueError(
+            "candidate-generation model revision does not match the loaded adapter revision"
+        )
+    if config.model_revision is None and adapter_revision is not None:
+        config = replace(config, model_revision=str(adapter_revision))
     source = Path(record.audio_path).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(source)
@@ -218,6 +235,8 @@ def generate_candidates(
         generation_config_sha256=config.digest,
         elapsed_ms=elapsed_ms,
         license_id=record.license_id,
+        dataset_name=record.dataset_name,
+        dataset_revision=record.dataset_revision,
     )
 
 
@@ -249,6 +268,16 @@ def audio_record_from_row(row: Mapping[str, Any], *, line_number: int = 0) -> Au
         license_id=(
             str(row.get("licenseId") or row.get("license_id"))
             if row.get("licenseId") or row.get("license_id")
+            else None
+        ),
+        dataset_name=(
+            str(row.get("datasetName") or row.get("dataset_name"))
+            if row.get("datasetName") or row.get("dataset_name")
+            else None
+        ),
+        dataset_revision=(
+            str(row.get("datasetRevision") or row.get("dataset_revision"))
+            if row.get("datasetRevision") or row.get("dataset_revision")
             else None
         ),
     )

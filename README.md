@@ -220,14 +220,17 @@ semantic-asr research-smoke --output runs/research-smoke.json
 公開テストセットから権利注記付き manifest を作り、N-best 候補を生成し、分割・学習・較正・ベンチマークまでを CLI で回します。
 
 ```bash
-python scripts/prepare_public_manifest.py reazonspeech-test --output-dir data/reazon --limit 600
-semantic-asr generate-candidates data/reazon/manifest.jsonl   --output runs/reazon/all-candidates.jsonl   --ranker-output runs/reazon/all-ranker.jsonl   --model large-v3-turbo --device cpu --compute-type int8   --beam-size 12 --hypotheses 12
+python scripts/prepare_public_manifest.py reazonspeech-test --output-dir data/reazon --limit 600 --dataset-revision dd08bfb9dfc1cef4e4d0609fd78c3755d48b926f
+semantic-asr generate-candidates data/reazon/manifest.jsonl   --output runs/reazon/all-candidates.jsonl   --ranker-output runs/reazon/all-ranker.jsonl   --model large-v3-turbo --model-revision 0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf   --runtime-revision "$(git rev-parse HEAD)+faster-whisper-1.2.1+ctranslate2-4.8.2"   --device cpu --compute-type int8 --cpu-threads 6   --beam-size 12 --hypotheses 12
 python scripts/run_real_audio_pipeline.py   --candidates "runs/reazon/all-candidates.jsonl"   --output-dir runs/reazon/pipeline
 ```
 
 `generate-candidates` は既定で loop guard（30 秒 window への padding、duration 依存の token 上限、圧縮率・反復 n-gram・文字数予算による degenerate 判定、温度 fallback）を有効にします。`--no-loop-guard` で v0.2 の挙動に戻せます。`--extra-samples N` でサンプル候補を追加し、sample-based MBR を試せます。
 
+既知の標準モデル・公開データは immutable Hugging Face commit に固定されます。別モデルや別データでは exact 40 文字 commit を明示してください。`modelRevision` は実際の loader に渡され、metadata だけ異なる値を名乗る生成は停止します。境界診断は report 専用で、candidate 選択や primary strict CER には接続されません。
+
 測定記録と発見した欠陥は [`docs/RESEARCH_2026-09-02.md`](docs/RESEARCH_2026-09-02.md) を参照してください。
+現状からの技術選定、deep Module の seam、モデル／context／confidence／edge の優先順位は [`docs/ARCHITECTURE_ROADMAP_2026-09-02.md`](docs/ARCHITECTURE_ROADMAP_2026-09-02.md) にまとめています。
 
 ## v0.2長時間文字起こし
 

@@ -197,12 +197,16 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
         no_repeat_ngram_size: int = 0,
         loop_guard: LoopGuardConfig | None = None,
         without_timestamps: bool = False,
+        model_revision: str | None = None,
+        cpu_threads: int = 0,
     ) -> None:
         super().__init__(
             model=model,
             device=device,
             compute_type=compute_type,
             length_penalty=length_penalty,
+            model_revision=model_revision,
+            cpu_threads=cpu_threads,
         )
         if patience <= 0:
             raise ValueError("patience must be positive")
@@ -335,6 +339,7 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
         common_metadata = {
             "adapter": self.name,
             "model": self.model_name,
+            "modelRevision": self.model_revision,
             "scoreKind": "length-normalized-sequence-log-likelihood",
             "durationSeconds": duration_seconds,
             "language": language,
@@ -344,6 +349,7 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
             "hotwordsDigest": hotwords_digest,
             "fasterWhisperVersion": _package_version("faster-whisper"),
             "ctranslate2Version": _package_version("ctranslate2"),
+            "cpuThreads": self.cpu_threads,
             "lengthPenalty": self.length_penalty,
             "patience": self.patience,
             "repetitionPenalty": self.repetition_penalty,

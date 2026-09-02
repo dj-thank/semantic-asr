@@ -4,9 +4,11 @@ import hashlib
 import importlib.metadata
 import math
 from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 from typing import Any, Protocol
 
 from .contracts import CandidateEvidence
+from .revisions import resolve_hugging_face_revision
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +95,15 @@ def window_frames(model: Any) -> int:
     return int(frames) if frames else 3000
 
 
+def _validate_local_snapshot_revision(path: str, revision: str | None) -> None:
+    if revision is None or not Path(path).is_dir():
+        return
+    raise ValueError(
+        "a local model directory cannot claim a Hub revision; use the Hub ID and revision "
+        "or record a separately verified artifact digest"
+    )
+
+
 class FasterWhisperAdapter:
     """One-window CTranslate2 N-best adapter built on faster-whisper internals.
 
@@ -110,14 +121,29 @@ class FasterWhisperAdapter:
         compute_type: str = "default",
         *,
         length_penalty: float = 1.0,
+        model_revision: str | None = None,
+        cpu_threads: int = 0,
     ) -> None:
         try:
             from faster_whisper import WhisperModel
         except ImportError as exc:  # pragma: no cover - optional runtime
             raise RuntimeError("install semantic-asr with the 'asr' extra") from exc
+        if model_revision is not None:
+            model_revision = resolve_hugging_face_revision(model, model_revision, {})
+        _validate_local_snapshot_revision(model, model_revision)
         self.model_name = model
+        self.model_revision = model_revision
+        self.cpu_threads = int(cpu_threads)
+        if self.cpu_threads < 0:
+            raise ValueError("cpu_threads must be non-negative")
         self.length_penalty = float(length_penalty)
-        self.model = WhisperModel(model, device=device, compute_type=compute_type)
+        self.model = WhisperModel(
+            model,
+            device=device,
+            compute_type=compute_type,
+            revision=model_revision,
+            cpu_threads=self.cpu_threads,
+        )
 
     def _language(self, waveform: Any, requested: str | None) -> tuple[str, float | None, str]:
         if requested not in {None, "", "auto"}:
@@ -234,6 +260,7 @@ class FasterWhisperAdapter:
                     metadata={
                         "adapter": self.name,
                         "model": self.model_name,
+                        "modelRevision": self.model_revision,
                         "durationSeconds": duration_seconds,
                         "language": language,
                         "languageProbability": language_probability,
@@ -243,6 +270,7 @@ class FasterWhisperAdapter:
                         "hotwordsDigest": _digest_text(hotwords),
                         "fasterWhisperVersion": _package_version("faster-whisper"),
                         "ctranslate2Version": _package_version("ctranslate2"),
+                        "cpuThreads": self.cpu_threads,
                     },
                 )
             )
@@ -363,18 +391,36 @@ class Qwen3ASRAdapter:
         self,
         model: str = "Qwen/Qwen3-ASR-0.6B",
         *,
+        model_revision: str | None = None,
         dtype: str = "float16",
         device_map: str = "cuda:0",
         max_inference_batch_size: int = 1,
         max_new_tokens: int = 512,
         return_timestamps: bool = False,
         forced_aligner: str = "Qwen/Qwen3-ForcedAligner-0.6B",
+        forced_aligner_revision: str | None = None,
     ) -> None:
         try:
             from qwen_asr import Qwen3ASRModel
         except ImportError as exc:  # pragma: no cover - optional runtime
             raise RuntimeError("install semantic-asr with the 'qwen' extra") from exc
+        if model_revision is not None:
+            model_revision = resolve_hugging_face_revision(model, model_revision, {})
+        if forced_aligner_revision is not None:
+            forced_aligner_revision = resolve_hugging_face_revision(
+                forced_aligner,
+                forced_aligner_revision,
+                {},
+            )
+        _validate_local_snapshot_revision(model, model_revision)
+        if model_revision is not None and return_timestamps and forced_aligner_revision is None:
+            raise ValueError(
+                "a revision-bound Qwen timestamp run also requires an aligner revision"
+            )
+        _validate_local_snapshot_revision(forced_aligner, forced_aligner_revision)
         self.model_name = model
+        self.model_revision = model_revision
+        self.forced_aligner_revision = forced_aligner_revision
         self.return_timestamps = return_timestamps
         kwargs: dict[str, Any] = {
             "device_map": device_map,
@@ -385,12 +431,33 @@ class Qwen3ASRAdapter:
         if resolved_dtype is not None:
             kwargs["dtype"] = resolved_dtype
         if return_timestamps:
-            kwargs["forced_aligner"] = forced_aligner
+            resolved_aligner = forced_aligner
+            if forced_aligner_revision is not None and not Path(forced_aligner).is_dir():
+                try:
+                    from huggingface_hub import snapshot_download
+                except ImportError as exc:  # pragma: no cover - qwen-asr dependency boundary
+                    raise RuntimeError(
+                        "Qwen forced-aligner revision pinning requires huggingface-hub"
+                    ) from exc
+                resolved_aligner = snapshot_download(
+                    repo_id=forced_aligner,
+                    revision=forced_aligner_revision,
+                )
+            kwargs["forced_aligner"] = resolved_aligner
             kwargs["forced_aligner_kwargs"] = {
                 "device_map": device_map,
                 **({"dtype": resolved_dtype} if resolved_dtype is not None else {}),
             }
-        self.model = Qwen3ASRModel.from_pretrained(model, **kwargs)
+        resolved_model = model
+        if model_revision is not None and not Path(model).is_dir():
+            try:
+                from huggingface_hub import snapshot_download
+            except ImportError as exc:  # pragma: no cover - qwen-asr dependency boundary
+                raise RuntimeError("qwen-asr revision pinning requires huggingface-hub") from exc
+            # qwen-asr forwards kwargs only to AutoModel, not AutoProcessor. Resolving one
+            # immutable local snapshot first binds model and processor to the same revision.
+            resolved_model = snapshot_download(repo_id=model, revision=model_revision)
+        self.model = Qwen3ASRModel.from_pretrained(resolved_model, **kwargs)
 
     def decode(self, request: DecodeRequest) -> list[CandidateEvidence]:
         context = "\n".join(
@@ -427,6 +494,8 @@ class Qwen3ASRAdapter:
                     metadata={
                         "adapter": self.name,
                         "model": self.model_name,
+                        "modelRevision": self.model_revision,
+                        "forcedAlignerRevision": self.forced_aligner_revision,
                         "language": language,
                         "timeStamps": _jsonable(timestamps),
                         "qwenAsrVersion": _package_version("qwen-asr"),
