@@ -259,17 +259,53 @@ def generate_manifest(
     return [generate_candidates(record, adapter, config=config) for record in records]
 
 
-def _load_checkpoint_rows(path: Path) -> list[dict[str, Any]]:
+def _load_checkpoint_rows(
+    path: Path, *, repair_unterminated_tail: bool = False
+) -> list[dict[str, Any]]:
     if not path.exists():
         return []
+    payload = path.read_bytes()
     rows: list[dict[str, Any]] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
+    offset = 0
+    encoded_lines = payload.splitlines(keepends=True)
+    for line_number, encoded_line in enumerate(encoded_lines, 1):
+        next_offset = offset + len(encoded_line)
+        if not encoded_line.strip():
+            if (
+                repair_unterminated_tail
+                and line_number == len(encoded_lines)
+                and not encoded_line.endswith((b"\n", b"\r"))
+            ):
+                with path.open("r+b") as handle:
+                    handle.truncate(offset)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                return rows
+            offset = next_offset
             continue
-        value = json.loads(line)
+        try:
+            value = json.loads(encoded_line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            if not (
+                repair_unterminated_tail
+                and line_number == len(encoded_lines)
+                and not encoded_line.endswith((b"\n", b"\r"))
+            ):
+                raise
+            with path.open("r+b") as handle:
+                handle.truncate(offset)
+                handle.flush()
+                os.fsync(handle.fileno())
+            return rows
         if not isinstance(value, dict):
             raise ValueError(f"checkpoint row {line_number} must be an object")
         rows.append(value)
+        offset = next_offset
+    if repair_unterminated_tail and payload and not payload.endswith((b"\n", b"\r")):
+        with path.open("ab") as handle:
+            handle.write(b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
     return rows
 
 
@@ -325,7 +361,7 @@ def generate_manifest_to_checkpoint(
     bound_config = _bind_generation_config(adapter, config)
     checkpoint = Path(checkpoint_path)
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
-    rows = _load_checkpoint_rows(checkpoint)
+    rows = _load_checkpoint_rows(checkpoint, repair_unterminated_tail=True)
     _validate_checkpoint_prefix(records, rows, config=bound_config)
     if progress is not None and rows:
         progress(len(rows), len(records))

@@ -229,6 +229,66 @@ def test_resumable_generation_rejects_a_different_configuration(tmp_path) -> Non
         )
 
 
+@pytest.mark.parametrize("trailer", [b'{"sampleId":', b""])
+def test_resumable_generation_repairs_only_an_unterminated_trailing_row(
+    tmp_path, trailer: bytes
+) -> None:
+    records = []
+    for index in range(2):
+        audio = tmp_path / f"torn-audio-{index}.wav"
+        audio.write_bytes(f"RIFF-torn-{index}".encode())
+        records.append(
+            AudioManifestRecord(
+                sample_id=f"torn-sample-{index}",
+                group_id=f"speaker-{index}",
+                source_id=f"source-{index}",
+                split="test",
+                audio_path=str(audio),
+                reference=f"参照{index}",
+                rights_decision="allow",
+            )
+        )
+
+    checkpoint = tmp_path / "candidates.jsonl.partial"
+    config = CandidateGenerationConfig(beam_size=3, hypotheses=3)
+    generate_manifest_to_checkpoint(
+        records[:1],
+        _MockAdapter(),
+        config=config,
+        checkpoint_path=checkpoint,
+    )
+    payload = checkpoint.read_bytes()
+    payload = payload + trailer if trailer else payload.rstrip(b"\r\n")
+    checkpoint.write_bytes(payload)
+
+    rows = generate_manifest_to_checkpoint(
+        records,
+        _MockAdapter(),
+        config=config,
+        checkpoint_path=checkpoint,
+    )
+
+    assert [row["sampleId"] for row in rows] == ["torn-sample-0", "torn-sample-1"]
+    assert checkpoint.read_bytes().endswith(b"\n")
+    reparsed = [json.loads(line) for line in checkpoint.read_text("utf-8").splitlines()]
+    assert [row["sampleId"] for row in reparsed] == ["torn-sample-0", "torn-sample-1"]
+
+
+def test_resumable_generation_rejects_a_corrupt_terminated_row(tmp_path) -> None:
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"RIFF")
+    checkpoint = tmp_path / "candidates.jsonl.partial"
+    checkpoint.write_bytes(b'{"sampleId":\n')
+
+    with pytest.raises(json.JSONDecodeError):
+        generate_manifest_to_checkpoint(
+            [_record(audio)],
+            _MockAdapter(),
+            config=CandidateGenerationConfig(beam_size=3, hypotheses=3),
+            checkpoint_path=checkpoint,
+        )
+
+
 def test_generated_benchmark_and_ranker_manifests_are_compatible_jsonl() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

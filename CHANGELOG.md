@@ -15,6 +15,9 @@
 - Added an evidence-backed architecture and technology roadmap: keep the measured Whisper primary, test cached causal-LM probabilities before building a cache, require exogenous entity catalogs and no-bias/distractor arms, and defer GPU/edge profiles until exact-head measurements exist.
 - Added annotation-aware spoken-reference and filler-event evaluation helpers so filler/repair content is preserved in the observed transcript and scored separately from readable normalization.
 - Candidate generation now flushes each verified row to a resumable `.partial` checkpoint and atomically promotes the complete JSONL; a late model/runtime failure no longer discards an hour of completed clips.
+- Resume repairs only an unterminated trailing checkpoint row (or restores its missing final newline) and still rejects terminated corruption, so a process crash during the last write cannot strand an otherwise verified prefix.
+- Added a local human-transcript pilot for native Japanese casual speech: it exposed 0/16 exact tagged-filler variant matches (despite two filler-like hypothesis forms) and 2/4 repair-span surface matches, so verbatim fidelity is now separate from readable normalization. The preview's unclear license keeps the result local-only.
+- Direct LFM2.5-350M causal-LM rescoring failed protected fit/test criteria and did not build a cache; this teacher/configuration is recorded as rejected rather than promoted.
 - Pinned eight 2025–2026 primary sources and three falsifiable translations in the research registry; see `docs/RESEARCH_2026-09-02.md`.
 
 ## 0.2.0 — 2026-08-31

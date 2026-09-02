@@ -71,13 +71,17 @@ and additional public ports are added only when a second Adapter makes each seam
 | CPU offline primary | faster-whisper large-v3-turbo, CTranslate2 int8 | **keep**; only stack measured end-to-end here (`0.2518` strict utterance mean, `0.1162` lenient corpus) | replace only on same immutable manifest with strict and non-boundary slices non-inferior |
 | High-quality independent ear | Qwen3-ASR-1.7B on CUDA/ROCm/vLLM | **experiment on a supported GPU runtime**; the 1.7B AuT+LLM model is stronger than 0.6B in the official report, supports Japanese and unified offline/streaming | same 600 clips, exact revision, first measure standalone CER; enter fusion only if at least non-inferior and complementary |
 | Current Qwen 0.6B | single-hypothesis contradiction signal | **do not promote**; all-on insertion is harmful and the best calibration-selected gate changed three rows without strict gain | retain probe infrastructure only; no default weight or candidate authoring |
+| Context-capable Japanese challenger | Fun-ASR-Nano-2512 (800M) | **benchmark next, do not promote yet**; its official card supports Japanese, prompt/hotwords, CPU or CUDA, but requires revision-bound custom code and currently lists timestamps as TODO | start with a 20-clip native/verbatim plus entity pilot; expand to 600 only if content and filler/entity guards pass |
+| Native streaming challenger | Voxtral Mini 4B Realtime 2602 | **defer to a supported >=16 GB vLLM GPU**; official Japanese FLEURS WER is reported, but no conversational/verbatim evidence exists and RX 7600 XT is not a supported local path | measure 480 ms and 2400 ms delay on the same native/locked slices; reject if filler/content or latency guard fails |
+| GLM-ASR-Nano-2512 | 1.5B Transformers ASR | **do not prioritize for Japanese**; the official model metadata and examples are English/Chinese and published benchmark emphasis is Chinese, despite a broader language-support image | reopen only after an exact Japanese benchmark/runtime is identified; never infer Japanese quality from the aggregate claim |
 | Japanese CPU/edge adapter | ReazonSpeech-k2-v2 via sherpa-onnx (159M Zipformer RNN-T, ONNX) | **benchmark as a deployment adapter**, not as a claimed quality upgrade; architecturally independent and portable | test exact model on the immutable 600 clips plus latency/RAM; do not infer from vendor benchmark normalization |
 | Very small edge lane | Moonshine tiny Japanese (27M) | **defer to device profile**; attractive size, but not evidence for better reranking or broadcast accuracy | require device RTF/RAM and the same strict/lenient/entity slices |
 | Generic count LM | Wikipedia or train-reference n-gram | **reject**; both fail the locked test, including calibration-only model selection | reopen only with a genuinely matched external domain corpus and a preregistered cache-coverage hypothesis |
-| Cached language evidence | short-context cached causal-LLM probabilities (`K<=8`) | **next diagnostic**; existing `cached_lm.py` matches the 2026 method, but the paper is flat/harmful for Whisper-large-v3 and stronger gains occur on weaker recognizers | first run direct teacher scoring as an upper-bound diagnostic; build a cache only if calibration and locked test improve without boundary/length regression |
+| Cached language evidence | short-context cached causal-LLM probabilities (`K<=8`) | **defer**; direct LFM2.5-350M scoring failed protected fit metrics and slightly worsened test strict mean, so no cache was built; the paper is also flat/harmful for Whisper-large-v3 | reopen only with a stronger/base teacher plus matched non-test text and a new preregistered audit split |
 | Entity recovery | frozen exogenous catalog + compact phonetic/semantic retrieval + no-bias gate | **primary product direction**; dynamic vocabulary, Deferred NAM, CLAR and RECOVER support phrase retrieval and constrained correction | catalog must pre-exist test references; report entity recall/CER, non-entity CER, distractor FP and abstention separately |
 | Confidence | small CEM over beam score/rank, margin, entropy, degeneracy and stage features | **data-blocked**; current ranker is dominated by rank and the calibration set is too small for robust tail guarantees | collect a larger speaker/domain-disjoint calibration/audit set; require ECE, risk-coverage, deletion and OOD slices |
 | Boundary handling | VAD/segmentation adapter plus diagnostic contiguous alignment | **diagnostic shipped; runtime fix later** | never select candidates with reference alignment; validate a reference-free segmenter on concatenated audio and a clean-boundary corpus |
+| Verbatim/disfluency control | explicit filler/hesitation labels plus observed/intended outputs | **primary medium-term training direction**; Japanese CSJ experiments show that treating disfluencies as recognition targets improves spontaneous ASR and exposes removable labels | require licensed speaker-disjoint native speech; report filler/repair F1 and observed CER before deriving an intended/readable transcript |
 | Free-form LLM GER | none in the observed transcript path | **reject as default**; it can author unsupported text | allow only entity-scoped proposals from a frozen catalog with deterministic verify/apply and full abstention |
 
 ## Latest architecture implications
@@ -92,6 +96,15 @@ Qwen3-ASR-0.6B failed a one-clip probe across its variable-length audio path and
 path. Bounded workarounds for `masked_scatter` and CPU audio-tower/GPU decoder placement exposed
 additional DirectML backend incompatibilities. Do not download or claim the 1.7B run on this
 runtime; use a supported CUDA/ROCm/vLLM host or an official converted artifact instead.
+
+Fun-ASR-Nano-2512 is the strongest unmeasured near-term challenger for this product shape because
+the official 800M checkpoint explicitly supports Japanese plus contextual prompts/hotwords and a
+CPU path. That is still only a capability claim: its model code must be pinned and reviewed, its
+timestamp path is incomplete, and its native Japanese filler behavior has not been measured here.
+Voxtral Realtime is a separate streaming profile, not a drop-in offline replacement; the official
+card requires vLLM and at least 16 GB GPU memory and shows a quality/latency tradeoff by delay.
+GLM-ASR remains below both until its exact Japanese support and benchmark are inspectable rather
+than inferred from a multilingual image or Chinese-heavy aggregate.
 
 Retrieval-based contextual ASR is converging on a common pattern: retrieve a small phrase set,
 inject it as context, and explicitly train or gate a `NO_BIAS` path. Many published headline gains
@@ -137,6 +150,12 @@ Tagged-filler precision/recall/F1 is reported separately; a readable normalized 
 remove fillers only as a distinct downstream product output and never feeds back into observed
 transcript scoring.
 
+Metrics alone cannot make an ASR model emit omitted speech. The next trained architecture should
+encode fillers and hesitation/repair spans as explicit recognition targets, then deterministically
+derive the intended/readable transcript from those labels. This preserves both user needs: a
+verbatim observed channel and a clean downstream channel, without letting normalization hide
+recognition errors.
+
 Primary gates remain strict corpus CER and strict utterance-mean CER on identical audio/reference
 boundaries. Report lenient corpus CER for comparability, entity/number/negation errors for product
 risk, and fixed boundary/length diagnostics for explanation. Thresholds, model choice, context size,
@@ -147,20 +166,30 @@ experiment.
 
 1. **Now:** immutable model/dataset/n-gram provenance, loader/metadata equality checks, and
    diagnostic-only boundary metrics.
-2. **Next cheap falsification:** direct LFM/Qwen causal-LM sequence scoring on existing N-best;
-   promote to a `K<=8` cache only on positive held-out evidence.
+2. **Completed negative:** direct LFM causal-LM sequence scoring did not pass fit/test guardrails;
+   do not build the cache from this teacher.
 3. **Next product slice:** define the frozen `ContextCatalog` Interface and run a small real
    catalog/distractor experiment; do not synthesize a catalog from test references.
-4. **GPU experiment:** benchmark Qwen3-ASR-1.7B standalone, then test a preregistered selective
-   policy only if it is strong enough.
-5. **Runtime profiles:** add `cpu-ja-v1`, then measured `gpu-ja-second-ear-v1`; add edge/streaming
+4. **Nearest challenger:** run a bounded, revision-pinned Fun-ASR-Nano-2512 pilot with no-context,
+   frozen-hotword and distractor arms; expand only after native verbatim/content guards pass.
+5. **GPU experiment:** benchmark Qwen3-ASR-1.7B standalone on a supported host, then test a
+   preregistered selective policy only if it is strong enough.
+6. **Runtime profiles:** add `cpu-ja-v1`, then measured `gpu-ja-second-ear-v1`; add edge/streaming
    profiles only after ReazonSpeech/Moonshine device evidence exists.
-6. **Deep Module migration:** introduce the one-call facade, route one CLI vertical slice through
+7. **Deep Module migration:** introduce the one-call facade, route one CLI vertical slice through
    it, then move pooling/context/gating/provenance behind the seam while keeping low-level research
    functions available.
-7. **Verbatim audit expansion:** use the 69-row HTH preview as a local pilot now; promote only after
+8. **Verbatim audit expansion:** use the 69-row HTH preview as a local pilot now; promote only after
    the audio-to-transcript mapping, filler tags, uncertain spans and usage rights are all bound.
    Acquire CSJ or the full human-verified casual corpus only at an explicit human/cost decision.
+9. **Verbatim training lane:** once licensed speaker-disjoint data exists, compare explicit
+   filler/hesitation labels against removal and unlabelled baselines; keep observed and intended
+   outputs separate.
+
+The completed preview pilot exposes the immediate quality priority: large-v3-turbo produced
+`0/16` exact tagged-filler variant matches (while emitting two filler-like forms) and matched only
+`2/4` repair-span surfaces. Before another generic reranker, add a family-aware verbatim
+profile/metric and a larger human-transcribed native-speech audit set.
 
 ## Sources used for selection
 
@@ -187,6 +216,10 @@ paper pages were excluded from decision-grade evidence.
 - Corpus of Spontaneous Japanese: <https://clrd.ninjal.ac.jp/csj/en/data-index.html>
 - HTH casual-conversation preview: <https://huggingface.co/datasets/HTH-inc/japanese-casual-conversational-speech-golden-dataset-preview>
 - Japanese disfluency labeling: <https://www.isca-archive.org/interspeech_2022/horii22_interspeech.html>
+- Japanese disfluency-labeling extension (2026): <https://www.jstage.jst.go.jp/article/transinf/advpub/0/advpub_2025EDP7157/_article/-char/en>
+- Fun-ASR-Nano-2512 model card: <https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512>
+- Voxtral Mini 4B Realtime 2602 model card: <https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602>
+- GLM-ASR-Nano-2512 model card: <https://huggingface.co/zai-org/GLM-ASR-Nano-2512>
 
 All recommendations remain `LOCAL_PASS` planning or local measurement. They do not establish device,
 provider, public-release, or human-approval state.
