@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import numpy as np
 import pytest
+
+np = pytest.importorskip("numpy")
 
 from semantic_asr.adapters import pad_features_to_window, window_frames
 
