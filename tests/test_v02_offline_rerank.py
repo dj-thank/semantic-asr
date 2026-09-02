@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 import pytest
 
-from semantic_asr.benchmark import BenchmarkUtterance, run_benchmark
+from semantic_asr.benchmark import BenchmarkUtterance, load_benchmark_jsonl, run_benchmark
 from semantic_asr.contracts import CandidateEvidence
 from semantic_asr.offline_rerank import (
     build_calibration_samples,
     rerank_record,
+    write_reranked_benchmark,
 )
 from semantic_asr.ranker_calibration import RankerCalibrationProfile
 from semantic_asr.rerankers import StaticCandidateRanker
 
 
-def _record(split: str) -> BenchmarkUtterance:
+def _record(
+    split: str,
+    *,
+    annotated_reference: str | None = None,
+) -> BenchmarkUtterance:
     return BenchmarkUtterance(
         sample_id=f"sample-{split}",
         group_id=f"speaker-{split}",
@@ -37,6 +45,7 @@ def _record(split: str) -> BenchmarkUtterance:
                 hypothesis_count=2,
             ),
         ),
+        annotated_reference=annotated_reference,
     )
 
 
@@ -81,3 +90,19 @@ def test_uncalibrated_offline_reranker_does_not_enter_fusion_stream() -> None:
     by_id = {candidate.candidate_id: candidate for candidate in reranked.candidates}
     assert by_id["correct"].lexical is None
     assert by_id["correct"].metadata["offlineRerankerEvidenceInjected"] is False
+
+
+def test_offline_rerank_preserves_annotated_reference_through_round_trip() -> None:
+    annotated = "料金は(? 3000円)です"
+    reranked = rerank_record(
+        _record("test", annotated_reference=annotated),
+        _ranker(),
+        calibration=None,
+    )
+    assert reranked.annotated_reference == annotated
+
+    with tempfile.TemporaryDirectory() as directory:
+        target = Path(directory) / "reranked.jsonl"
+        write_reranked_benchmark([reranked], target)
+        loaded = load_benchmark_jsonl(target)
+    assert loaded[0].annotated_reference == annotated

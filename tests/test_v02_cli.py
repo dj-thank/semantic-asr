@@ -126,6 +126,58 @@ def test_benchmark_cli_writes_group_bootstrap_report() -> None:
         assert float(payload["oracle_cer_at_k"]["2"]) <= float(payload["oracle_cer_at_k"]["1"])
 
 
+def test_benchmark_cli_serializes_undefined_bootstrap_for_unscorable_annotations(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "benchmark-uncertain.jsonl"
+        source.write_text(
+            json.dumps(
+                {
+                    "sampleId": "uncertain",
+                    "groupId": "speaker",
+                    "sourceId": "source",
+                    "split": "test",
+                    "reference": "明日は舞い上がる",
+                    "annotatedReference": "明日は(? 舞い)上がる",
+                    "candidates": [
+                        {
+                            "candidateId": "candidate",
+                            "text": "明日は舞い上がる",
+                            "rank": 1,
+                            "hypothesisCount": 1,
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        target = root / "report.json"
+        assert (
+            main(
+                [
+                    "benchmark",
+                    str(source),
+                    "--output",
+                    str(target),
+                    "--ks",
+                    "1",
+                    "--bootstrap-iterations",
+                    "2",
+                ]
+            )
+            == 0
+        )
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        assert payload["rows"][0]["baseline_cer"] is None
+        assert payload["cascade_improvement"] is None
+        stdout_payload = json.loads(capsys.readouterr().out)
+        assert stdout_payload["cascadeImprovement"] is None
+
+
 def test_teacher_distillation_cli_preserves_candidate_set() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

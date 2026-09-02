@@ -262,7 +262,11 @@ def command_benchmark(args: argparse.Namespace) -> int:
                 "cascadeCER": report.cascade_cer,
                 "mbrCER": report.mbr_cer,
                 "oracleCERAtK": report.oracle_cer_at_k,
-                "cascadeImprovement": asdict(report.cascade_improvement),
+                "cascadeImprovement": (
+                    None
+                    if report.cascade_improvement is None
+                    else asdict(report.cascade_improvement)
+                ),
             },
             ensure_ascii=False,
             indent=2,
