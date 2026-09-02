@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-np = pytest.importorskip("numpy")
-
 from semantic_asr.adapters import pad_features_to_window, window_frames
+
+np = pytest.importorskip("numpy")
 
 
 def test_short_features_are_zero_padded_to_the_window() -> None:
