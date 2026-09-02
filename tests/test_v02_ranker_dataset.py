@@ -122,7 +122,6 @@ def test_load_jsonl_examples_skips_single_candidate_rows(tmp_path) -> None:
         },
     ]
     path = tmp_path / "train.jsonl"
-    path.write_text("
-".join(json.dumps(row, ensure_ascii=False) for row in rows), "utf-8")
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), "utf-8")
     examples = load_jsonl_examples(path)
     assert [example.example_id for example in examples] == ["pair"]
