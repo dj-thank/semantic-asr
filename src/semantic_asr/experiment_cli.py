@@ -51,23 +51,21 @@ def command_partition_manifest(args: argparse.Namespace) -> int:
     for split in ("train", "calibration", "test"):
         selected = [record for record in records if record.split == split]
         target = output_dir / f"{split}.jsonl"
-        rows = [
-            json.dumps(
-                {
-                    "sampleId": record.sample_id,
-                    "groupId": record.group_id,
-                    "sourceId": record.source_id,
-                    "split": record.split,
-                    "reference": record.reference,
-                    "domain": record.domain,
-                    "nearDuplicateId": record.near_duplicate_id,
-                    "candidates": [candidate.as_dict() for candidate in record.candidates],
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            for record in selected
-        ]
+        rows = []
+        for record in selected:
+            row = {
+                "sampleId": record.sample_id,
+                "groupId": record.group_id,
+                "sourceId": record.source_id,
+                "split": record.split,
+                "reference": record.reference,
+                "domain": record.domain,
+                "nearDuplicateId": record.near_duplicate_id,
+                "candidates": [candidate.as_dict() for candidate in record.candidates],
+            }
+            if record.annotated_reference is not None:
+                row["annotatedReference"] = record.annotated_reference
+            rows.append(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
         target.write_text("\n".join(rows) + ("\n" if rows else ""), encoding="utf-8")
         counts[split] = len(selected)
     manifest = {
