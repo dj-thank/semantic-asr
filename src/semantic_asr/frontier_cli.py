@@ -12,6 +12,7 @@ from .deployment_gate import (
     deployment_evaluation_from_dict,
     evaluate_deployment_candidate,
 )
+from .enrichment import EnrichmentConfig, enrich_manifest_rows, load_second_ear
 from .experiment_runner import (
     CandidateGenerationConfig,
     generate_manifest,
@@ -32,6 +33,7 @@ from .throttling import RuntimePressure, ThrottleState, throttle_effort
 
 FRONTIER_COMMANDS = {
     "deployment-gate",
+    "enrich-candidates",
     "generate-candidates",
     "throttle-policy",
     "train-fusion",
@@ -143,6 +145,50 @@ def command_train_fusion(args: argparse.Namespace) -> int:
                 "weights": result.profile.weights,
                 "acousticFamilyFloor": result.profile.acoustic_family_floor,
                 "profileDigest": result.profile.digest,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def command_enrich_candidates(args: argparse.Namespace) -> int:
+    rows = [
+        json.loads(line)
+        for line in Path(args.input).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    second_ear = (
+        load_second_ear(args.second_ear, source=args.second_ear_source) if args.second_ear else {}
+    )
+    ngram_model = NGramLanguageModel.load(args.ngram) if args.ngram else None
+    config = EnrichmentConfig(
+        add_second_ear_candidate=args.add_second_ear_candidate,
+        second_ear_source=args.second_ear_source,
+        ngram_model=ngram_model,
+        ngram_name=(
+            f"{ngram_model.mode}-{ngram_model.order}gram:{ngram_model.digest[:12]}"
+            if ngram_model is not None
+            else "ngram"
+        ),
+    )
+    enriched = enrich_manifest_rows(rows, second_ear=second_ear, config=config)
+    target = Path(args.output)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) for row in enriched)
+        + ("\n" if enriched else ""),
+        encoding="utf-8",
+    )
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "rows": len(enriched),
+                "secondEarRows": sum(1 for row in rows if str(row.get("sampleId")) in second_ear),
+                "ngram": config.ngram_name if ngram_model is not None else None,
+                "output": str(target),
             },
             ensure_ascii=False,
             indent=2,
@@ -302,6 +348,19 @@ def build_parser() -> argparse.ArgumentParser:
     fusion.add_argument("--acoustic-family-floor", type=float, default=0.72)
     fusion.add_argument("--seed", type=int, default=37)
     fusion.set_defaults(func=command_train_fusion)
+
+    enrich = commands.add_parser("enrich-candidates")
+    enrich.add_argument("input", help="candidate JSONL from generate-candidates")
+    enrich.add_argument("--output", required=True)
+    enrich.add_argument("--second-ear", help="probe_second_ear.py JSONL output")
+    enrich.add_argument("--second-ear-source", default="qwen3-asr")
+    enrich.add_argument(
+        "--add-second-ear-candidate",
+        action="store_true",
+        help="Append the second-ear hypothesis as an additional acoustically grounded candidate.",
+    )
+    enrich.add_argument("--ngram", help="NGramLanguageModel JSON from train-ngram")
+    enrich.set_defaults(func=command_enrich_candidates)
 
     generate = commands.add_parser("generate-candidates")
     generate.add_argument("input", help="rights-gated audio manifest JSONL")
