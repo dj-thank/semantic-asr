@@ -174,6 +174,9 @@ def command_generate_candidates(args: argparse.Namespace) -> int:
             fallback_samples=args.fallback_samples,
             drop_degenerate=not args.keep_degenerate,
             max_characters_per_second=args.max_characters_per_second,
+            extra_samples=args.extra_samples,
+            extra_sample_temperature=args.extra_sample_temperature,
+            extra_sample_topk=args.extra_sample_topk,
         ),
         without_timestamps=args.without_timestamps,
     )
@@ -335,6 +338,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate.add_argument("--fallback-samples", type=int, default=5)
     generate.add_argument("--max-characters-per-second", type=float, default=12.0)
+    generate.add_argument(
+        "--extra-samples",
+        type=int,
+        default=0,
+        help="Always add this many sampled hypotheses (own score domain) for sample-based MBR.",
+    )
+    generate.add_argument("--extra-sample-temperature", type=float, default=1.0)
+    generate.add_argument("--extra-sample-topk", type=int, default=0)
     generate.add_argument(
         "--without-timestamps",
         action="store_true",

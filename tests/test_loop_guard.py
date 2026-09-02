@@ -35,6 +35,14 @@ def test_token_budget_scales_with_duration_and_is_disabled_when_off() -> None:
     assert [stage for stage, _ in guard.stages][:2] == ["beam", "sample-t0.2"]
 
 
+def test_enrichment_stage_is_optional() -> None:
+    assert LoopGuardConfig().enrichment_stage is None
+    stage = LoopGuardConfig(extra_samples=8, extra_sample_temperature=0.7).enrichment_stage
+    assert stage == ("mbr-sample-t0.7", 0.7)
+    with pytest.raises(ValueError):
+        LoopGuardConfig(extra_samples=-1)
+
+
 def test_degeneracy_reasons() -> None:
     guard = LoopGuardConfig()
     loop = "ここで、" * 30

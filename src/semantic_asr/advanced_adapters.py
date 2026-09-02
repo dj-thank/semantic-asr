@@ -4,6 +4,7 @@ import math
 import zlib
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
+from typing import Any
 
 from .adapters import (
     ASRAdapter,
@@ -65,6 +66,9 @@ class LoopGuardConfig:
     fallback_temperatures: tuple[float, ...] = (0.2, 0.4, 0.6, 0.8, 1.0)
     fallback_samples: int = 5
     drop_degenerate: bool = True
+    extra_samples: int = 0
+    extra_sample_temperature: float = 1.0
+    extra_sample_topk: int = 0
 
     def __post_init__(self) -> None:
         if self.max_tokens_per_second <= 0 or self.max_tokens_floor < 1:
@@ -79,6 +83,10 @@ class LoopGuardConfig:
             raise ValueError("fallback_samples must be positive")
         if self.max_characters_per_second <= 0 or self.character_floor < 1:
             raise ValueError("character budget must be positive")
+        if self.extra_samples < 0 or self.extra_sample_topk < 0:
+            raise ValueError("extra sampling settings must be non-negative")
+        if self.extra_sample_temperature <= 0:
+            raise ValueError("extra_sample_temperature must be positive")
 
     def max_new_tokens(self, duration_seconds: float) -> int | None:
         if not self.enabled:
@@ -131,6 +139,20 @@ class LoopGuardConfig:
                 for temperature in self.fallback_temperatures
             ),
         )
+
+    @property
+    def enrichment_stage(self) -> tuple[str, float] | None:
+        """Always-on sampled candidates for sample-based MBR.
+
+        Re-evaluating MBR for ASR (TMLR 2026) reports that MBR over 4-32 sampled
+        hypotheses beats beam search for Whisper-family models, including Japanese
+        test sets. Beam N-best lists collapse to a handful of surfaces after path
+        aggregation, so this stage adds independent samples in their own score domain.
+        """
+
+        if self.extra_samples < 1:
+            return None
+        return (f"mbr-sample-t{self.extra_sample_temperature:g}", self.extra_sample_temperature)
 
 
 def apply_loop_guard(
@@ -194,6 +216,60 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
         # Whisper decodes a short clip padded to 30 s far more stably when timestamp tokens
         # are allowed: the decoder can close the segment instead of looping to max_length.
         self.without_timestamps = bool(without_timestamps)
+
+    def _rows_from_result(
+        self,
+        result: Any,
+        *,
+        tokenizer: Any,
+        stage_id: str,
+        temperature: float,
+        score_domain: str,
+        common_metadata: dict[str, Any],
+        duration_seconds: float,
+    ) -> list[CandidateEvidence]:
+        guard = self.loop_guard
+        sequences = list(result.sequences_ids)
+        scores = list(result.scores)
+        if len(sequences) != len(scores):
+            raise RuntimeError("CTranslate2 returned mismatched hypotheses and scores")
+        stage_rows: list[CandidateEvidence] = []
+        for raw_rank, (tokens, score) in enumerate(zip(sequences, scores, strict=True), 1):
+            token_ids = tuple(int(token) for token in tokens)
+            text_tokens = [token for token in token_ids if token < tokenizer.timestamp_begin]
+            text = tokenizer.decode(text_tokens).strip()
+            if not text:
+                continue
+            sequence_score = float(score)
+            token_count = max(1, len(token_ids))
+            cumulative_logprob = sequence_score * (token_count**self.length_penalty)
+            avg_logprob = cumulative_logprob / (token_count + 1)
+            degeneracy = guard.degeneracy(
+                text, token_ids, avg_logprob, duration_seconds=duration_seconds
+            )
+            stage_rows.append(
+                CandidateEvidence(
+                    candidate_id=f"fw-{stage_id}-{raw_rank:04d}",
+                    text=text,
+                    token_ids=token_ids,
+                    acoustic=avg_logprob,
+                    rank=raw_rank,
+                    hypothesis_count=len(sequences),
+                    sequence_score=sequence_score,
+                    avg_logprob=avg_logprob,
+                    source=self.name,
+                    metadata={
+                        **common_metadata,
+                        "scoreDomain": score_domain,
+                        "decodeStage": stage_id,
+                        "samplingTemperature": temperature,
+                        "noSpeechProbability": getattr(result, "no_speech_prob", None),
+                        "cumulativeLogprob": cumulative_logprob,
+                        **degeneracy,
+                    },
+                )
+            )
+        return stage_rows
 
     def decode(self, request: DecodeRequest) -> list[CandidateEvidence]:
         try:
@@ -307,51 +383,20 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
             if len(generated) != 1:
                 raise RuntimeError("expected exactly one generated utterance")
             result = generated[0]
-            sequences = list(result.sequences_ids)
-            scores = list(result.scores)
-            if len(sequences) != len(scores):
-                raise RuntimeError("CTranslate2 returned mismatched hypotheses and scores")
             score_domain = (
                 f"{self.name}|{self.model_name}|{request.start_ms}:{request.end_ms}|"
                 f"{prompt_digest}|{hotwords_digest}|beam={request.beam_size}|"
                 f"patience={self.patience}|lp={self.length_penalty}|stage={stage_id}"
             )
-            stage_rows: list[CandidateEvidence] = []
-            for raw_rank, (tokens, score) in enumerate(zip(sequences, scores, strict=True), 1):
-                token_ids = tuple(int(token) for token in tokens)
-                text_tokens = [token for token in token_ids if token < tokenizer.timestamp_begin]
-                text = tokenizer.decode(text_tokens).strip()
-                if not text:
-                    continue
-                sequence_score = float(score)
-                token_count = max(1, len(token_ids))
-                cumulative_logprob = sequence_score * (token_count**self.length_penalty)
-                avg_logprob = cumulative_logprob / (token_count + 1)
-                degeneracy = guard.degeneracy(
-                    text, token_ids, avg_logprob, duration_seconds=duration_seconds
-                )
-                stage_rows.append(
-                    CandidateEvidence(
-                        candidate_id=f"fw-{stage_id}-{raw_rank:04d}",
-                        text=text,
-                        token_ids=token_ids,
-                        acoustic=avg_logprob,
-                        rank=raw_rank,
-                        hypothesis_count=len(sequences),
-                        sequence_score=sequence_score,
-                        avg_logprob=avg_logprob,
-                        source=self.name,
-                        metadata={
-                            **common_metadata,
-                            "scoreDomain": score_domain,
-                            "decodeStage": stage_id,
-                            "samplingTemperature": temperature,
-                            "noSpeechProbability": getattr(result, "no_speech_prob", None),
-                            "cumulativeLogprob": cumulative_logprob,
-                            **degeneracy,
-                        },
-                    )
-                )
+            stage_rows = self._rows_from_result(
+                result,
+                tokenizer=tokenizer,
+                stage_id=stage_id,
+                temperature=temperature,
+                score_domain=score_domain,
+                common_metadata=common_metadata,
+                duration_seconds=duration_seconds,
+            )
             best = max(stage_rows, key=lambda row: row.sequence_score or -math.inf, default=None)
             stage_log.append(
                 {
@@ -365,6 +410,49 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
             rows.extend(stage_rows)
             if best is not None and not best.metadata["degenerate"]:
                 break
+
+        enrichment = guard.enrichment_stage
+        if enrichment is not None:
+            stage_id, temperature = enrichment
+            generated = self.model.model.generate(
+                encoded,
+                [prompt],
+                beam_size=1,
+                num_hypotheses=guard.extra_samples,
+                sampling_topk=guard.extra_sample_topk,
+                sampling_temperature=temperature,
+                return_scores=True,
+                return_no_speech_prob=True,
+                length_penalty=self.length_penalty,
+                repetition_penalty=self.repetition_penalty,
+                no_repeat_ngram_size=self.no_repeat_ngram_size,
+                max_length=max_length,
+            )
+            result = generated[0]
+            stage_rows = self._rows_from_result(
+                result,
+                tokenizer=tokenizer,
+                stage_id=stage_id,
+                temperature=temperature,
+                score_domain=(
+                    f"{self.name}|{self.model_name}|{request.start_ms}:{request.end_ms}|"
+                    f"{prompt_digest}|{hotwords_digest}|sampling={temperature:g}|"
+                    f"topk={guard.extra_sample_topk}|lp={self.length_penalty}|stage={stage_id}"
+                ),
+                common_metadata=common_metadata,
+                duration_seconds=duration_seconds,
+            )
+            stage_log.append(
+                {
+                    "stage": stage_id,
+                    "temperature": temperature,
+                    "paths": len(stage_rows),
+                    "degeneratePaths": sum(1 for row in stage_rows if row.metadata["degenerate"]),
+                    "bestDegenerate": False,
+                    "enrichment": True,
+                }
+            )
+            rows.extend(stage_rows)
 
         rows = apply_loop_guard(rows, config=guard)
         output = aggregate_surface_candidates(rows, id_prefix="fw")
