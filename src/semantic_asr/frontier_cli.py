@@ -211,17 +211,32 @@ def command_enrich_candidates(args: argparse.Namespace) -> int:
 
 def command_generate_candidates(args: argparse.Namespace) -> int:
     records = load_audio_manifest(args.input)
-    model_revision = resolve_hugging_face_revision(
-        args.model,
-        args.model_revision,
-        FASTER_WHISPER_MODEL_REVISIONS,
-    )
+    model_path = Path(args.model).expanduser()
+    model_artifact_sha256 = getattr(args, "model_artifact_sha256", None)
+    if model_path.is_dir():
+        if args.model_revision is not None:
+            raise ValueError(
+                "a local model directory cannot use --model-revision; use --model-artifact-sha256"
+            )
+        if model_artifact_sha256 is None:
+            raise ValueError("a verified local model directory requires --model-artifact-sha256")
+        model_revision = None
+    else:
+        if model_artifact_sha256 is not None:
+            raise ValueError("--model-artifact-sha256 is only valid for a local model directory")
+        model_revision = resolve_hugging_face_revision(
+            args.model,
+            args.model_revision,
+            FASTER_WHISPER_MODEL_REVISIONS,
+        )
     fallback_temperatures = tuple(
         float(value) for value in str(args.fallback_temperatures or "").split(",") if value.strip()
     )
     adapter = PathPreservingFasterWhisperAdapter(
         model=args.model,
         model_revision=model_revision,
+        model_artifact_sha256=model_artifact_sha256,
+        runtime_revision=args.runtime_revision,
         device=args.device,
         compute_type=args.compute_type,
         cpu_threads=args.cpu_threads,
@@ -408,6 +423,12 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--ranker-output")
     generate.add_argument("--model", default="large-v3-turbo")
     generate.add_argument("--model-revision")
+    generate.add_argument(
+        "--model-artifact-sha256",
+        "--artifact-sha256",
+        dest="model_artifact_sha256",
+        help="SHA-256 of a verified local model directory (separate from Hub revision).",
+    )
     generate.add_argument("--runtime-revision")
     generate.add_argument("--device", default="auto")
     generate.add_argument("--compute-type", default="default")

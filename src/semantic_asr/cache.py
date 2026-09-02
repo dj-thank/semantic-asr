@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .contracts import CandidateEvidence, canonical_json
+from .revisions import validate_artifact_sha256
 
 SCHEMA_VERSION = "1"
 
@@ -37,6 +38,11 @@ class CacheKey:
     context_sha256: str | None = None
     calibration_sha256: str | None = None
     schema_version: str = SCHEMA_VERSION
+    model_revision: str | None = None
+    runtime_revision: str | None = None
+    model_artifact_sha256: str | None = None
+    decode_config_sha256: str | None = None
+    score_domain: str | None = None
 
     def __post_init__(self) -> None:
         if not self.namespace or not self.adapter or not self.model:
@@ -48,6 +54,21 @@ class CacheKey:
             raise ValueError("cache span is invalid")
         if self.beam_size < 1 or self.hypotheses < 1:
             raise ValueError("beam_size and hypotheses must be positive")
+        for name, value in (
+            ("model_revision", self.model_revision),
+            ("runtime_revision", self.runtime_revision),
+            ("score_domain", self.score_domain),
+        ):
+            if value is not None and not str(value).strip():
+                raise ValueError(f"{name} must not be empty when present")
+        for name, value in (
+            ("model_artifact_sha256", self.model_artifact_sha256),
+            ("decode_config_sha256", self.decode_config_sha256),
+        ):
+            if value is not None:
+                normalized = validate_artifact_sha256(value, identifier=name)
+                if normalized != value:
+                    raise ValueError(f"{name} must be lowercase SHA-256 hex")
 
     @classmethod
     def create(
@@ -66,8 +87,52 @@ class CacheKey:
         hotwords: Iterable[str] = (),
         context: str | None = None,
         calibration_digest: str | None = None,
+        model_revision: str | None = None,
+        runtime_revision: str | None = None,
+        model_artifact_sha256: str | None = None,
+        decode_settings: Mapping[str, Any] | None = None,
+        decode_config: Mapping[str, Any] | None = None,
+        decode_config_sha256: str | None = None,
+        artifact_sha256: str | None = None,
+        score_domain: str | None = None,
     ) -> CacheKey:
         hotword_text = "\u241f".join(str(value) for value in hotwords if str(value))
+        if (
+            decode_settings is not None
+            and decode_config is not None
+            and canonical_json(dict(decode_settings)) != canonical_json(dict(decode_config))
+        ):
+            raise ValueError("decode_settings and decode_config disagree")
+        decode_settings = decode_settings if decode_settings is not None else decode_config
+        if (
+            model_artifact_sha256 is not None
+            and artifact_sha256 is not None
+            and model_artifact_sha256.lower() != artifact_sha256.lower()
+        ):
+            raise ValueError("model_artifact_sha256 and artifact_sha256 disagree")
+        model_artifact_sha256 = model_artifact_sha256 or artifact_sha256
+        if decode_settings is not None:
+            settings_digest = hashlib.sha256(
+                canonical_json(dict(decode_settings)).encode("utf-8")
+            ).hexdigest()
+            if decode_config_sha256 is not None:
+                supplied_digest = validate_artifact_sha256(
+                    decode_config_sha256,
+                    identifier="decode_config_sha256",
+                )
+                if supplied_digest != settings_digest:
+                    raise ValueError("decode settings and decode_config_sha256 disagree")
+            decode_config_sha256 = settings_digest
+        if model_artifact_sha256 is not None:
+            model_artifact_sha256 = validate_artifact_sha256(
+                model_artifact_sha256,
+                identifier="model_artifact_sha256",
+            )
+        if decode_config_sha256 is not None:
+            decode_config_sha256 = validate_artifact_sha256(
+                decode_config_sha256,
+                identifier="decode_config_sha256",
+            )
         return cls(
             namespace=namespace,
             audio_sha256=audio_sha256.lower(),
@@ -82,7 +147,24 @@ class CacheKey:
             hotwords_sha256=_digest(hotword_text),
             context_sha256=_digest(context),
             calibration_sha256=calibration_digest,
+            model_revision=None if model_revision is None else str(model_revision),
+            runtime_revision=None if runtime_revision is None else str(runtime_revision),
+            model_artifact_sha256=model_artifact_sha256,
+            decode_config_sha256=decode_config_sha256,
+            score_domain=None if score_domain is None else str(score_domain),
         )
+
+    @property
+    def decode_settings_sha256(self) -> str | None:
+        """Backward-compatible alias for the decode configuration digest."""
+
+        return self.decode_config_sha256
+
+    @property
+    def artifact_sha256(self) -> str | None:
+        """Backward-compatible alias for the model artifact digest."""
+
+        return self.model_artifact_sha256
 
     @property
     def digest(self) -> str:

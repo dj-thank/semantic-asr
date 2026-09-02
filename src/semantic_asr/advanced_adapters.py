@@ -13,7 +13,9 @@ from .adapters import (
     FasterWhisperAdapter,
     _digest_text,
     _package_version,
+    decode_request_identity,
     pad_features_to_window,
+    score_domain_digest,
     window_frames,
 )
 from .adaptive import AdaptiveKConfig, select_adaptive_k
@@ -198,6 +200,9 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
         loop_guard: LoopGuardConfig | None = None,
         without_timestamps: bool = False,
         model_revision: str | None = None,
+        model_artifact_sha256: str | None = None,
+        artifact_sha256: str | None = None,
+        runtime_revision: str | None = None,
         cpu_threads: int = 0,
     ) -> None:
         super().__init__(
@@ -206,6 +211,9 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
             compute_type=compute_type,
             length_penalty=length_penalty,
             model_revision=model_revision,
+            model_artifact_sha256=model_artifact_sha256,
+            artifact_sha256=artifact_sha256,
+            runtime_revision=runtime_revision,
             cpu_threads=cpu_threads,
         )
         if patience <= 0:
@@ -221,6 +229,35 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
         # Whisper decodes a short clip padded to 30 s far more stably when timestamp tokens
         # are allowed: the decoder can close the segment instead of looping to max_length.
         self.without_timestamps = bool(without_timestamps)
+
+    def _stage_score_domain(
+        self,
+        request: DecodeRequest,
+        *,
+        language: str,
+        common_metadata: dict[str, Any],
+        prompt_digest: str | None,
+        hotwords_digest: str | None,
+        max_length: int,
+        stage_id: str,
+        temperature: float,
+        generate_kwargs: dict[str, Any],
+    ) -> str:
+        """Bind every control that can change one generated score distribution."""
+
+        return score_domain_digest(
+            {
+                **common_metadata,
+                "language": language,
+                "request": decode_request_identity(request),
+                "initialPromptSha256": prompt_digest,
+                "hotwordsSha256": hotwords_digest,
+                "effectiveMaxLength": max_length,
+                "generate": generate_kwargs,
+                "stage": stage_id,
+                "samplingTemperature": temperature,
+            }
+        )
 
     def _rows_from_result(
         self,
@@ -340,6 +377,8 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
             "adapter": self.name,
             "model": self.model_name,
             "modelRevision": self.model_revision,
+            "modelArtifactSha256": self.model_artifact_sha256,
+            "runtimeRevision": self.runtime_revision,
             "scoreKind": "length-normalized-sequence-log-likelihood",
             "durationSeconds": duration_seconds,
             "language": language,
@@ -349,6 +388,8 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
             "hotwordsDigest": hotwords_digest,
             "fasterWhisperVersion": _package_version("faster-whisper"),
             "ctranslate2Version": _package_version("ctranslate2"),
+            "device": self.device,
+            "computeType": self.compute_type,
             "cpuThreads": self.cpu_threads,
             "lengthPenalty": self.length_penalty,
             "patience": self.patience,
@@ -393,10 +434,16 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
             if len(generated) != 1:
                 raise RuntimeError("expected exactly one generated utterance")
             result = generated[0]
-            score_domain = (
-                f"{self.name}|{self.model_name}|{request.start_ms}:{request.end_ms}|"
-                f"{prompt_digest}|{hotwords_digest}|beam={request.beam_size}|"
-                f"patience={self.patience}|lp={self.length_penalty}|stage={stage_id}"
+            score_domain = self._stage_score_domain(
+                request,
+                language=language,
+                common_metadata=common_metadata,
+                prompt_digest=prompt_digest,
+                hotwords_digest=hotwords_digest,
+                max_length=max_length,
+                stage_id=stage_id,
+                temperature=temperature,
+                generate_kwargs=generate_kwargs,
             )
             stage_rows = self._rows_from_result(
                 result,
@@ -444,10 +491,21 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
                 tokenizer=tokenizer,
                 stage_id=stage_id,
                 temperature=temperature,
-                score_domain=(
-                    f"{self.name}|{self.model_name}|{request.start_ms}:{request.end_ms}|"
-                    f"{prompt_digest}|{hotwords_digest}|sampling={temperature:g}|"
-                    f"topk={guard.extra_sample_topk}|lp={self.length_penalty}|stage={stage_id}"
+                score_domain=self._stage_score_domain(
+                    request,
+                    language=language,
+                    common_metadata=common_metadata,
+                    prompt_digest=prompt_digest,
+                    hotwords_digest=hotwords_digest,
+                    max_length=max_length,
+                    stage_id=stage_id,
+                    temperature=temperature,
+                    generate_kwargs={
+                        "beamSize": 1,
+                        "numHypotheses": guard.extra_samples,
+                        "samplingTopk": guard.extra_sample_topk,
+                        "samplingTemperature": temperature,
+                    },
                 ),
                 common_metadata=common_metadata,
                 duration_seconds=duration_seconds,

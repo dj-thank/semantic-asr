@@ -3,12 +3,20 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import math
+import os
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
-from .contracts import CandidateEvidence
-from .revisions import resolve_hugging_face_revision
+from .contracts import CandidateEvidence, canonical_json
+from .revisions import (
+    FASTER_WHISPER_MODEL_REVISIONS,
+    QWEN_ASR_MODEL_REVISIONS,
+    QWEN_FORCED_ALIGNER_REVISIONS,
+    resolve_hugging_face_revision,
+    verify_artifact_sha256,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +72,28 @@ def _digest_text(value: str | None) -> str | None:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def score_domain_digest(payload: Mapping[str, Any]) -> str:
+    """Return a stable, auditable identity for one numeric decoder score domain."""
+
+    digest = hashlib.sha256(canonical_json(dict(payload)).encode("utf-8")).hexdigest()
+    return f"semantic-asr-score-domain-v1:{digest}"
+
+
+def decode_request_identity(request: DecodeRequest) -> dict[str, Any]:
+    """Serialize score-changing request controls without retaining prompt text."""
+
+    return {
+        "language": request.language,
+        "beamSize": request.beam_size,
+        "hypotheses": request.hypotheses,
+        "startMs": request.start_ms,
+        "endMs": request.end_ms,
+        "initialPromptSha256": _digest_text(request.initial_prompt),
+        "hotwords": list(request.hotwords),
+        "returnTimestamps": request.return_timestamps,
+    }
+
+
 def pad_features_to_window(features: Any, nb_max_frames: int) -> Any:
     """Zero-pad (or trim) log-mel features to one full Whisper window.
 
@@ -104,6 +134,25 @@ def _validate_local_snapshot_revision(path: str, revision: str | None) -> None:
     )
 
 
+def _local_artifact_digest(
+    model: str,
+    artifact_sha256: str | None,
+    *,
+    identifier: str = "model artifact",
+    required: bool = False,
+) -> str | None:
+    """Verify a local directory digest while keeping Hub revisions separate."""
+
+    local = Path(model).expanduser().is_dir()
+    if local and artifact_sha256 is None and required:
+        raise ValueError(f"a verified local model directory requires {identifier} SHA-256")
+    if artifact_sha256 is None:
+        return None
+    if not local:
+        raise ValueError(f"{identifier} is only valid for a local model directory")
+    return verify_artifact_sha256(model, artifact_sha256, identifier=identifier)
+
+
 class FasterWhisperAdapter:
     """One-window CTranslate2 N-best adapter built on faster-whisper internals.
 
@@ -122,27 +171,79 @@ class FasterWhisperAdapter:
         *,
         length_penalty: float = 1.0,
         model_revision: str | None = None,
+        model_artifact_sha256: str | None = None,
+        artifact_sha256: str | None = None,
+        runtime_revision: str | None = None,
         cpu_threads: int = 0,
     ) -> None:
         try:
             from faster_whisper import WhisperModel
         except ImportError as exc:  # pragma: no cover - optional runtime
             raise RuntimeError("install semantic-asr with the 'asr' extra") from exc
-        if model_revision is not None:
-            model_revision = resolve_hugging_face_revision(model, model_revision, {})
+        local_model = Path(model).expanduser().is_dir()
         _validate_local_snapshot_revision(model, model_revision)
+        if model_revision is not None and not local_model:
+            model_revision = resolve_hugging_face_revision(
+                model,
+                model_revision,
+                FASTER_WHISPER_MODEL_REVISIONS,
+            )
+        elif model_revision is None and not local_model and model in FASTER_WHISPER_MODEL_REVISIONS:
+            model_revision = resolve_hugging_face_revision(
+                model,
+                None,
+                FASTER_WHISPER_MODEL_REVISIONS,
+            )
+        if (
+            model_artifact_sha256 is not None
+            and artifact_sha256 is not None
+            and model_artifact_sha256.lower() != artifact_sha256.lower()
+        ):
+            raise ValueError("model_artifact_sha256 and artifact_sha256 disagree")
+        model_artifact_sha256 = _local_artifact_digest(
+            model,
+            model_artifact_sha256 or artifact_sha256,
+            required=True,
+        )
         self.model_name = model
         self.model_revision = model_revision
+        self.model_artifact_sha256 = model_artifact_sha256
+        self.runtime_revision = (
+            None if runtime_revision is None else str(runtime_revision).strip() or None
+        )
+        self.device = str(device)
+        self.compute_type = str(compute_type)
         self.cpu_threads = int(cpu_threads)
         if self.cpu_threads < 0:
             raise ValueError("cpu_threads must be non-negative")
         self.length_penalty = float(length_penalty)
         self.model = WhisperModel(
             model,
-            device=device,
-            compute_type=compute_type,
+            device=self.device,
+            compute_type=self.compute_type,
             revision=model_revision,
             cpu_threads=self.cpu_threads,
+        )
+
+    def _score_domain(self, request: DecodeRequest, *, language: str) -> str:
+        return score_domain_digest(
+            {
+                "adapter": self.name,
+                "model": self.model_name,
+                "modelRevision": self.model_revision,
+                "modelArtifactSha256": self.model_artifact_sha256,
+                "runtimeRevision": self.runtime_revision,
+                "device": self.device,
+                "computeType": self.compute_type,
+                "fasterWhisperVersion": _package_version("faster-whisper"),
+                "ctranslate2Version": _package_version("ctranslate2"),
+                "ompNumThreads": os.environ.get("OMP_NUM_THREADS"),
+                "language": language,
+                "request": decode_request_identity(request),
+                "lengthPenalty": self.length_penalty,
+                "cpuThreads": self.cpu_threads,
+                "scoreKind": "length-normalized-sequence-log-likelihood",
+            }
         )
 
     def _language(self, waveform: Any, requested: str | None) -> tuple[str, float | None, str]:
@@ -190,6 +291,7 @@ class FasterWhisperAdapter:
             raise ValueError("decode request exceeds one Whisper window")
 
         language, language_probability, language_policy = self._language(waveform, request.language)
+        score_domain = self._score_domain(request, language=language)
         tokenizer = Tokenizer(
             self.model.hf_tokenizer,
             self.model.model.is_multilingual,
@@ -261,6 +363,13 @@ class FasterWhisperAdapter:
                         "adapter": self.name,
                         "model": self.model_name,
                         "modelRevision": self.model_revision,
+                        "modelArtifactSha256": self.model_artifact_sha256,
+                        "runtimeRevision": self.runtime_revision,
+                        "device": self.device,
+                        "computeType": self.compute_type,
+                        "lengthPenalty": self.length_penalty,
+                        "scoreKind": "length-normalized-sequence-log-likelihood",
+                        "scoreDomain": score_domain,
                         "durationSeconds": duration_seconds,
                         "language": language,
                         "languageProbability": language_probability,
@@ -271,6 +380,7 @@ class FasterWhisperAdapter:
                         "fasterWhisperVersion": _package_version("faster-whisper"),
                         "ctranslate2Version": _package_version("ctranslate2"),
                         "cpuThreads": self.cpu_threads,
+                        "ompNumThreads": os.environ.get("OMP_NUM_THREADS"),
                     },
                 )
             )
@@ -399,33 +509,93 @@ class Qwen3ASRAdapter:
         return_timestamps: bool = False,
         forced_aligner: str = "Qwen/Qwen3-ForcedAligner-0.6B",
         forced_aligner_revision: str | None = None,
+        model_artifact_sha256: str | None = None,
+        artifact_sha256: str | None = None,
+        forced_aligner_artifact_sha256: str | None = None,
+        runtime_revision: str | None = None,
     ) -> None:
         try:
             from qwen_asr import Qwen3ASRModel
         except ImportError as exc:  # pragma: no cover - optional runtime
             raise RuntimeError("install semantic-asr with the 'qwen' extra") from exc
-        if model_revision is not None:
-            model_revision = resolve_hugging_face_revision(model, model_revision, {})
-        if forced_aligner_revision is not None:
+        local_model = Path(model).expanduser().is_dir()
+        local_aligner = Path(forced_aligner).expanduser().is_dir()
+        _validate_local_snapshot_revision(model, model_revision)
+        if model_revision is not None and not local_model:
+            model_revision = resolve_hugging_face_revision(
+                model,
+                model_revision,
+                QWEN_ASR_MODEL_REVISIONS,
+            )
+        elif model_revision is None and not local_model and model in QWEN_ASR_MODEL_REVISIONS:
+            model_revision = resolve_hugging_face_revision(
+                model,
+                None,
+                QWEN_ASR_MODEL_REVISIONS,
+            )
+        if (
+            model_artifact_sha256 is not None
+            and artifact_sha256 is not None
+            and model_artifact_sha256.lower() != artifact_sha256.lower()
+        ):
+            raise ValueError("model_artifact_sha256 and artifact_sha256 disagree")
+        model_artifact_sha256 = _local_artifact_digest(
+            model,
+            model_artifact_sha256 or artifact_sha256,
+            required=True,
+        )
+
+        _validate_local_snapshot_revision(forced_aligner, forced_aligner_revision)
+        if forced_aligner_revision is not None and not local_aligner:
             forced_aligner_revision = resolve_hugging_face_revision(
                 forced_aligner,
                 forced_aligner_revision,
-                {},
+                QWEN_FORCED_ALIGNER_REVISIONS,
             )
-        _validate_local_snapshot_revision(model, model_revision)
-        if model_revision is not None and return_timestamps and forced_aligner_revision is None:
+        elif (
+            forced_aligner_revision is None
+            and not local_aligner
+            and return_timestamps
+            and forced_aligner in QWEN_FORCED_ALIGNER_REVISIONS
+        ):
+            forced_aligner_revision = resolve_hugging_face_revision(
+                forced_aligner,
+                None,
+                QWEN_FORCED_ALIGNER_REVISIONS,
+            )
+        forced_aligner_artifact_sha256 = _local_artifact_digest(
+            forced_aligner,
+            forced_aligner_artifact_sha256,
+            identifier="forced aligner artifact",
+            required=return_timestamps,
+        )
+        if (
+            return_timestamps
+            and forced_aligner_revision is None
+            and forced_aligner_artifact_sha256 is None
+        ):
             raise ValueError(
-                "a revision-bound Qwen timestamp run also requires an aligner revision"
+                "a Qwen timestamp run requires an exact aligner revision or verified artifact"
             )
-        _validate_local_snapshot_revision(forced_aligner, forced_aligner_revision)
         self.model_name = model
         self.model_revision = model_revision
+        self.model_artifact_sha256 = model_artifact_sha256
+        self.runtime_revision = (
+            None if runtime_revision is None else str(runtime_revision).strip() or None
+        )
         self.forced_aligner_revision = forced_aligner_revision
+        self.forced_aligner_artifact_sha256 = forced_aligner_artifact_sha256
+        self.dtype = str(dtype)
+        self.device_map = str(device_map)
+        self.max_inference_batch_size = int(max_inference_batch_size)
+        self.max_new_tokens = int(max_new_tokens)
+        if self.max_inference_batch_size < 1 or self.max_new_tokens < 1:
+            raise ValueError("Qwen inference limits must be positive")
         self.return_timestamps = return_timestamps
         kwargs: dict[str, Any] = {
-            "device_map": device_map,
-            "max_inference_batch_size": max_inference_batch_size,
-            "max_new_tokens": max_new_tokens,
+            "device_map": self.device_map,
+            "max_inference_batch_size": self.max_inference_batch_size,
+            "max_new_tokens": self.max_new_tokens,
         }
         resolved_dtype = _torch_dtype(dtype)
         if resolved_dtype is not None:
@@ -445,7 +615,7 @@ class Qwen3ASRAdapter:
                 )
             kwargs["forced_aligner"] = resolved_aligner
             kwargs["forced_aligner_kwargs"] = {
-                "device_map": device_map,
+                "device_map": self.device_map,
                 **({"dtype": resolved_dtype} if resolved_dtype is not None else {}),
             }
         resolved_model = model
@@ -459,6 +629,27 @@ class Qwen3ASRAdapter:
             resolved_model = snapshot_download(repo_id=model, revision=model_revision)
         self.model = Qwen3ASRModel.from_pretrained(resolved_model, **kwargs)
 
+    def _score_domain(self, request: DecodeRequest, *, language: str | None) -> str:
+        return score_domain_digest(
+            {
+                "adapter": self.name,
+                "model": self.model_name,
+                "modelRevision": self.model_revision,
+                "modelArtifactSha256": self.model_artifact_sha256,
+                "runtimeRevision": self.runtime_revision,
+                "forcedAligner": self.forced_aligner_revision
+                or self.forced_aligner_artifact_sha256,
+                "qwenAsrVersion": _package_version("qwen-asr"),
+                "dtype": self.dtype,
+                "deviceMap": self.device_map,
+                "maxInferenceBatchSize": self.max_inference_batch_size,
+                "maxNewTokens": self.max_new_tokens,
+                "returnTimestamps": self.return_timestamps or request.return_timestamps,
+                "language": language,
+                "request": decode_request_identity(request),
+            }
+        )
+
     def decode(self, request: DecodeRequest) -> list[CandidateEvidence]:
         context = "\n".join(
             part
@@ -468,11 +659,14 @@ class Qwen3ASRAdapter:
             )
             if part
         )
+        language = qwen_language_name(request.language)
+        return_timestamps = request.return_timestamps or self.return_timestamps
+        score_domain = self._score_domain(request, language=language)
         results: Any = self.model.transcribe(
             audio=_audio_slice(request),
             context=context,
-            language=qwen_language_name(request.language),
-            return_time_stamps=request.return_timestamps or self.return_timestamps,
+            language=language,
+            return_time_stamps=return_timestamps,
         )
         rows = results if isinstance(results, list) else [results]
         output: list[CandidateEvidence] = []
@@ -495,8 +689,13 @@ class Qwen3ASRAdapter:
                         "adapter": self.name,
                         "model": self.model_name,
                         "modelRevision": self.model_revision,
+                        "modelArtifactSha256": self.model_artifact_sha256,
+                        "runtimeRevision": self.runtime_revision,
                         "forcedAlignerRevision": self.forced_aligner_revision,
-                        "language": language,
+                        "forcedAlignerArtifactSha256": self.forced_aligner_artifact_sha256,
+                        "language": getattr(row, "language", None) or language,
+                        "returnTimestamps": return_timestamps,
+                        "scoreDomain": score_domain,
                         "timeStamps": _jsonable(timestamps),
                         "qwenAsrVersion": _package_version("qwen-asr"),
                         "candidateMultiplicity": "one-transcript-per-input",
@@ -524,16 +723,54 @@ class Qwen3ForcedAlignerAdapter:
         *,
         dtype: str = "float16",
         device_map: str = "cuda:0",
+        model_revision: str | None = None,
+        model_artifact_sha256: str | None = None,
+        artifact_sha256: str | None = None,
+        runtime_revision: str | None = None,
     ) -> None:
         try:
             from qwen_asr import Qwen3ForcedAligner
         except ImportError as exc:  # pragma: no cover - optional runtime
             raise RuntimeError("install semantic-asr with the 'qwen' extra") from exc
+        local_model = Path(model).expanduser().is_dir()
+        _validate_local_snapshot_revision(model, model_revision)
+        if model_revision is not None and not local_model:
+            model_revision = resolve_hugging_face_revision(
+                model,
+                model_revision,
+                QWEN_FORCED_ALIGNER_REVISIONS,
+            )
+        elif model_revision is None and not local_model and model in QWEN_FORCED_ALIGNER_REVISIONS:
+            model_revision = resolve_hugging_face_revision(
+                model,
+                None,
+                QWEN_FORCED_ALIGNER_REVISIONS,
+            )
+        if (
+            model_artifact_sha256 is not None
+            and artifact_sha256 is not None
+            and model_artifact_sha256.lower() != artifact_sha256.lower()
+        ):
+            raise ValueError("model_artifact_sha256 and artifact_sha256 disagree")
+        model_artifact_sha256 = _local_artifact_digest(
+            model,
+            model_artifact_sha256 or artifact_sha256,
+            required=True,
+        )
         kwargs: dict[str, Any] = {"device_map": device_map}
         resolved_dtype = _torch_dtype(dtype)
         if resolved_dtype is not None:
             kwargs["dtype"] = resolved_dtype
+        if model_revision is not None:
+            kwargs["revision"] = model_revision
         self.model_name = model
+        self.model_revision = model_revision
+        self.model_artifact_sha256 = model_artifact_sha256
+        self.runtime_revision = (
+            None if runtime_revision is None else str(runtime_revision).strip() or None
+        )
+        self.dtype = str(dtype)
+        self.device_map = str(device_map)
         self.model = Qwen3ForcedAligner.from_pretrained(model, **kwargs)
 
     def align(self, request: DecodeRequest, *, text: str) -> list[AlignedToken]:
