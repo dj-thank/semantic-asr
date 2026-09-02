@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import zlib
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
@@ -349,6 +350,9 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
             "noRepeatNgramSize": self.no_repeat_ngram_size,
             "maxNewTokens": max_new_tokens,
             "withoutTimestamps": self.without_timestamps,
+            # int8 CPU kernels are not bit-identical across thread counts; near-tie beams can
+            # flip between runs, so the thread setting is part of decode provenance.
+            "ompNumThreads": os.environ.get("OMP_NUM_THREADS"),
             "loopGuard": asdict(guard),
         }
 
