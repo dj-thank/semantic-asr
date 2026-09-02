@@ -201,6 +201,7 @@ def fuse_candidates(
     if len({candidate.candidate_id for candidate in candidates}) != len(candidates):
         raise ValueError("candidate IDs must be unique")
     config = config or FusionConfig()
+    all_degenerate = all(bool(candidate.metadata.get("degenerate")) for candidate in candidates)
 
     calibrated: dict[EvidenceName, list[float | None]] = {
         stream: calibrate_values(
@@ -315,18 +316,24 @@ def fuse_candidates(
         ),
     )
     needs_relisten = (
-        entropy >= config.relisten_entropy
+        all_degenerate
+        or entropy >= config.relisten_entropy
         or disagreement >= config.relisten_disagreement
         or margin <= config.relisten_margin
         or selective_risk >= config.max_selective_risk
         or evidence_coverage < config.minimum_evidence_coverage
     )
-    abstain = top_probability < config.acceptance_posterior and (
-        selective_risk >= config.max_selective_risk
-        or evidence_coverage < config.minimum_evidence_coverage
-        or disagreement >= config.relisten_disagreement
+    abstain = all_degenerate or (
+        top_probability < config.acceptance_posterior
+        and (
+            selective_risk >= config.max_selective_risk
+            or evidence_coverage < config.minimum_evidence_coverage
+            or disagreement >= config.relisten_disagreement
+        )
     )
     reasons: list[str] = []
+    if all_degenerate:
+        reasons.append("all-candidates-degenerate")
     if entropy >= config.relisten_entropy:
         reasons.append("high-candidate-entropy")
     if disagreement >= config.relisten_disagreement:

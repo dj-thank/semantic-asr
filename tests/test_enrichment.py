@@ -79,6 +79,9 @@ def test_second_ear_candidate_is_appended_once() -> None:
     rows = enrich_candidates(_candidates(), second_ear=ear, config=config)
     assert [row.candidate_id for row in rows] == ["a", "b", "ear:0001"]
     assert rows[-1].source == "ear"
+    assert rows[-1].cross_model is None
+    assert rows[-1].metadata["secondEarAgreement"] is None
+    assert rows[-1].metadata["crossModelEligible"] is False
     assert all(row.hypothesis_count == 3 for row in rows)
     duplicate = enrich_candidates(
         _candidates(),

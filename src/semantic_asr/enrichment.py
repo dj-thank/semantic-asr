@@ -173,7 +173,6 @@ def enrich_candidates(
                 CandidateEvidence(
                     candidate_id=f"{config.second_ear_source}:0001",
                     text=second_text,
-                    cross_model=1.0,
                     rank=len(enriched) + 1,
                     hypothesis_count=len(enriched) + 1,
                     source=config.second_ear_source,
@@ -182,7 +181,8 @@ def enrich_candidates(
                         "scoreDomain": f"{config.second_ear_source}|second-ear",
                         "secondEarSource": config.second_ear_source,
                         "secondEarText": second_text,
-                        "secondEarAgreement": 1.0,
+                        "secondEarAgreement": None,
+                        "crossModelEligible": False,
                         "secondEarRevision": second_ear.model_revision,
                         "secondEarCandidate": True,
                         "ngramAverageLogProbability": ngram_value,

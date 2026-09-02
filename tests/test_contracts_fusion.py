@@ -122,6 +122,43 @@ def test_clear_candidate_is_accepted() -> None:
     assert not ranked[0].gate.abstain
 
 
+def test_all_degenerate_pool_is_provisional_but_keeps_diagnostics() -> None:
+    candidates = [
+        CandidateEvidence(
+            "loop-a",
+            "ホンマやね",
+            acoustic=1.0,
+            mora=1.0,
+            lexical=1.0,
+            preservation=1.0,
+            cross_model=1.0,
+            source="whisper",
+            metadata={"degenerate": True, "degenerateReasons": ["compression-ratio"]},
+        ),
+        CandidateEvidence(
+            "loop-b",
+            "ほんまやね",
+            acoustic=0.0,
+            mora=0.0,
+            lexical=0.0,
+            preservation=0.0,
+            cross_model=0.0,
+            source="whisper",
+            metadata={"degenerate": True, "degenerateReasons": ["repeated-ngram"]},
+        ),
+    ]
+
+    ranked = fuse_candidates(candidates)
+
+    assert [item.candidate.candidate_id for item in ranked] == ["loop-a", "loop-b"]
+    assert all(item.candidate.metadata["degenerate"] is True for item in ranked)
+    assert ranked[0].gate.needs_relisten
+    assert ranked[0].gate.abstain
+    assert "all-candidates-degenerate" in ranked[0].gate.reasons
+    observed = ObservedTranscript.create(selected=ranked[0], ranked=ranked, uncertainty_spans=[])
+    assert observed.decision == "provisional"
+
+
 def test_cross_model_consensus_is_recorded_on_duplicate_text() -> None:
     merged = merge_candidates(
         [CandidateEvidence("w", "同じ文", acoustic=0.7, source="whisper")],
