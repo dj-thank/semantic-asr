@@ -8,6 +8,7 @@
 - Added `corpus_cer` and `lenient_corpus_cer` (punctuation/symbol-stripped, length-weighted) to benchmark reports for comparability with published Japanese ASR numbers; strict utterance-mean CER remains primary.
 - Ranker training now skips utterances with a single surviving candidate instead of aborting.
 - Added `scripts/prepare_public_manifest.py` (Hugging Face public test sets to rights-annotated manifests) and `scripts/run_real_audio_pipeline.py` (partition → train → calibrate → apply → benchmark through the CLI).
+- Added `enrich-candidates` (second-ear agreement as `cross_model`, n-gram score as `lexical`, optional second-ear candidate) and `scripts/probe_second_ear.py`; measured neutral or harmful on the locked test split and recorded as such.
 - Pinned eight 2025–2026 primary sources and three falsifiable translations in the research registry; see `docs/RESEARCH_2026-09-02.md`.
 
 ## 0.2.0 — 2026-08-31
