@@ -64,30 +64,13 @@ def test_degeneracy_reasons() -> None:
     assert LoopGuardConfig(enabled=False).degeneracy(loop, [1] * 40, -5.0)["degenerate"] is False
 
 
-def _candidate(
-    identifier: str, *, degenerate: bool, reasons: tuple[str, ...] = ("compression-ratio",)
-) -> CandidateEvidence:
+def _candidate(identifier: str, *, degenerate: bool) -> CandidateEvidence:
     return CandidateEvidence(
         candidate_id=identifier,
         text=identifier,
         acoustic=-0.1,
-        metadata={
-            "degenerate": degenerate,
-            "degenerateReasons": list(reasons) if degenerate else [],
-        },
+        metadata={"degenerate": degenerate},
     )
-
-
-def test_apply_loop_guard_keeps_low_logprob_only_paths() -> None:
-    rows = [
-        _candidate("quiet", degenerate=True, reasons=("low-logprob",)),
-        _candidate("loop", degenerate=True, reasons=("low-logprob", "repeated-ngram")),
-        _candidate("clean", degenerate=False),
-    ]
-    kept = apply_loop_guard(rows, config=LoopGuardConfig())
-    assert [row.candidate_id for row in kept] == ["clean", "quiet"]
-    assert kept[0].metadata["rejectedDegeneratePaths"] == 1
-    assert kept[0].metadata["demotedLowLogprobPaths"] == 1
 
 
 def test_apply_loop_guard_drops_or_demotes_but_never_empties() -> None:

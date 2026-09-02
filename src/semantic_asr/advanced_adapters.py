@@ -166,23 +166,13 @@ def apply_loop_guard(
     degenerate = [row for row in candidates if row.metadata.get("degenerate")]
     if not healthy:
         return list(candidates)
-    # A low average log-probability alone is not a loop. Measured on the 2026-09-02 test
-    # split, dropping such paths cost oracle@12 (0.178 -> 0.192); keep them in the pool where
-    # their own score already ranks them low, and drop only loop-type degeneracy.
-    loops = [
-        row
-        for row in degenerate
-        if set(row.metadata.get("degenerateReasons", ())) - {"low-logprob"}
-    ]
-    demoted = [row for row in degenerate if row not in loops]
-    kept = [*healthy, *demoted] if config.drop_degenerate else [*healthy, *demoted, *loops]
+    kept = healthy if config.drop_degenerate else [*healthy, *degenerate]
     return [
         replace(
             row,
             metadata={
                 **row.metadata,
-                "rejectedDegeneratePaths": len(loops),
-                "demotedLowLogprobPaths": len(demoted),
+                "rejectedDegeneratePaths": len(degenerate),
             },
         )
         for row in kept
