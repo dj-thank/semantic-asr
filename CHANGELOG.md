@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — 2026-09-02
+
+- Fixed the direct CTranslate2 generate path: log-mel features are now padded to one 30 s Whisper window before `encode()`, matching `faster_whisper.transcribe`. Unpadded short clips looped on every beam; on 20 ReazonSpeech test clips the utterance-mean CER fell from 5.70 to 0.30 (large-v3-turbo int8, CPU).
+- Added `LoopGuardConfig`: duration-aware token budget, per-path compression-ratio / repeated n-gram / character-budget / log-probability degeneracy evidence, staged sampling fallback in separate score domains, and timestamp-enabled prompts by default (`--without-timestamps` restores the old prompt).
+- Added optional sampled-candidate enrichment (`--extra-samples`) for sample-based Semantic MBR.
+- Added `corpus_cer` and `lenient_corpus_cer` (punctuation/symbol-stripped, length-weighted) to benchmark reports for comparability with published Japanese ASR numbers; strict utterance-mean CER remains primary.
+- Ranker training now skips utterances with a single surviving candidate instead of aborting.
+- Added `scripts/prepare_public_manifest.py` (Hugging Face public test sets to rights-annotated manifests) and `scripts/run_real_audio_pipeline.py` (partition → train → calibrate → apply → benchmark through the CLI).
+- Pinned eight 2025–2026 primary sources and three falsifiable translations in the research registry; see `docs/RESEARCH_2026-09-02.md`.
+
 ## 0.2.0 — 2026-08-31
 
 - Preserved all same-surface decoder paths and aggregated probability mass with score-domain-safe `logsumexp` instead of strongest-path-only deduplication.

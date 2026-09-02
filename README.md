@@ -215,6 +215,20 @@ semantic-asr research-smoke --output runs/research-smoke.json
 
 これは学習・MBR・adaptive Kのcode pathを検証しますが、実音声CER改善の証拠ではありません。
 
+## 実音声で動かす（2026-09-02 以降）
+
+公開テストセットから権利注記付き manifest を作り、N-best 候補を生成し、分割・学習・較正・ベンチマークまでを CLI で回します。
+
+```bash
+python scripts/prepare_public_manifest.py reazonspeech-test --output-dir data/reazon --limit 600
+semantic-asr generate-candidates data/reazon/manifest.jsonl   --output runs/reazon/all-candidates.jsonl   --ranker-output runs/reazon/all-ranker.jsonl   --model large-v3-turbo --device cpu --compute-type int8   --beam-size 12 --hypotheses 12
+python scripts/run_real_audio_pipeline.py   --candidates "runs/reazon/all-candidates.jsonl"   --output-dir runs/reazon/pipeline
+```
+
+`generate-candidates` は既定で loop guard（30 秒 window への padding、duration 依存の token 上限、圧縮率・反復 n-gram・文字数予算による degenerate 判定、温度 fallback）を有効にします。`--no-loop-guard` で v0.2 の挙動に戻せます。`--extra-samples N` でサンプル候補を追加し、sample-based MBR を試せます。
+
+測定記録と発見した欠陥は [`docs/RESEARCH_2026-09-02.md`](docs/RESEARCH_2026-09-02.md) を参照してください。
+
 ## v0.2長時間文字起こし
 
 Path-preserving N-bestだけを使う:
