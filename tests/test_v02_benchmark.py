@@ -4,6 +4,7 @@ import pytest
 
 from semantic_asr.benchmark import (
     BenchmarkUtterance,
+    benchmark_utterance_from_row,
     run_benchmark,
     verify_split_isolation,
 )
@@ -19,6 +20,7 @@ def _record(
     *,
     split: str = "test",
     domain: str = "meeting",
+    annotated_reference: str | None = None,
 ) -> BenchmarkUtterance:
     return BenchmarkUtterance(
         sample_id=sample_id,
@@ -38,6 +40,7 @@ def _record(
             for index, text in enumerate(texts)
         ),
         domain=domain,
+        annotated_reference=annotated_reference,
     )
 
 
@@ -145,6 +148,45 @@ def test_lenient_cer_ignores_punctuation_but_strict_does_not() -> None:
     assert row.baseline_lenient_cer == 0.0
     assert row.reference_characters == 8
     assert row.reference_characters_lenient == 6
+
+
+def test_benchmark_carries_annotated_reference_and_excludes_uncertain_cer() -> None:
+    annotated = "明日は(? 舞い)上がる"
+    record = _record(
+        "annotated",
+        "speaker-a",
+        "source-a",
+        "明日は舞い上がる",
+        ["明日は舞い上がる", "明日は舞い上がった"],
+        annotated_reference=annotated,
+    )
+    report = run_benchmark([record], ks=(1, 2), bootstrap_iterations=10, seed=1)
+    row = report.rows[0]
+    assert row.annotated_reference == annotated
+    assert row.baseline_cer is None
+    assert row.cascade_cer is None
+    assert row.mbr_cer is None
+    assert row.boundary_diagnostics is None
+    assert report.baseline_cer is None
+    assert report.cascade_improvement is None
+    assert report.corpus_cer["baseline"] is None
+
+
+def test_benchmark_row_loader_preserves_annotated_reference_and_legacy_rows() -> None:
+    base = {
+        "sampleId": "sample",
+        "groupId": "speaker",
+        "sourceId": "source",
+        "split": "test",
+        "reference": "東京です",
+        "candidates": [{"candidateId": "candidate", "text": "東京です"}],
+    }
+    annotated = benchmark_utterance_from_row(
+        {**base, "annotatedReference": "東京(? です)"}, line_number=1
+    )
+    legacy = benchmark_utterance_from_row(base, line_number=2)
+    assert annotated.annotated_reference == "東京(? です)"
+    assert legacy.annotated_reference is None
 
 
 def test_final_benchmark_rejects_non_test_split() -> None:

@@ -12,6 +12,7 @@ from semantic_asr.evaluation import (
     edit_distance,
     evaluate_confidence,
     evaluate_transcript,
+    exact_cer,
     filler_event_score,
     negation_error_rate,
     number_error_rate,
@@ -25,6 +26,10 @@ from semantic_asr.evaluation import (
 
 def test_cer_uses_reference_character_count() -> None:
     assert cer("今日は3人です", "今日は2人です") == pytest.approx(1 / 7)
+
+
+def test_exact_cer_is_undefined_for_an_empty_reference() -> None:
+    assert exact_cer(" ", "") is None
 
 
 def test_best_contiguous_alignment_reports_boundary_overrun_without_changing_text() -> None:
@@ -90,6 +95,41 @@ def test_filler_event_score_matches_variant_families_without_deleting_them() -> 
     assert score.f1 == pytest.approx(2 / 3)
 
 
+@pytest.mark.parametrize("filler", ("ええと", "その", "まあ", "うーん", "んー"))
+def test_filler_event_score_keeps_each_declared_family_distinct(filler: str) -> None:
+    score = filler_event_score(f"(F {filler})", filler)
+    assert score is not None
+    assert score.expected_events == 1
+    assert score.observed_events == 1
+    assert score.matched_events == 1
+    assert score.f1 == 1.0
+
+
+def test_filler_event_score_does_not_match_different_declared_families() -> None:
+    score = filler_event_score("(F その)", "まあ")
+    assert score is not None
+    assert score.matched_events == 0
+    assert score.f1 == 0.0
+
+
+def test_filler_event_score_is_multiplicity_aware_within_one_utterance() -> None:
+    score = filler_event_score("(F その)(F その)", "そのその")
+    assert score is not None
+    assert score.expected_events == 2
+    assert score.observed_events == 2
+    assert score.matched_events == 2
+    assert score.f1 == 1.0
+
+
+def test_filler_event_score_matches_unknown_annotated_family_without_collapsing_it() -> None:
+    score = filler_event_score("(F ほら)", "ほら")
+    assert score is not None
+    assert score.expected_events == 1
+    assert score.observed_events == 1
+    assert score.matched_events == 1
+    assert score.f1 == 1.0
+
+
 def test_full_evaluation_uses_spoken_surface_and_reports_filler_events() -> None:
     result = evaluate_transcript(
         reference="そうですね",
@@ -111,6 +151,24 @@ def test_full_evaluation_refuses_exact_cer_for_uncertain_annotated_spans() -> No
     )
     assert result.cer is None
     assert result.critical_entity_error_rate is None
+    assert result.reference_annotations is not None
+    assert result.reference_annotations.exact_cer_safe is False
+
+
+@pytest.mark.parametrize(
+    "annotated",
+    ("明日は(?)上がる", "明日は[PERSON_01]上がる", "明日は[MASK]上がる"),
+)
+def test_full_evaluation_refuses_exact_cer_for_inaudible_or_masked_spans(
+    annotated: str,
+) -> None:
+    result = evaluate_transcript(
+        reference="明日は舞い上がる",
+        annotated_reference=annotated,
+        observed="明日は舞い上がる",
+        normalized="明日は舞い上がる",
+    )
+    assert result.cer is None
     assert result.reference_annotations is not None
     assert result.reference_annotations.exact_cer_safe is False
 

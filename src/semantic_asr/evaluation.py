@@ -28,17 +28,19 @@ ANNOTATED_FILLER_PATTERN = re.compile(r"\(F\s+([^()]*)\)")
 ANNOTATED_DISFLUENCY_PATTERN = re.compile(r"\(D2?\s+([^()]*)\)")
 ANNOTATED_UNCERTAIN_PATTERN = re.compile(r"\(\?\s+([^()]*)\)")
 ANNOTATED_INAUDIBLE_PATTERN = re.compile(r"\(\?\)")
-ANNOTATED_MASK_PATTERN = re.compile(r"\[[A-Z]+_[0-9]+\]")
-_FILLER_VARIANTS = (
-    "えーっと",
-    "えっとー",
-    "えーと",
-    "えっと",
-    "あのー",
-    "あのう",
-    "えー",
-    "あの",
-)
+ANNOTATED_MASK_PATTERN = re.compile(r"\[[A-Za-z][A-Za-z0-9_-]*\]")
+_FILLER_FAMILIES = {
+    "え": ("えーっと", "えっとー", "えーと", "ええと", "えっと", "えー"),
+    "あの": ("あのー", "あのう", "あの"),
+    "その": ("その",),
+    "まあ": ("まあ",),
+    "うーん": ("うーん",),
+    "んー": ("んー",),
+}
+_FILLER_FAMILY_BY_VARIANT = {
+    variant: family for family, variants in _FILLER_FAMILIES.items() for variant in variants
+}
+_FILLER_VARIANTS = tuple(_FILLER_FAMILY_BY_VARIANT)
 _FILLER_VARIANT_PATTERN = re.compile(
     "|".join(re.escape(value) for value in sorted(_FILLER_VARIANTS, key=len, reverse=True))
 )
@@ -137,6 +139,48 @@ def spoken_reference_surface(text: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class _ReferenceEvaluation:
+    surface: str
+    annotations: ReferenceAnnotationCounts | None
+    exact_cer_safe: bool
+
+
+def _reference_evaluation(
+    reference: str,
+    annotated_reference: str | None,
+) -> _ReferenceEvaluation:
+    if annotated_reference is None:
+        return _ReferenceEvaluation(surface=reference, annotations=None, exact_cer_safe=True)
+    annotations = reference_annotation_counts(annotated_reference)
+    return _ReferenceEvaluation(
+        surface=spoken_reference_surface(annotated_reference),
+        annotations=annotations,
+        exact_cer_safe=annotations.exact_cer_safe,
+    )
+
+
+def exact_cer(
+    reference: str,
+    hypothesis: str,
+    *,
+    annotated_reference: str | None = None,
+) -> float | None:
+    """Compute strict CER on the spoken reference surface, failing closed on annotations.
+
+    An annotated reference is authoritative for the scored surface. Any uncertain, inaudible,
+    or masked span makes the exact metric undefined rather than treating an incomplete label as
+    ground truth. Unannotated legacy references retain the historical CER behavior.
+    """
+
+    evaluated = _reference_evaluation(reference, annotated_reference)
+    if not evaluated.exact_cer_safe:
+        return None
+    if not normalize_characters(evaluated.surface):
+        return None
+    return cer(evaluated.surface, hypothesis)
+
+
+@dataclass(frozen=True, slots=True)
 class FillerEventScore:
     expected_events: int
     observed_events: int
@@ -147,25 +191,52 @@ class FillerEventScore:
 
 
 def _canonical_filler(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value).replace(" ", "")
-    return "あの" if normalized.startswith("あの") else "え"
+    normalized = "".join(unicodedata.normalize("NFKC", str(value or "")).split())
+    if not normalized:
+        return "unknown:"
+    return _FILLER_FAMILY_BY_VARIANT.get(normalized, f"unknown:{normalized}")
 
 
-def _surface_filler_events(text: str) -> list[str]:
+def _surface_filler_events(
+    text: str,
+    *,
+    additional_variants: Iterable[str] = (),
+) -> list[str]:
     value = unicodedata.normalize("NFKC", str(text or ""))
-    return [_canonical_filler(match.group(0)) for match in _FILLER_VARIANT_PATTERN.finditer(value)]
+    variants = {
+        "".join(unicodedata.normalize("NFKC", str(item or "")).split())
+        for item in additional_variants
+    }
+    variants.discard("")
+    if variants:
+        pattern = re.compile(
+            "|".join(
+                re.escape(item)
+                for item in sorted(
+                    (*_FILLER_VARIANTS, *variants),
+                    key=lambda item: (-len(item), item),
+                )
+            )
+        )
+    else:
+        pattern = _FILLER_VARIANT_PATTERN
+    return [_canonical_filler(match.group(0)) for match in pattern.finditer(value)]
 
 
 def filler_event_score(
     annotated_reference: str,
     hypothesis: str,
 ) -> FillerEventScore | None:
-    expected = [
-        _canonical_filler(value) for value in ANNOTATED_FILLER_PATTERN.findall(annotated_reference)
-    ]
+    annotated_values = ANNOTATED_FILLER_PATTERN.findall(annotated_reference)
+    expected = [_canonical_filler(value) for value in annotated_values]
     if not expected:
         expected = _surface_filler_events(spoken_reference_surface(annotated_reference))
-    observed = _surface_filler_events(hypothesis)
+    unknown_values = [
+        value for value in annotated_values if _canonical_filler(value).startswith("unknown:")
+    ]
+    # Filler events are deliberately utterance-scoped. Unknown annotated forms are matched only
+    # against their own normalized spelling; no timestamp or cross-utterance identity is inferred.
+    observed = _surface_filler_events(hypothesis, additional_variants=unknown_values)
     if not expected and not observed:
         return None
     expected_counts = Counter(expected)
@@ -448,19 +519,16 @@ def evaluate_transcript(
     supported_normalization_spans: Sequence[tuple[int, int]] = (),
     annotated_reference: str | None = None,
 ) -> EvaluationResult:
-    annotation_counts = (
-        reference_annotation_counts(annotated_reference)
-        if annotated_reference is not None
-        else None
-    )
-    exact_reference_safe = annotation_counts is None or annotation_counts.exact_cer_safe
-    metric_reference = (
-        spoken_reference_surface(annotated_reference)
-        if annotated_reference is not None
-        else reference
-    )
+    evaluated_reference = _reference_evaluation(reference, annotated_reference)
+    annotation_counts = evaluated_reference.annotations
+    exact_reference_safe = evaluated_reference.exact_cer_safe
+    metric_reference = evaluated_reference.surface
     return EvaluationResult(
-        cer=cer(metric_reference, observed) if exact_reference_safe else None,
+        cer=exact_cer(
+            reference,
+            observed,
+            annotated_reference=annotated_reference,
+        ),
         kana_cer=kana_cer(reference_reading, observed_reading),
         mora_error_rate=mora_error_rate(reference_mora, observed_mora),
         number_error_rate=(
