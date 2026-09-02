@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import time
+import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
@@ -56,6 +57,7 @@ class CandidateGenerationConfig:
     return_timestamps: bool = False
     fail_on_non_allow_rights: bool = True
     model_revision: str | None = None
+    model_artifact_sha256: str | None = None
     runtime_revision: str | None = None
 
     def __post_init__(self) -> None:
@@ -63,6 +65,16 @@ class CandidateGenerationConfig:
             raise ValueError("beam size and hypothesis count must be positive")
         if self.hypotheses > self.beam_size:
             raise ValueError("hypothesis count cannot exceed beam size")
+        if self.model_revision is not None and self.model_artifact_sha256 is not None:
+            raise ValueError("model revision and local artifact digest are mutually exclusive")
+        if self.model_artifact_sha256 is not None and (
+            len(self.model_artifact_sha256) != 64
+            or any(
+                character not in "0123456789abcdefABCDEF"
+                for character in self.model_artifact_sha256
+            )
+        ):
+            raise ValueError("model artifact digest must be SHA-256 hex")
 
     @property
     def digest(self) -> str:
@@ -118,6 +130,9 @@ class GeneratedCandidateRecord:
             "generation": {
                 "adapter": self.adapter,
                 "model": self.model,
+                "modelRevision": self.candidates[0].metadata.get("modelRevision"),
+                "modelArtifactSha256": self.candidates[0].metadata.get("modelArtifactSha256"),
+                "runtimeRevision": self.candidates[0].metadata.get("runtimeRevision"),
                 "configSha256": self.generation_config_sha256,
                 "elapsedMs": self.elapsed_ms,
                 "licenseId": self.license_id,
@@ -165,6 +180,7 @@ def verify_manifest_isolation(records: Sequence[AudioManifestRecord]) -> None:
         "group": {},
         "source": {},
         "near-duplicate": {},
+        "reference": {},
     }
     for record in records:
         if record.sample_id in seen_samples:
@@ -174,6 +190,16 @@ def verify_manifest_isolation(records: Sequence[AudioManifestRecord]) -> None:
             ("group", record.group_id),
             ("source", record.source_id),
             ("near-duplicate", record.near_duplicate_id),
+            (
+                "reference",
+                hashlib.sha256(
+                    "".join(
+                        character
+                        for character in unicodedata.normalize("NFKC", record.reference)
+                        if not character.isspace()
+                    ).encode("utf-8")
+                ).hexdigest(),
+            ),
         ):
             if not identifier:
                 continue
@@ -193,12 +219,30 @@ def _bind_generation_config(
 ) -> CandidateGenerationConfig:
     bound = config or CandidateGenerationConfig()
     adapter_revision = getattr(adapter, "model_revision", None)
+    adapter_artifact = getattr(adapter, "model_artifact_sha256", None)
+    adapter_runtime = getattr(adapter, "runtime_revision", None)
     if bound.model_revision is not None and bound.model_revision != adapter_revision:
         raise ValueError(
             "candidate-generation model revision does not match the loaded adapter revision"
         )
     if bound.model_revision is None and adapter_revision is not None:
         bound = replace(bound, model_revision=str(adapter_revision))
+    if bound.model_artifact_sha256 is not None and bound.model_artifact_sha256 != adapter_artifact:
+        raise ValueError(
+            "candidate-generation model artifact digest does not match the loaded adapter"
+        )
+    if bound.model_artifact_sha256 is None and adapter_artifact is not None:
+        bound = replace(bound, model_artifact_sha256=str(adapter_artifact))
+    if bound.model_revision is not None and bound.model_artifact_sha256 is not None:
+        raise ValueError("loaded adapter cannot claim both Hub revision and local artifact digest")
+    if bound.runtime_revision is not None and (
+        adapter_runtime is not None and bound.runtime_revision != adapter_runtime
+    ):
+        raise ValueError("candidate-generation runtime revision does not match the loaded adapter")
+    if bound.runtime_revision is None and adapter_runtime is not None:
+        bound = replace(bound, runtime_revision=str(adapter_runtime))
+    if hasattr(adapter, "runtime_revision") and bound.runtime_revision is None:
+        raise ValueError("candidate-generation runtime revision is required")
     return bound
 
 
@@ -209,9 +253,15 @@ def generate_candidates(
     config: CandidateGenerationConfig | None = None,
 ) -> GeneratedCandidateRecord:
     config = _bind_generation_config(adapter, config)
+    if record.rights_decision == "deny":
+        raise PermissionError(f"sample {record.sample_id} rights decision is 'deny'")
     if config.fail_on_non_allow_rights and record.rights_decision != "allow":
         raise PermissionError(
             f"sample {record.sample_id} rights decision is {record.rights_decision!r}"
+        )
+    if not record.license_id:
+        raise PermissionError(
+            f"sample {record.sample_id} is missing license provenance for candidate generation"
         )
     source = Path(record.audio_path).expanduser().resolve()
     if not source.is_file():
@@ -241,6 +291,7 @@ def generate_candidates(
                 "audioSha256": audio_sha256,
                 "generationConfigSha256": config.digest,
                 "modelRevision": config.model_revision,
+                "modelArtifactSha256": config.model_artifact_sha256,
                 "runtimeRevision": config.runtime_revision,
             }
         )
@@ -406,6 +457,12 @@ def _validate_checkpoint_prefix(
             raise ValueError(f"checkpoint model mismatch at row {index + 1}")
         if generation.get("licenseId") != record.license_id:
             raise ValueError(f"checkpoint license mismatch at row {index + 1}")
+        if generation.get("modelRevision") != config.model_revision:
+            raise ValueError(f"checkpoint generation model revision mismatch at row {index + 1}")
+        if generation.get("modelArtifactSha256") != config.model_artifact_sha256:
+            raise ValueError(f"checkpoint generation model artifact mismatch at row {index + 1}")
+        if generation.get("runtimeRevision") != config.runtime_revision:
+            raise ValueError(f"checkpoint generation runtime revision mismatch at row {index + 1}")
         source = Path(record.audio_path).expanduser().resolve()
         audio_sha256 = sha256_file(source)
         if row.get("audioSha256") != audio_sha256:
@@ -428,6 +485,8 @@ def _validate_checkpoint_prefix(
                 raise ValueError(f"checkpoint candidate configuration mismatch at row {index + 1}")
             if metadata.get("runtimeRevision") != config.runtime_revision:
                 raise ValueError(f"checkpoint runtime revision mismatch at row {index + 1}")
+            if metadata.get("modelArtifactSha256") != config.model_artifact_sha256:
+                raise ValueError(f"checkpoint model artifact mismatch at row {index + 1}")
         if config.model_revision is not None and any(
             not isinstance(candidate, Mapping)
             or not isinstance(candidate.get("metadata"), Mapping)
@@ -492,8 +551,9 @@ def finalize_generated_checkpoint(
     checkpoint_path: str | Path,
     *,
     output_path: str | Path,
-    expected_rows: int,
-    expected_config_sha256: str,
+    records: Sequence[AudioManifestRecord],
+    adapter: ASRAdapter,
+    config: CandidateGenerationConfig | None = None,
     ranker_path: str | Path | None = None,
 ) -> None:
     """Promote a complete checkpoint last, after any derived ranker file is durable."""
@@ -503,19 +563,12 @@ def finalize_generated_checkpoint(
         rows = _load_checkpoint_rows(checkpoint)
         if not rows:
             raise ValueError("generated checkpoint is empty")
-        if len(rows) != expected_rows:
+        if len(rows) != len(records):
             raise ValueError(
-                "generated checkpoint row count mismatch: "
-                f"expected {expected_rows}, got {len(rows)}"
+                f"generated checkpoint row count mismatch: expected {len(records)}, got {len(rows)}"
             )
-        if len(expected_config_sha256) != 64:
-            raise ValueError("expected configuration digest must be SHA-256 hex")
-        if any(
-            not isinstance(row.get("generation"), Mapping)
-            or row["generation"].get("configSha256") != expected_config_sha256
-            for row in rows
-        ):
-            raise ValueError("generated checkpoint configuration mismatch")
+        bound_config = _bind_generation_config(adapter, config)
+        _validate_checkpoint_prefix(records, rows, adapter=adapter, config=bound_config)
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
         if ranker_path is not None:

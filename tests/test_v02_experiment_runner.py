@@ -121,6 +121,22 @@ def test_non_allow_rights_fail_closed() -> None:
             )
 
 
+def test_deny_rights_cannot_be_overridden_by_local_review_mode() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        audio = Path(directory) / "audio.wav"
+        audio.write_bytes(b"audio")
+        with pytest.raises(PermissionError, match="deny"):
+            generate_candidates(
+                _record(audio, rights="deny"),
+                _MockAdapter(),
+                config=CandidateGenerationConfig(
+                    beam_size=3,
+                    hypotheses=3,
+                    fail_on_non_allow_rights=False,
+                ),
+            )
+
+
 def test_manifest_isolation_rejects_near_duplicate_leakage() -> None:
     records = [
         AudioManifestRecord(
@@ -148,6 +164,29 @@ def test_manifest_isolation_rejects_near_duplicate_leakage() -> None:
         verify_manifest_isolation(records)
 
 
+def test_manifest_isolation_rejects_normalized_reference_leakage() -> None:
+    records = [
+        AudioManifestRecord(
+            sample_id="train",
+            group_id="speaker-a",
+            source_id="source-a",
+            split="train",
+            audio_path="train.wav",
+            reference="東 京です",
+        ),
+        AudioManifestRecord(
+            sample_id="test",
+            group_id="speaker-b",
+            source_id="source-b",
+            split="test",
+            audio_path="test.wav",
+            reference="東京です",
+        ),
+    ]
+    with pytest.raises(ValueError, match="reference leakage"):
+        verify_manifest_isolation(records)
+
+
 def test_resumable_generation_keeps_verified_prefix_after_failure(tmp_path) -> None:
     records = []
     for index in range(2):
@@ -162,6 +201,7 @@ def test_resumable_generation_keeps_verified_prefix_after_failure(tmp_path) -> N
                 audio_path=str(audio),
                 reference=f"参照{index}",
                 rights_decision="allow",
+                license_id="fixture-license",
             )
         )
 
@@ -199,8 +239,9 @@ def test_resumable_generation_keeps_verified_prefix_after_failure(tmp_path) -> N
     finalize_generated_checkpoint(
         checkpoint,
         output_path=output,
-        expected_rows=len(records),
-        expected_config_sha256=rows[0]["generation"]["configSha256"],
+        records=records,
+        adapter=resumed,
+        config=config,
         ranker_path=ranker,
     )
     assert output.is_file()
@@ -249,6 +290,7 @@ def test_resumable_generation_repairs_only_an_unterminated_trailing_row(
                 audio_path=str(audio),
                 reference=f"参照{index}",
                 rights_decision="allow",
+                license_id="fixture-license",
             )
         )
 
@@ -357,6 +399,7 @@ def test_finalize_rejects_an_incomplete_or_different_config_checkpoint(tmp_path)
                 audio_path=str(audio),
                 reference=f"参照{index}",
                 rights_decision="allow",
+                license_id="fixture-license",
             )
         )
     checkpoint = tmp_path / "candidates.jsonl.partial"
@@ -373,8 +416,9 @@ def test_finalize_rejects_an_incomplete_or_different_config_checkpoint(tmp_path)
         finalize_generated_checkpoint(
             checkpoint,
             output_path=output,
-            expected_rows=2,
-            expected_config_sha256=config.digest,
+            records=records,
+            adapter=_MockAdapter(),
+            config=config,
         )
     assert checkpoint.is_file()
     assert not output.exists()
@@ -383,11 +427,76 @@ def test_finalize_rejects_an_incomplete_or_different_config_checkpoint(tmp_path)
         finalize_generated_checkpoint(
             checkpoint,
             output_path=output,
-            expected_rows=1,
-            expected_config_sha256="0" * 64,
+            records=records[:1],
+            adapter=_MockAdapter(),
+            config=CandidateGenerationConfig(beam_size=4, hypotheses=3),
         )
     assert checkpoint.is_file()
     assert not output.exists()
+
+
+def test_finalize_revalidates_candidate_integrity_against_manifest(tmp_path) -> None:
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"RIFF")
+    record = _record(audio)
+    checkpoint = tmp_path / "candidates.jsonl.partial"
+    output = tmp_path / "candidates.jsonl"
+    config = CandidateGenerationConfig(beam_size=3, hypotheses=3)
+    adapter = _MockAdapter()
+    generate_manifest_to_checkpoint([record], adapter, config=config, checkpoint_path=checkpoint)
+    row = json.loads(checkpoint.read_text("utf-8"))
+    row["candidates"][0]["metadata"]["audioSha256"] = "0" * 64
+    checkpoint.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="candidate audio"):
+        finalize_generated_checkpoint(
+            checkpoint,
+            output_path=output,
+            records=[record],
+            adapter=adapter,
+            config=config,
+        )
+    assert checkpoint.is_file()
+    assert not output.exists()
+
+
+def test_generation_binds_adapter_runtime_and_local_artifact(tmp_path) -> None:
+    class _LocalAdapter(_MockAdapter):
+        model_revision = None
+        model_artifact_sha256 = "a" * 64
+        runtime_revision = "runtime-r1"
+
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"RIFF")
+    result = generate_candidates(
+        _record(audio),
+        _LocalAdapter(),
+        config=CandidateGenerationConfig(beam_size=3, hypotheses=3),
+    )
+    metadata = result.candidates[0].metadata
+    assert metadata["modelRevision"] is None
+    assert metadata["modelArtifactSha256"] == "a" * 64
+    assert metadata["runtimeRevision"] == "runtime-r1"
+
+
+def test_generation_rejects_missing_license_provenance(tmp_path) -> None:
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"RIFF")
+    record = AudioManifestRecord(
+        sample_id="sample",
+        group_id="speaker",
+        source_id="source",
+        split="test",
+        audio_path=str(audio),
+        reference="参照",
+        rights_decision="allow",
+    )
+    with pytest.raises(PermissionError, match="license provenance"):
+        generate_candidates(
+            record,
+            _MockAdapter(),
+            config=CandidateGenerationConfig(beam_size=3, hypotheses=3),
+        )
 
 
 def test_checkpoint_writer_lock_refuses_a_second_writer(tmp_path) -> None:

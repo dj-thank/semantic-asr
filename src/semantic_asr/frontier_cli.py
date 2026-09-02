@@ -45,6 +45,26 @@ FRONTIER_COMMANDS = {
 }
 
 
+def _require_external_reference_output(
+    path: str | Path, *, checkout_root: str | Path | None = None
+) -> Path:
+    """Resolve a reference-bearing output and refuse checkout/root destinations."""
+
+    target = Path(path).expanduser().resolve()
+    if target == Path(target.anchor):
+        raise ValueError("reference-bearing output must not be a filesystem root")
+    checkout = (
+        Path(checkout_root).expanduser().resolve()
+        if checkout_root is not None
+        else Path(__file__).resolve().parents[2]
+    )
+    try:
+        target.relative_to(checkout)
+    except ValueError:
+        return target
+    raise ValueError("reference-bearing output must be outside the repository checkout")
+
+
 def _json(path: str | Path) -> dict[str, Any]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -210,6 +230,16 @@ def command_enrich_candidates(args: argparse.Namespace) -> int:
 
 
 def command_generate_candidates(args: argparse.Namespace) -> int:
+    if not args.allow_raw_export:
+        raise ValueError(
+            "candidate/reference export requires --allow-raw-export and an external output path"
+        )
+    output = _require_external_reference_output(args.output)
+    ranker_output = (
+        _require_external_reference_output(args.ranker_output)
+        if args.ranker_output is not None
+        else None
+    )
     records = load_audio_manifest(args.input)
     model_path = Path(args.model).expanduser()
     model_artifact_sha256 = getattr(args, "model_artifact_sha256", None)
@@ -274,9 +304,9 @@ def command_generate_candidates(args: argparse.Namespace) -> int:
         return_timestamps=args.return_timestamps,
         fail_on_non_allow_rights=not args.allow_review_rights,
         model_revision=model_revision,
+        model_artifact_sha256=model_artifact_sha256,
         runtime_revision=args.runtime_revision,
     )
-    output = Path(args.output)
     checkpoint = Path(str(output) + ".partial")
     generated = generate_manifest_to_checkpoint(
         records,
@@ -297,9 +327,10 @@ def command_generate_candidates(args: argparse.Namespace) -> int:
     finalize_generated_checkpoint(
         checkpoint,
         output_path=output,
-        expected_rows=len(records),
-        expected_config_sha256=config.digest,
-        ranker_path=args.ranker_output,
+        records=records,
+        adapter=adapter,
+        config=config,
+        ranker_path=ranker_output,
     )
     print(
         json.dumps(
@@ -308,7 +339,7 @@ def command_generate_candidates(args: argparse.Namespace) -> int:
                 "samples": len(records),
                 "groups": len({record.group_id for record in records}),
                 "output": str(Path(args.output)),
-                "rankerOutput": args.ranker_output,
+                "rankerOutput": str(ranker_output) if ranker_output is not None else None,
                 "adapter": adapter.name,
                 "model": adapter.model_name,
                 "generationConfigSha256": config.digest,
@@ -421,6 +452,11 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("input", help="rights-gated audio manifest JSONL")
     generate.add_argument("--output", required=True, help="benchmark JSONL")
     generate.add_argument("--ranker-output")
+    generate.add_argument(
+        "--allow-raw-export",
+        action="store_true",
+        help="explicitly allow local reference-bearing output outside the checkout",
+    )
     generate.add_argument("--model", default="large-v3-turbo")
     generate.add_argument("--model-revision")
     generate.add_argument(
