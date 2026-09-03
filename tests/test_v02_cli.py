@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from semantic_asr.cli_v2 import main
+from semantic_asr.cli_v2 import build_advanced_parser, main
 
 
 def test_ranker_calibration_cli_writes_runtime_profile() -> None:
@@ -126,6 +126,58 @@ def test_benchmark_cli_writes_group_bootstrap_report() -> None:
         assert float(payload["oracle_cer_at_k"]["2"]) <= float(payload["oracle_cer_at_k"]["1"])
 
 
+def test_benchmark_cli_serializes_undefined_bootstrap_for_unscorable_annotations(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "benchmark-uncertain.jsonl"
+        source.write_text(
+            json.dumps(
+                {
+                    "sampleId": "uncertain",
+                    "groupId": "speaker",
+                    "sourceId": "source",
+                    "split": "test",
+                    "reference": "明日は舞い上がる",
+                    "annotatedReference": "明日は(? 舞い)上がる",
+                    "candidates": [
+                        {
+                            "candidateId": "candidate",
+                            "text": "明日は舞い上がる",
+                            "rank": 1,
+                            "hypothesisCount": 1,
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        target = root / "report.json"
+        assert (
+            main(
+                [
+                    "benchmark",
+                    str(source),
+                    "--output",
+                    str(target),
+                    "--ks",
+                    "1",
+                    "--bootstrap-iterations",
+                    "2",
+                ]
+            )
+            == 0
+        )
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        assert payload["rows"][0]["baseline_cer"] is None
+        assert payload["cascade_improvement"] is None
+        stdout_payload = json.loads(capsys.readouterr().out)
+        assert stdout_payload["cascadeImprovement"] is None
+
+
 def test_teacher_distillation_cli_preserves_candidate_set() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -184,3 +236,46 @@ def test_advanced_cli_discovers_effort_profiles() -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["transcribe-v2", "--help"])
     assert exc_info.value.code == 0
+
+
+def test_advanced_transcribe_cli_carries_model_provenance_options() -> None:
+    args = build_advanced_parser().parse_args(
+        [
+            "transcribe-v2",
+            "audio.wav",
+            "--model-revision",
+            "1" * 40,
+            "--runtime-revision",
+            "runtime-r2",
+            "--qwen-model-revision",
+            "2" * 40,
+            "--qwen-aligner-revision",
+            "3" * 40,
+        ]
+    )
+    assert args.model_revision == "1" * 40
+    assert args.runtime_revision == "runtime-r2"
+    assert args.qwen_model_revision == "2" * 40
+    assert args.qwen_aligner_revision == "3" * 40
+
+
+def test_advanced_transcribe_cli_carries_ranker_provenance_options() -> None:
+    args = build_advanced_parser().parse_args(
+        [
+            "transcribe-v2",
+            "audio.wav",
+            "--ranker-backend",
+            "cross-encoder",
+            "--ranker-model",
+            "publisher/ranker",
+            "--ranker-model-revision",
+            "4" * 40,
+            "--ranker-model-artifact-sha256",
+            "a" * 64,
+            "--ranker-runtime-revision",
+            "runtime-ranker",
+        ]
+    )
+    assert args.ranker_model_revision == "4" * 40
+    assert args.ranker_model_artifact_sha256 == "a" * 64
+    assert args.ranker_runtime_revision == "runtime-ranker"

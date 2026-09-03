@@ -122,6 +122,7 @@ def rerank_record(
         candidates=tuple(reranked),
         domain=record.domain,
         near_duplicate_id=record.near_duplicate_id,
+        annotated_reference=record.annotated_reference,
     )
 
 
@@ -171,22 +172,19 @@ def write_reranked_benchmark(records: Sequence[BenchmarkUtterance], path: str | 
     target.parent.mkdir(parents=True, exist_ok=True)
     rows = []
     for record in records:
-        rows.append(
-            json.dumps(
-                {
-                    "sampleId": record.sample_id,
-                    "groupId": record.group_id,
-                    "sourceId": record.source_id,
-                    "split": record.split,
-                    "reference": record.reference,
-                    "domain": record.domain,
-                    "nearDuplicateId": record.near_duplicate_id,
-                    "candidates": [candidate.as_dict() for candidate in record.candidates],
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-        )
+        row = {
+            "sampleId": record.sample_id,
+            "groupId": record.group_id,
+            "sourceId": record.source_id,
+            "split": record.split,
+            "reference": record.reference,
+            "domain": record.domain,
+            "nearDuplicateId": record.near_duplicate_id,
+            "candidates": [candidate.as_dict() for candidate in record.candidates],
+        }
+        if record.annotated_reference is not None:
+            row["annotatedReference"] = record.annotated_reference
+        rows.append(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
     target.write_text("\n".join(rows) + ("\n" if rows else ""), encoding="utf-8")
 
 

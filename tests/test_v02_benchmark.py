@@ -4,6 +4,7 @@ import pytest
 
 from semantic_asr.benchmark import (
     BenchmarkUtterance,
+    benchmark_utterance_from_row,
     run_benchmark,
     verify_split_isolation,
 )
@@ -19,6 +20,7 @@ def _record(
     *,
     split: str = "test",
     domain: str = "meeting",
+    annotated_reference: str | None = None,
 ) -> BenchmarkUtterance:
     return BenchmarkUtterance(
         sample_id=sample_id,
@@ -38,6 +40,7 @@ def _record(
             for index, text in enumerate(texts)
         ),
         domain=domain,
+        annotated_reference=annotated_reference,
     )
 
 
@@ -56,6 +59,15 @@ def test_split_isolation_rejects_source_leakage() -> None:
         _record("test", "speaker-b", "source-a", "大阪です", ["大阪です"], split="test"),
     ]
     with pytest.raises(ValueError, match="source leakage"):
+        verify_split_isolation(records)
+
+
+def test_split_isolation_recomputes_reference_leakage_without_near_duplicate_id() -> None:
+    records = [
+        _record("train", "speaker-a", "source-a", "東 京です", ["東京です"], split="train"),
+        _record("test", "speaker-b", "source-b", "東京です", ["東京です"], split="test"),
+    ]
+    with pytest.raises(ValueError, match="reference leakage"):
         verify_split_isolation(records)
 
 
@@ -99,6 +111,91 @@ def test_benchmark_reports_monotonic_oracle_curve_and_group_bootstrap() -> None:
     assert "critical" in report.slices
     assert "domain:meeting" in report.slices
     assert report.mean_adaptive_k >= 1
+    assert set(report.corpus_cer) == {"baseline", "cascade", "mbr"}
+    assert report.slices["all"].corpus_cer == report.corpus_cer
+    assert 0.0 <= report.lenient_corpus_cer["baseline"] <= report.corpus_cer["baseline"] + 1e-9
+    assert set(report.boundary_diagnostics) == {"baseline", "cascade", "mbr"}
+    assert report.boundary_diagnostics["baseline"].aligned_corpus_cer >= 0.0
+
+
+def test_boundary_diagnostics_are_report_only_and_use_fixed_length_slices() -> None:
+    records = [
+        _record(
+            "overrun",
+            "speaker-o",
+            "source-o",
+            "中央区です",
+            ["前置き中央区です後", "中央区です"],
+        )
+    ]
+    report = run_benchmark(records, ks=(1, 2), bootstrap_iterations=10, seed=1)
+    row = report.rows[0]
+    diagnostic = row.boundary_diagnostics["baseline"]
+    assert diagnostic.edits == 0
+    assert diagnostic.prefix_overrun_characters == 3
+    assert diagnostic.suffix_overrun_characters == 1
+    assert report.boundary_diagnostics["baseline"].overrun_rows == 1
+    assert "length:long>=1.25" in report.slices
+    # The diagnostic must not alter the selected candidate or strict primary score.
+    assert row.baseline_candidate_id == "overrun-0"
+    assert row.baseline_cer > 0.0
+
+
+def test_lenient_cer_ignores_punctuation_but_strict_does_not() -> None:
+    records = [
+        _record(
+            "punct",
+            "speaker-p",
+            "source-p",
+            "はい、そうです。",
+            ["はいそうです", "はい、そうです。"],
+        )
+    ]
+    report = run_benchmark(records, ks=(1, 2), bootstrap_iterations=10, seed=1)
+    row = report.rows[0]
+    assert row.baseline_cer > 0.0
+    assert row.baseline_lenient_cer == 0.0
+    assert row.reference_characters == 8
+    assert row.reference_characters_lenient == 6
+
+
+def test_benchmark_carries_annotated_reference_and_excludes_uncertain_cer() -> None:
+    annotated = "明日は(? 舞い)上がる"
+    record = _record(
+        "annotated",
+        "speaker-a",
+        "source-a",
+        "明日は舞い上がる",
+        ["明日は舞い上がる", "明日は舞い上がった"],
+        annotated_reference=annotated,
+    )
+    report = run_benchmark([record], ks=(1, 2), bootstrap_iterations=10, seed=1)
+    row = report.rows[0]
+    assert row.annotated_reference == annotated
+    assert row.baseline_cer is None
+    assert row.cascade_cer is None
+    assert row.mbr_cer is None
+    assert row.boundary_diagnostics is None
+    assert report.baseline_cer is None
+    assert report.cascade_improvement is None
+    assert report.corpus_cer["baseline"] is None
+
+
+def test_benchmark_row_loader_preserves_annotated_reference_and_legacy_rows() -> None:
+    base = {
+        "sampleId": "sample",
+        "groupId": "speaker",
+        "sourceId": "source",
+        "split": "test",
+        "reference": "東京です",
+        "candidates": [{"candidateId": "candidate", "text": "東京です"}],
+    }
+    annotated = benchmark_utterance_from_row(
+        {**base, "annotatedReference": "東京(? です)"}, line_number=1
+    )
+    legacy = benchmark_utterance_from_row(base, line_number=2)
+    assert annotated.annotated_reference == "東京(? です)"
+    assert legacy.annotated_reference is None
 
 
 def test_final_benchmark_rejects_non_test_split() -> None:

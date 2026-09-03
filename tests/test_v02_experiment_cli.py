@@ -4,6 +4,7 @@ import json
 import tempfile
 from pathlib import Path
 
+from semantic_asr.benchmark import load_benchmark_jsonl, run_benchmark
 from semantic_asr.cli_root import main
 
 
@@ -21,16 +22,17 @@ def _candidate(candidate_id: str, text: str, rank: int) -> dict[str, object]:
 def _manifest_rows() -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for split, index in (("train", 1), ("calibration", 2), ("test", 3)):
+        reference = f"料金は{index}000円です"
         rows.append(
             {
                 "sampleId": f"sample-{split}",
                 "groupId": f"speaker-{split}",
                 "sourceId": f"source-{split}",
                 "split": split,
-                "reference": "料金は3000円です",
+                "reference": reference,
                 "candidates": [
-                    _candidate("wrong", "料金は30000円です", 1),
-                    _candidate("correct", "料金は3000円です", 2),
+                    _candidate("wrong", f"料金は{index}0000円です", 1),
+                    _candidate("correct", reference, 2),
                 ],
                 "domain": f"domain-{index}",
             }
@@ -177,3 +179,96 @@ def test_experiment_cli_partition_score_calibrate_and_apply() -> None:
         assert by_id["correct"]["rank"] == 2
         assert by_id["correct"]["metadata"]["offlineRerankerRank"] == 1
         assert by_id["correct"]["metadata"]["offlineRerankerEvidenceInjected"] is True
+
+
+def test_partition_and_rerank_round_trip_preserves_unsafe_annotation_metadata() -> None:
+    rows = _manifest_rows()
+    annotations = {
+        "sample-train": "(F えー)料金は1000円です",
+        "sample-calibration": "料金は(? 2000円)です",
+        "sample-test": "[PERSON_01]",
+        "sample-test-masked": "[MASK]",
+    }
+    for row in rows:
+        row["annotatedReference"] = annotations[str(row["sampleId"])]
+    rows.append(
+        {
+            "sampleId": "sample-test-masked",
+            "groupId": "speaker-test-masked",
+            "sourceId": "source-test-masked",
+            "split": "test",
+            "reference": "匿名の発話",
+            "annotatedReference": annotations["sample-test-masked"],
+            "candidates": [
+                _candidate("wrong", "別の発話", 1),
+                _candidate("correct", "匿名の発話", 2),
+            ],
+            "domain": "domain-masked",
+        }
+    )
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        manifest = root / "annotated.jsonl"
+        manifest.write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+            encoding="utf-8",
+        )
+        split_dir = root / "split"
+        assert (
+            main(
+                [
+                    "partition-manifest",
+                    str(manifest),
+                    "--output-dir",
+                    str(split_dir),
+                ]
+            )
+            == 0
+        )
+
+        for split in ("train", "calibration", "test"):
+            split_rows = [
+                json.loads(line)
+                for line in (split_dir / f"{split}.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            assert {row["sampleId"]: row["annotatedReference"] for row in split_rows} == {
+                sample_id: annotation
+                for sample_id, annotation in annotations.items()
+                if sample_id.startswith(f"sample-{split}")
+            }
+
+        ranker = root / "ranker.json"
+        _ranker_profile(ranker)
+        reranked = root / "reranked-test.jsonl"
+        assert (
+            main(
+                [
+                    "apply-ranker",
+                    str(split_dir / "test.jsonl"),
+                    "--ranker-profile",
+                    str(ranker),
+                    "--output",
+                    str(reranked),
+                ]
+            )
+            == 0
+        )
+        reranked_rows = [
+            json.loads(line) for line in reranked.read_text(encoding="utf-8").splitlines()
+        ]
+        assert {row["sampleId"]: row["annotatedReference"] for row in reranked_rows} == {
+            "sample-test": annotations["sample-test"],
+            "sample-test-masked": annotations["sample-test-masked"],
+        }
+
+        report = run_benchmark(load_benchmark_jsonl(reranked), ks=(1, 2), bootstrap_iterations=2)
+        assert {row.sample_id: row.annotated_reference for row in report.rows} == {
+            "sample-test": annotations["sample-test"],
+            "sample-test-masked": annotations["sample-test-masked"],
+        }
+        assert all(row.baseline_cer is None for row in report.rows)
+        assert all(row.cascade_cer is None for row in report.rows)
+        assert all(row.mbr_cer is None for row in report.rows)
+        assert report.oracle_cer_at_k == {1: None, 2: None}
+        assert report.cascade_improvement is None

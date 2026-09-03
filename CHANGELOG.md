@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — 2026-09-02
+
+- Fixed the direct CTranslate2 generate path: log-mel features are now padded to one 30 s Whisper window before `encode()`, matching `faster_whisper.transcribe`. Unpadded short clips looped on every beam; on 20 ReazonSpeech test clips the utterance-mean CER fell from 5.70 to 0.30 (large-v3-turbo int8, CPU).
+- Added `LoopGuardConfig`: duration-aware token budget, per-path compression-ratio / repeated n-gram / character-budget / log-probability degeneracy evidence, staged sampling fallback in separate score domains, and timestamp-enabled prompts by default (`--without-timestamps` restores the old prompt).
+- Added optional sampled-candidate enrichment (`--extra-samples`) for sample-based Semantic MBR.
+- Added `corpus_cer` and `lenient_corpus_cer` (punctuation/symbol-stripped, length-weighted) to benchmark reports for comparability with published Japanese ASR numbers; strict utterance-mean CER remains primary.
+- Ranker training now skips utterances with a single surviving candidate instead of aborting.
+- Added `scripts/prepare_public_manifest.py` (Hugging Face public test sets to rights-annotated manifests) and `scripts/run_real_audio_pipeline.py` (partition → train → calibrate → apply → benchmark through the CLI).
+- Added `enrich-candidates` (second-ear agreement as `cross_model`, n-gram score as `lexical`, optional second-ear candidate) and `scripts/probe_second_ear.py`; measured neutral or harmful on the locked test split and recorded as such.
+- Bound public-dataset, faster-whisper and Qwen loaders to immutable revisions; model/config provenance mismatches now fail before inference, and n-gram artifacts retain their input digest/revision.
+- Added diagnostic-only contiguous-boundary alignment and fixed length-ratio slices. They quantify reference-window overrun but never affect candidate selection or the primary strict CER.
+- Tested calibration-selected in-domain n-grams and reference-free Qwen uncertainty gates; neither improved the locked test, so both remain rejected/held rather than becoming defaults.
+- Added an evidence-backed architecture and technology roadmap: keep the measured Whisper primary, test cached causal-LM probabilities before building a cache, require exogenous entity catalogs and no-bias/distractor arms, and defer GPU/edge profiles until exact-head measurements exist.
+- Added annotation-aware spoken-reference and filler-event evaluation helpers so filler/repair content is preserved in the observed transcript and scored separately from readable normalization.
+- Candidate generation now flushes each verified row to a resumable `.partial` checkpoint and atomically promotes the complete JSONL; a late model/runtime failure no longer discards an hour of completed clips.
+- Resume repairs only an unterminated trailing checkpoint row (or restores its missing final newline) and still rejects terminated corruption, so a process crash during the last write cannot strand an otherwise verified prefix.
+- Added a local human-transcript pilot for native Japanese casual speech: it exposed 0/16 exact tagged-filler variant matches (despite two filler-like hypothesis forms) and 2/4 repair-span surface matches, so verbatim fidelity is now separate from readable normalization. The preview's unclear license keeps the result local-only.
+- Direct LFM2.5-350M causal-LM rescoring failed protected fit/test criteria and did not build a cache; this teacher/configuration is recorded as rejected rather than promoted.
+- Pinned eight 2025–2026 primary sources and three falsifiable translations in the research registry; see `docs/RESEARCH_2026-09-02.md`.
+
 ## 0.2.0 — 2026-08-31
 
 - Preserved all same-surface decoder paths and aggregated probability mass with score-domain-safe `logsumexp` instead of strongest-path-only deduplication.

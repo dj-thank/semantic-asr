@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import wave
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
-from .adapters import ASRAdapter, DecodeRequest
+from .adapters import (
+    ASRAdapter,
+    DecodeRequest,
+    _package_version,
+    decode_request_identity,
+    score_domain_digest,
+)
 from .cache import CacheKey, EvidenceCache, TeacherCacheEntry
 from .candidate_pool import merge_candidate_pools
 from .contracts import CandidateEvidence, NormalizedTranscript, ObservedTranscript, sha256_json
@@ -143,7 +150,195 @@ def plan_windows(
 
 
 def _adapter_model(adapter: ASRAdapter) -> str:
-    return str(getattr(adapter, "model_name", getattr(adapter, "name", type(adapter).__name__)))
+    return str(
+        getattr(
+            adapter,
+            "model_name",
+            getattr(adapter, "model", getattr(adapter, "name", type(adapter).__name__)),
+        )
+    )
+
+
+_PROVENANCE_FIELDS = (
+    "device",
+    "compute_type",
+    "cpu_threads",
+    "length_penalty",
+    "patience",
+    "repetition_penalty",
+    "no_repeat_ngram_size",
+    "without_timestamps",
+    "loop_guard",
+    "dtype",
+    "device_map",
+    "max_inference_batch_size",
+    "max_new_tokens",
+    "return_timestamps",
+    "forced_aligner_revision",
+    "forced_aligner_artifact_sha256",
+    "maximum_hypotheses",
+    "acoustic_temperature",
+    "adaptive_config",
+    "calibration_profile",
+    "lexical_blend",
+    "endpoint",
+    "protocol",
+    "timeout_seconds",
+)
+
+
+def _jsonable_provenance(value: Any, *, depth: int = 0) -> Any:
+    """Convert adapter configuration to a stable, non-secret cache-key value."""
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if depth >= 3:
+        return f"{type(value).__module__}.{type(value).__qualname__}"
+    if hasattr(value, "__dataclass_fields__"):
+        return _jsonable_provenance(asdict(value), depth=depth + 1)
+    if isinstance(value, Mapping):
+        return {
+            str(key): _jsonable_provenance(item, depth=depth + 1)
+            for key, item in sorted(value.items(), key=lambda row: str(row[0]))
+        }
+    if isinstance(value, set):
+        values = [_jsonable_provenance(item, depth=depth + 1) for item in value]
+        return sorted(values, key=lambda item: repr(item))
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_provenance(item, depth=depth + 1) for item in value]
+    digest = getattr(value, "digest", None)
+    if isinstance(digest, str):
+        return {
+            "type": f"{type(value).__module__}.{type(value).__qualname__}",
+            "digest": digest,
+        }
+    return f"{type(value).__module__}.{type(value).__qualname__}"
+
+
+def _nested_adapter(adapter: object, name: str) -> object | None:
+    value = getattr(adapter, name, None)
+    return value if value is not None and value is not adapter else None
+
+
+def _legacy_cache_identity_allowed(adapter: object, *, depth: int = 0) -> bool:
+    if getattr(adapter, "allow_legacy_cache_identity", False) is True:
+        return True
+    if depth >= 2:
+        return False
+    nested = _nested_adapter(adapter, "base")
+    return nested is not None and _legacy_cache_identity_allowed(nested, depth=depth + 1)
+
+
+def _explicit_service_identity(adapter: object) -> bool:
+    """Recognize loopback teacher clients whose endpoint/model are the identity."""
+
+    return all(getattr(adapter, name, None) for name in ("model", "endpoint", "protocol"))
+
+
+def _first_provenance_value(adapter: object, name: str, *, depth: int = 0) -> Any:
+    value = getattr(adapter, name, None)
+    if value is not None:
+        return value
+    if depth >= 2:
+        return None
+    for nested_name in ("base",):
+        nested = _nested_adapter(adapter, nested_name)
+        if nested is not None:
+            inherited = _first_provenance_value(nested, name, depth=depth + 1)
+            if inherited is not None:
+                return inherited
+    return None
+
+
+def _adapter_cache_provenance(adapter: object, request: DecodeRequest) -> dict[str, Any]:
+    """Return model/runtime/config identity shared by all long-form cache paths.
+
+    Production adapters must expose either an immutable model revision or a verified
+    local artifact digest.  The only legacy escape hatch is an explicit
+    ``allow_legacy_cache_identity`` marker on an in-memory test adapter; this avoids
+    silently reusing a cache for an unbound model while keeping small fixtures useful.
+    """
+
+    settings: dict[str, Any] = {
+        "schema": "semantic-asr-cache-provenance-v1",
+        "adapterType": f"{type(adapter).__module__}.{type(adapter).__qualname__}",
+        "adapter": str(getattr(adapter, "name", type(adapter).__name__)),
+        "model": _adapter_model(adapter),
+        "request": decode_request_identity(request),
+    }
+    for name in _PROVENANCE_FIELDS:
+        value = getattr(adapter, name, None)
+        if value is not None:
+            settings[name] = _jsonable_provenance(value)
+    nested = _nested_adapter(adapter, "base")
+    if nested is not None:
+        settings["base"] = _adapter_cache_provenance(nested, request)["decode_settings"]
+    ranker = _nested_adapter(adapter, "ranker")
+    if ranker is not None:
+        ranker_revision = getattr(ranker, "model_revision", None)
+        ranker_artifact = getattr(ranker, "model_artifact_sha256", None)
+        ranker_config = getattr(
+            ranker,
+            "config_digest",
+            getattr(ranker, "configuration_digest", None),
+        )
+        if (
+            ranker_revision is None
+            and ranker_artifact is None
+            and ranker_config is None
+            and not _legacy_cache_identity_allowed(ranker)
+            and not _explicit_service_identity(ranker)
+        ):
+            raise ValueError(
+                "ranker identity is required for cache use; provide an exact Hub revision, "
+                "verified local artifact SHA-256, or immutable configuration digest"
+            )
+        settings["ranker"] = _jsonable_provenance(
+            {
+                "type": f"{type(ranker).__module__}.{type(ranker).__qualname__}",
+                "model": getattr(ranker, "model_name", getattr(ranker, "model_id", None)),
+                "name": getattr(ranker, "name", None),
+                "revision": ranker_revision,
+                "artifactSha256": ranker_artifact,
+                "runtime": getattr(ranker, "runtime_revision", None),
+                "configDigest": ranker_config,
+            }
+        )
+    model_revision = _first_provenance_value(adapter, "model_revision")
+    runtime_revision = _first_provenance_value(adapter, "runtime_revision")
+    artifact_sha256 = _first_provenance_value(adapter, "model_artifact_sha256")
+    if (
+        model_revision is None
+        and artifact_sha256 is None
+        and not _legacy_cache_identity_allowed(adapter)
+        and not _explicit_service_identity(adapter)
+    ):
+        raise ValueError(
+            "model identity is required for cache use; provide an exact Hub revision "
+            "or verified local artifact SHA-256"
+        )
+    settings["modelRevision"] = model_revision
+    settings["runtimeRevision"] = runtime_revision
+    settings["modelArtifactSha256"] = artifact_sha256
+    settings["ompNumThreads"] = os.environ.get("OMP_NUM_THREADS")
+    adapter_name = str(getattr(adapter, "name", "")).lower()
+    model_name = _adapter_model(adapter).lower()
+    if "faster-whisper" in adapter_name or "faster-whisper" in model_name:
+        settings["runtimePackages"] = {
+            "fasterWhisper": _package_version("faster-whisper"),
+            "ctranslate2": _package_version("ctranslate2"),
+        }
+    if "qwen" in adapter_name or "qwen" in model_name:
+        settings.setdefault("runtimePackages", {})["qwenAsr"] = _package_version("qwen-asr")
+    return {
+        "model_revision": model_revision,
+        "runtime_revision": runtime_revision,
+        "model_artifact_sha256": artifact_sha256,
+        "decode_settings": settings,
+        "score_domain": score_domain_digest(settings),
+    }
 
 
 def _scoped_candidates(
@@ -237,6 +432,7 @@ class SemanticASRTranscriber:
         context: str,
         calibration_digest: str | None = None,
     ) -> CacheKey:
+        provenance = _adapter_cache_provenance(adapter, request)
         return CacheKey.create(
             namespace=namespace,
             audio_sha256=audio_sha256,
@@ -251,6 +447,11 @@ class SemanticASRTranscriber:
             hotwords=request.hotwords,
             context=context,
             calibration_digest=calibration_digest,
+            model_revision=provenance["model_revision"],
+            runtime_revision=provenance["runtime_revision"],
+            model_artifact_sha256=provenance["model_artifact_sha256"],
+            decode_settings=provenance["decode_settings"],
+            score_domain=provenance["score_domain"],
         )
 
     def _decode(
@@ -308,6 +509,7 @@ class SemanticASRTranscriber:
             sort_keys=True,
             separators=(",", ":"),
         )
+        teacher_provenance = _adapter_cache_provenance(self.teacher, request)
         key = CacheKey.create(
             namespace="local-teacher",
             audio_sha256=audio_sha256,
@@ -322,6 +524,11 @@ class SemanticASRTranscriber:
             hotwords=request.hotwords,
             context=context + "\n" + candidate_context,
             calibration_digest=calibration_digest,
+            model_revision=teacher_provenance["model_revision"],
+            runtime_revision=teacher_provenance["runtime_revision"],
+            model_artifact_sha256=teacher_provenance["model_artifact_sha256"],
+            decode_settings=teacher_provenance["decode_settings"],
+            score_domain=teacher_provenance["score_domain"],
         )
         if self.cache is not None:
             cached = self.cache.get_teacher(key)

@@ -11,6 +11,11 @@ dist/
 .semantic-asr/
 transcripts/
 runs/
+# Public-data materialisation is kept outside the checkout; these common local
+# fallbacks remain ignored if an operator creates them deliberately.
+public-data/
+data/public/
+data/reazon/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm

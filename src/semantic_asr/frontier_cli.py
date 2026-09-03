@@ -1,22 +1,25 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .advanced_adapters import PathPreservingFasterWhisperAdapter
+from .advanced_adapters import LoopGuardConfig, PathPreservingFasterWhisperAdapter
 from .deployment_gate import (
     DeploymentGatePolicy,
     deployment_evaluation_from_dict,
     evaluate_deployment_candidate,
 )
+from .enrichment import EnrichmentConfig, enrich_manifest_rows, load_second_ear
 from .experiment_runner import (
     CandidateGenerationConfig,
-    generate_manifest,
+    finalize_generated_checkpoint,
+    generate_manifest_to_checkpoint,
     load_audio_manifest,
-    write_generated_manifests,
 )
 from .fusion_io import load_fusion_examples, write_learned_fusion_result
 from .learned_fusion import LearnedFusionConfig, train_constrained_fusion
@@ -28,16 +31,38 @@ from .listwise_training import (
 from .ngram import NGramLanguageModel
 from .pipeline import effort_profile
 from .ranker_training import load_jsonl_examples
+from .revisions import FASTER_WHISPER_MODEL_REVISIONS, resolve_hugging_face_revision
 from .throttling import RuntimePressure, ThrottleState, throttle_effort
 
 FRONTIER_COMMANDS = {
     "deployment-gate",
+    "enrich-candidates",
     "generate-candidates",
     "throttle-policy",
     "train-fusion",
     "train-listwise-ranker",
     "train-ngram",
 }
+
+
+def _require_external_reference_output(
+    path: str | Path, *, checkout_root: str | Path | None = None
+) -> Path:
+    """Resolve a reference-bearing output and refuse checkout/root destinations."""
+
+    target = Path(path).expanduser().resolve()
+    if target == Path(target.anchor):
+        raise ValueError("reference-bearing output must not be a filesystem root")
+    checkout = (
+        Path(checkout_root).expanduser().resolve()
+        if checkout_root is not None
+        else Path(__file__).resolve().parents[2]
+    )
+    try:
+        target.relative_to(checkout)
+    except ValueError:
+        return target
+    raise ValueError("reference-bearing output must be outside the repository checkout")
 
 
 def _json(path: str | Path) -> dict[str, Any]:
@@ -48,10 +73,9 @@ def _json(path: str | Path) -> dict[str, Any]:
 
 
 def command_train_ngram(args: argparse.Namespace) -> int:
+    source = Path(args.input)
     texts = [
-        line.strip()
-        for line in Path(args.input).read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        line.strip() for line in source.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
     if not texts:
         raise ValueError("n-gram corpus is empty")
@@ -60,6 +84,8 @@ def command_train_ngram(args: argparse.Namespace) -> int:
         mode=args.mode,
         alpha=args.alpha,
         lowercase_ascii=not args.preserve_ascii_case,
+        source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        source_revision=args.source_revision,
     ).fit(texts)
     model.save(args.output)
     print(
@@ -73,6 +99,8 @@ def command_train_ngram(args: argparse.Namespace) -> int:
                 "order": model.order,
                 "mode": model.mode,
                 "digest": model.digest,
+                "sourceSha256": model.source_sha256,
+                "sourceRevision": model.source_revision,
             },
             ensure_ascii=False,
             indent=2,
@@ -151,16 +179,116 @@ def command_train_fusion(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_enrich_candidates(args: argparse.Namespace) -> int:
+    rows = [
+        json.loads(line)
+        for line in Path(args.input).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    second_ear = (
+        load_second_ear(
+            args.second_ear,
+            source=args.second_ear_source,
+            model_revision=args.second_ear_revision,
+        )
+        if args.second_ear
+        else {}
+    )
+    ngram_model = NGramLanguageModel.load(args.ngram) if args.ngram else None
+    config = EnrichmentConfig(
+        add_second_ear_candidate=args.add_second_ear_candidate,
+        second_ear_source=args.second_ear_source,
+        ngram_model=ngram_model,
+        ngram_name=(
+            f"{ngram_model.mode}-{ngram_model.order}gram:{ngram_model.digest[:12]}"
+            if ngram_model is not None
+            else "ngram"
+        ),
+    )
+    enriched = enrich_manifest_rows(rows, second_ear=second_ear, config=config)
+    target = Path(args.output)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) for row in enriched)
+        + ("\n" if enriched else ""),
+        encoding="utf-8",
+    )
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "rows": len(enriched),
+                "secondEarRows": sum(1 for row in rows if str(row.get("sampleId")) in second_ear),
+                "ngram": config.ngram_name if ngram_model is not None else None,
+                "output": str(target),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def command_generate_candidates(args: argparse.Namespace) -> int:
+    if not args.allow_raw_export:
+        raise ValueError(
+            "candidate/reference export requires --allow-raw-export and an external output path"
+        )
+    output = _require_external_reference_output(args.output)
+    ranker_output = (
+        _require_external_reference_output(args.ranker_output)
+        if args.ranker_output is not None
+        else None
+    )
     records = load_audio_manifest(args.input)
+    model_path = Path(args.model).expanduser()
+    model_artifact_sha256 = getattr(args, "model_artifact_sha256", None)
+    if model_path.is_dir():
+        if args.model_revision is not None:
+            raise ValueError(
+                "a local model directory cannot use --model-revision; use --model-artifact-sha256"
+            )
+        if model_artifact_sha256 is None:
+            raise ValueError("a verified local model directory requires --model-artifact-sha256")
+        model_revision = None
+    else:
+        if model_artifact_sha256 is not None:
+            raise ValueError("--model-artifact-sha256 is only valid for a local model directory")
+        model_revision = resolve_hugging_face_revision(
+            args.model,
+            args.model_revision,
+            FASTER_WHISPER_MODEL_REVISIONS,
+        )
+    fallback_temperatures = tuple(
+        float(value) for value in str(args.fallback_temperatures or "").split(",") if value.strip()
+    )
     adapter = PathPreservingFasterWhisperAdapter(
         model=args.model,
+        model_revision=model_revision,
+        model_artifact_sha256=model_artifact_sha256,
+        runtime_revision=args.runtime_revision,
         device=args.device,
         compute_type=args.compute_type,
+        cpu_threads=args.cpu_threads,
         length_penalty=args.length_penalty,
         patience=args.patience,
         repetition_penalty=args.repetition_penalty,
         no_repeat_ngram_size=args.no_repeat_ngram_size,
+        loop_guard=LoopGuardConfig(
+            enabled=not args.no_loop_guard,
+            max_tokens_per_second=args.max_tokens_per_second,
+            max_tokens_floor=args.max_tokens_floor,
+            compression_ratio_threshold=args.compression_ratio_threshold,
+            log_prob_threshold=args.log_prob_threshold,
+            fallback_temperatures=fallback_temperatures,
+            fallback_samples=args.fallback_samples,
+            drop_degenerate=not args.keep_degenerate,
+            max_characters_per_second=args.max_characters_per_second,
+            extra_samples=args.extra_samples,
+            extra_sample_temperature=args.extra_sample_temperature,
+            extra_sample_topk=args.extra_sample_topk,
+        ),
+        without_timestamps=args.without_timestamps,
     )
     hotwords = tuple(
         value.strip()
@@ -175,23 +303,43 @@ def command_generate_candidates(args: argparse.Namespace) -> int:
         hotwords=hotwords,
         return_timestamps=args.return_timestamps,
         fail_on_non_allow_rights=not args.allow_review_rights,
-        model_revision=args.model_revision,
+        model_revision=model_revision,
+        model_artifact_sha256=model_artifact_sha256,
         runtime_revision=args.runtime_revision,
     )
-    generated = generate_manifest(records, adapter, config=config)
-    write_generated_manifests(
-        generated,
-        benchmark_path=args.output,
-        ranker_path=args.ranker_output,
+    checkpoint = Path(str(output) + ".partial")
+    generated = generate_manifest_to_checkpoint(
+        records,
+        adapter,
+        config=config,
+        checkpoint_path=checkpoint,
+        progress=lambda completed, total: print(
+            json.dumps(
+                {"generatedCandidates": completed, "totalCandidates": total},
+                separators=(",", ":"),
+            ),
+            file=sys.stderr,
+            flush=True,
+        ),
+    )
+    if len(generated) != len(records):
+        raise RuntimeError("generated checkpoint is incomplete")
+    finalize_generated_checkpoint(
+        checkpoint,
+        output_path=output,
+        records=records,
+        adapter=adapter,
+        config=config,
+        ranker_path=ranker_output,
     )
     print(
         json.dumps(
             {
                 "status": "ok",
-                "samples": len(generated),
-                "groups": len({record.group_id for record in generated}),
+                "samples": len(records),
+                "groups": len({record.group_id for record in records}),
                 "output": str(Path(args.output)),
-                "rankerOutput": args.ranker_output,
+                "rankerOutput": str(ranker_output) if ranker_output is not None else None,
                 "adapter": adapter.name,
                 "model": adapter.model_name,
                 "generationConfigSha256": config.digest,
@@ -258,6 +406,7 @@ def build_parser() -> argparse.ArgumentParser:
     ngram.add_argument("--order", type=int, default=5)
     ngram.add_argument("--alpha", type=float, default=0.1)
     ngram.add_argument("--preserve-ascii-case", action="store_true")
+    ngram.add_argument("--source-revision")
     ngram.set_defaults(func=command_train_ngram)
 
     listwise = commands.add_parser("train-listwise-ranker")
@@ -285,15 +434,46 @@ def build_parser() -> argparse.ArgumentParser:
     fusion.add_argument("--seed", type=int, default=37)
     fusion.set_defaults(func=command_train_fusion)
 
+    enrich = commands.add_parser("enrich-candidates")
+    enrich.add_argument("input", help="candidate JSONL from generate-candidates")
+    enrich.add_argument("--output", required=True)
+    enrich.add_argument("--second-ear", help="probe_second_ear.py JSONL output")
+    enrich.add_argument("--second-ear-source", default="qwen3-asr")
+    enrich.add_argument("--second-ear-revision")
+    enrich.add_argument(
+        "--add-second-ear-candidate",
+        action="store_true",
+        help="Append the second-ear hypothesis as an additional acoustically grounded candidate.",
+    )
+    enrich.add_argument("--ngram", help="NGramLanguageModel JSON from train-ngram")
+    enrich.set_defaults(func=command_enrich_candidates)
+
     generate = commands.add_parser("generate-candidates")
     generate.add_argument("input", help="rights-gated audio manifest JSONL")
     generate.add_argument("--output", required=True, help="benchmark JSONL")
     generate.add_argument("--ranker-output")
+    generate.add_argument(
+        "--allow-raw-export",
+        action="store_true",
+        help="explicitly allow local reference-bearing output outside the checkout",
+    )
     generate.add_argument("--model", default="large-v3-turbo")
     generate.add_argument("--model-revision")
+    generate.add_argument(
+        "--model-artifact-sha256",
+        "--artifact-sha256",
+        dest="model_artifact_sha256",
+        help="SHA-256 of a verified local model directory (separate from Hub revision).",
+    )
     generate.add_argument("--runtime-revision")
     generate.add_argument("--device", default="auto")
     generate.add_argument("--compute-type", default="default")
+    generate.add_argument(
+        "--cpu-threads",
+        type=int,
+        default=0,
+        help="CTranslate2 CPU thread count; use a positive fixed value for reproducible runs.",
+    )
     generate.add_argument("--language", default="ja")
     generate.add_argument("--beam-size", type=int, default=12)
     generate.add_argument("--hypotheses", type=int, default=12)
@@ -304,6 +484,40 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--initial-prompt")
     generate.add_argument("--hotwords")
     generate.add_argument("--return-timestamps", action="store_true")
+    generate.add_argument(
+        "--no-loop-guard",
+        action="store_true",
+        help="Disable the duration-aware token budget, degeneracy check, and sampled fallback.",
+    )
+    generate.add_argument("--max-tokens-per-second", type=float, default=14.0)
+    generate.add_argument("--max-tokens-floor", type=int, default=32)
+    generate.add_argument("--compression-ratio-threshold", type=float, default=2.4)
+    generate.add_argument("--log-prob-threshold", type=float, default=-1.0)
+    generate.add_argument(
+        "--fallback-temperatures",
+        default="0.2,0.4,0.6,0.8,1.0",
+        help="Comma-separated sampling temperatures tried when the beam stage is degenerate.",
+    )
+    generate.add_argument("--fallback-samples", type=int, default=5)
+    generate.add_argument("--max-characters-per-second", type=float, default=12.0)
+    generate.add_argument(
+        "--extra-samples",
+        type=int,
+        default=0,
+        help="Always add this many sampled hypotheses (own score domain) for sample-based MBR.",
+    )
+    generate.add_argument("--extra-sample-temperature", type=float, default=1.0)
+    generate.add_argument("--extra-sample-topk", type=int, default=0)
+    generate.add_argument(
+        "--without-timestamps",
+        action="store_true",
+        help="Decode with <|notimestamps|> (the v0.2 behaviour); loops far more on short clips.",
+    )
+    generate.add_argument(
+        "--keep-degenerate",
+        action="store_true",
+        help="Keep degenerate paths in the pool (demoted) instead of dropping them.",
+    )
     generate.add_argument(
         "--allow-review-rights",
         action="store_true",

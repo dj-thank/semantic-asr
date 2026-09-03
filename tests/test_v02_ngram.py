@@ -37,9 +37,13 @@ def test_mora_ngram_and_subword_tokenization() -> None:
 
 
 def test_ngram_model_roundtrip_preserves_scores_and_digest() -> None:
-    model = NGramLanguageModel(order=3, mode="mora", alpha=0.1).fit(
-        ["きょうはがっこうへいきます", "あしたはがっこうへいきます"]
-    )
+    model = NGramLanguageModel(
+        order=3,
+        mode="mora",
+        alpha=0.1,
+        source_sha256="a" * 64,
+        source_revision="fixture-revision",
+    ).fit(["きょうはがっこうへいきます", "あしたはがっこうへいきます"])
     before = model.score("きょうはがっこうへいきます")
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "mora-ngram.json"
@@ -47,7 +51,18 @@ def test_ngram_model_roundtrip_preserves_scores_and_digest() -> None:
         restored = NGramLanguageModel.load(path)
     after = restored.score("きょうはがっこうへいきます")
     assert restored.digest == model.digest
+    assert restored.source_sha256 == "a" * 64
+    assert restored.source_revision == "fixture-revision"
     assert after.total_log_probability == before.total_log_probability
+
+
+def test_ngram_v1_roundtrip_preserves_legacy_digest() -> None:
+    model = NGramLanguageModel(order=2, schema_version="ngram-v1").fit(["旧形式です"])
+    payload = model.as_dict()
+    restored = NGramLanguageModel.from_dict(payload)
+    assert restored.schema_version == "ngram-v1"
+    assert restored.as_dict() == payload
+    assert restored.digest == model.digest
 
 
 def test_ngram_ensemble_implements_candidate_ranker_contract() -> None:

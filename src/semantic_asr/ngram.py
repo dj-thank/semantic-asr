@@ -77,6 +77,9 @@ class NGramLanguageModel:
     vocabulary: set[str] = field(default_factory=set)
     document_count: int = 0
     token_count: int = 0
+    source_sha256: str | None = None
+    source_revision: str | None = None
+    schema_version: str = "ngram-v2"
 
     def __post_init__(self) -> None:
         if self.order < 1:
@@ -85,6 +88,21 @@ class NGramLanguageModel:
             raise ValueError("n-gram alpha must be finite and positive")
         if self.mode not in {"character", "mora", "subword", "whitespace"}:
             raise ValueError("unknown n-gram tokenization mode")
+        if self.schema_version not in {"ngram-v1", "ngram-v2"}:
+            raise ValueError("unsupported n-gram model schema")
+        if self.source_sha256 is not None and (
+            len(self.source_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in self.source_sha256.lower())
+        ):
+            raise ValueError("n-gram source_sha256 must be a 64-character hexadecimal digest")
+        if self.source_revision is not None and not self.source_revision.strip():
+            raise ValueError("n-gram source_revision must not be empty")
+        if self.source_revision is not None and self.source_sha256 is None:
+            raise ValueError("n-gram source_revision requires source_sha256")
+        if self.schema_version == "ngram-v1" and (
+            self.source_sha256 is not None or self.source_revision is not None
+        ):
+            raise ValueError("ngram-v1 cannot carry source provenance")
         for n in range(1, self.order + 1):
             self.counts.setdefault(n, Counter())
             self.context_counts.setdefault(n, Counter())
@@ -166,8 +184,8 @@ class NGramLanguageModel:
         )
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "schemaVersion": "ngram-v1",
+        payload = {
+            "schemaVersion": self.schema_version,
             "order": self.order,
             "mode": self.mode,
             "alpha": self.alpha,
@@ -184,16 +202,31 @@ class NGramLanguageModel:
                 for n, counter in self.context_counts.items()
             },
         }
+        if self.schema_version == "ngram-v2":
+            payload["sourceSha256"] = self.source_sha256
+            payload["sourceRevision"] = self.source_revision
+        return payload
 
     @classmethod
     def from_dict(cls, row: Mapping[str, Any]) -> NGramLanguageModel:
-        if row.get("schemaVersion") != "ngram-v1":
+        if row.get("schemaVersion") not in {"ngram-v1", "ngram-v2"}:
             raise ValueError("unsupported n-gram model schema")
         model = cls(
             order=int(row["order"]),
             mode=str(row["mode"]),
             alpha=float(row["alpha"]),
             lowercase_ascii=bool(row.get("lowercaseAscii", True)),
+            source_sha256=(
+                str(row["sourceSha256"])
+                if "sourceSha256" in row and row["sourceSha256"] is not None
+                else None
+            ),
+            source_revision=(
+                str(row["sourceRevision"])
+                if "sourceRevision" in row and row["sourceRevision"] is not None
+                else None
+            ),
+            schema_version=str(row["schemaVersion"]),
         )
         model.document_count = int(row.get("documentCount", 0))
         model.token_count = int(row.get("tokenCount", 0))

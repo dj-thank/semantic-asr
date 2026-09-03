@@ -65,6 +65,42 @@ def test_cache_key_changes_with_context_hotwords_and_calibration() -> None:
     assert len(keys) == 4
 
 
+def test_cache_key_binds_revisions_and_decode_score_domain() -> None:
+    keys = {
+        make_key(model_revision="r1").digest,
+        make_key(model_revision="r2").digest,
+        make_key(runtime_revision="runtime-1").digest,
+        make_key(runtime_revision="runtime-2").digest,
+        make_key(decode_settings={"lengthPenalty": 1.0}).digest,
+        make_key(decode_settings={"lengthPenalty": 1.1}).digest,
+        make_key(score_domain="score-domain-1").digest,
+        make_key(score_domain="score-domain-2").digest,
+    }
+    assert len(keys) == 8
+
+
+def test_cache_does_not_replay_a_different_model_revision() -> None:
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        EvidenceCache(Path(directory) / "cache.sqlite3") as cache,
+    ):
+        key_r1 = make_key(model_revision="r1")
+        key_r2 = make_key(model_revision="r2")
+        cache.put_json(key_r1, {"kind": "fixture", "revision": "r1"})
+        assert cache.get_json(key_r1) == {"kind": "fixture", "revision": "r1"}
+        assert cache.get_json(key_r2) is None
+
+
+def test_cache_key_rejects_conflicting_or_invalid_provenance() -> None:
+    with pytest.raises(ValueError, match="decode settings"):
+        make_key(
+            decode_settings={"patience": 1.0},
+            decode_config_sha256="a" * 64,
+        )
+    with pytest.raises(ValueError, match="SHA-256"):
+        make_key(model_artifact_sha256="not-a-digest")
+
+
 def test_teacher_abstention_roundtrip() -> None:
     entry = TeacherCacheEntry(
         probabilities={"a": 0.5, "b": 0.5},

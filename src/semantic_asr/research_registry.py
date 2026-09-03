@@ -67,7 +67,7 @@ class ArchitectureTranslation:
 class ResearchRegistry:
     sources: tuple[ResearchSource, ...]
     translations: tuple[ArchitectureTranslation, ...]
-    version: str = "2026-08-31-v0.2"
+    version: str = "2026-09-02-v0.2.1"
     metadata: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -206,6 +206,70 @@ def default_research_registry() -> ResearchRegistry:
             notes="Reserved for a later audio-projector experiment after second-pass upper bounds are known.",
         ),
         ResearchSource(
+            source_id="whisper-cd",
+            title="Whisper-CD: contrastive decoding against silence/noise/shifted audio for long-form ASR",
+            status=SourceStatus.PINNED_PRIMARY,
+            primary_url="https://arxiv.org/abs/2603.06193",
+            publication="arXiv:2603.06193",
+            notes="Names the three long-form failure modes (silence hallucination, repetition loops, content skips) that the loop guard measures; logit-level contrastive decoding is not available through CTranslate2 and is not implemented.",
+        ),
+        ResearchSource(
+            source_id="lcar",
+            title="Likelihood-Constrained Acoustic Reranking for training-free hallucination mitigation in LLM-based ASR",
+            status=SourceStatus.PINNED_PRIMARY,
+            primary_url="https://arxiv.org/abs/2608.30776",
+            publication="arXiv:2608.30776",
+            notes="Evaluated only on speech-LLMs (Qwen3-ASR, Kimi-Audio, GLM-ASR); reserved for a second-ear decoding experiment, not applied to Whisper.",
+        ),
+        ResearchSource(
+            source_id="sr-cem",
+            title="Leveraging Beam Search Information for Confidence Estimation in E2E ASR (SR-CEM)",
+            status=SourceStatus.PINNED_PRIMARY,
+            primary_url="https://arxiv.org/abs/2607.29299",
+            publication="arXiv:2607.29299",
+            notes="Token score/rank features from beam search as cheap confidence inputs; motivates exporting per-path decoder statistics as ranker features.",
+        ),
+        ResearchSource(
+            source_id="whisper-overconfidence",
+            title="Identifying and Calibrating Overconfidence in Noisy Speech Recognition",
+            status=SourceStatus.PINNED_PRIMARY,
+            primary_url="https://arxiv.org/abs/2509.07195",
+            publication="arXiv:2509.07195",
+            notes="Whisper assigns high token confidence to wrong tokens under noise; supports treating average log-probability as uncalibrated evidence only.",
+        ),
+        ResearchSource(
+            source_id="ja-ger-benchmark",
+            title="Benchmarking Japanese Speech Recognition on ASR-LLM Setups with Multi-Pass Augmented Generative Error Correction",
+            status=SourceStatus.PINNED_PRIMARY,
+            primary_url="https://arxiv.org/abs/2408.16180",
+            publication="arXiv:2408.16180",
+            notes="Japanese GER benchmark; single-LLM GER hallucinated on weak ASR inputs, multi-pass ensembles were safer, most corrected errors were phonetic confusions.",
+        ),
+        ResearchSource(
+            source_id="rare-word-ger",
+            title="LLM-based Generative Error Correction for Rare Words with Synthetic Data and Phonetic Context",
+            status=SourceStatus.PINNED_PRIMARY,
+            primary_url="https://arxiv.org/abs/2505.17410",
+            publication="INTERSPEECH 2025",
+            notes="Phonetic context reduces LLM over-correction on Japanese; supports the mora/kana evidence streams.",
+        ),
+        ResearchSource(
+            source_id="recover",
+            title="RECOVER: Robust Entity Correction via agentic Orchestration of hypothesis Variants for Evidence-based Recovery",
+            status=SourceStatus.PINNED_PRIMARY,
+            primary_url="https://arxiv.org/abs/2603.16411",
+            publication="arXiv:2603.16411",
+            notes="Entity correction constrained to retrieved evidence over hypothesis variants; candidate for the guarded proposal gate.",
+        ),
+        ResearchSource(
+            source_id="hotword-retrieval-rl",
+            title="Contextual Biasing for LLM-Based ASR with Hotword Retrieval and Reinforcement Learning",
+            status=SourceStatus.PINNED_PRIMARY,
+            primary_url="https://arxiv.org/abs/2512.21828",
+            publication="arXiv:2512.21828",
+            notes="Retrieve a compact hotword set before decoding; hotwords remain prompt bias, never acoustic proof.",
+        ),
+        ResearchSource(
             source_id="glm-5.3",
             title="GLM 5.3 (user-provided model name)",
             status=SourceStatus.PROVISIONAL,
@@ -283,6 +347,42 @@ def default_research_registry() -> ResearchRegistry:
                 "src/semantic_asr/adapters_v2.py",
                 "src/semantic_asr/candidate_pool.py",
             ),
+        ),
+        ArchitectureTranslation(
+            translation_id="window-padding-and-loop-guard",
+            source_ids=("faster-whisper", "ctranslate2", "whisper-cd"),
+            source_mechanism="faster-whisper pads every segment to one 30 s window and applies compression-ratio and log-probability fallbacks before accepting a decode.",
+            semantic_asr_mechanism="Direct-generate adapters pad features to the window, bound new tokens by duration, tag every path with compression-ratio, repeated n-gram and character-budget degeneracy evidence, and fall back to sampled stages in their own score domain.",
+            kind=TranslationKind.DIRECT_IMPLEMENTATION,
+            claim_boundary="Restores protections the raw CTranslate2 path skipped; it is not contrastive decoding and does not change Whisper logits.",
+            falsification_test="Paired CER/oracle@K with and without padding and loop guard on the same rights-cleared manifest (2026-09-02 pilot: utterance-mean CER 5.70 -> 0.30 on 20 ReazonSpeech clips).",
+            implementation_paths=(
+                "src/semantic_asr/adapters.py",
+                "src/semantic_asr/advanced_adapters.py",
+            ),
+        ),
+        ArchitectureTranslation(
+            translation_id="sample-based-mbr-enrichment",
+            source_ids=("mbr-for-asr",),
+            source_mechanism="MBR over independent samples (4-32) outperforms beam search for Whisper-family models, including Japanese sets.",
+            semantic_asr_mechanism="Optional always-on sampled stage adds hypotheses to the candidate pool in a separate score domain so Semantic MBR can use sample support.",
+            kind=TranslationKind.EXPERIMENTAL_HYPOTHESIS,
+            claim_boundary="CTranslate2 exposes top-k/temperature sampling, not epsilon sampling; the sampled scores are not mixed with beam scores.",
+            falsification_test="Compare MBR CER with and without sampled enrichment on the locked test split at matched wall-clock.",
+            implementation_paths=(
+                "src/semantic_asr/advanced_adapters.py",
+                "src/semantic_asr/mbr.py",
+            ),
+        ),
+        ArchitectureTranslation(
+            translation_id="degeneracy-as-uncalibrated-evidence",
+            source_ids=("sr-cem", "whisper-overconfidence"),
+            source_mechanism="Beam-search token statistics and noise overconfidence show that average log-probability alone is a poor confidence signal.",
+            semantic_asr_mechanism="Compression ratio, repeated n-gram fraction, character budget and decode stage are exported per candidate as ranker/calibration features rather than folded into the acoustic score.",
+            kind=TranslationKind.DIRECT_IMPLEMENTATION,
+            claim_boundary="These are features for held-out calibration; no calibrated probability is claimed from them.",
+            falsification_test="Ablate degeneracy features in the linear/listwise ranker and report ECE/AURC on the calibration split.",
+            implementation_paths=("src/semantic_asr/advanced_adapters.py",),
         ),
     )
     return ResearchRegistry(

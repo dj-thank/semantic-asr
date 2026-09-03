@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
@@ -23,6 +24,26 @@ CRITICAL_ENTITY_PATTERN = re.compile(
 )
 NEGATION_PATTERN = re.compile(r"(?:ない|なく|なかった|ません|ませんでした|じゃない|ではない|ぬ|ず)")
 FILLERS = ("えー", "ええと", "えっと", "あの", "その", "まあ", "うーん", "んー")
+ANNOTATED_FILLER_PATTERN = re.compile(r"\(F\s+([^()]*)\)")
+ANNOTATED_DISFLUENCY_PATTERN = re.compile(r"\(D2?\s+([^()]*)\)")
+ANNOTATED_UNCERTAIN_PATTERN = re.compile(r"\(\?\s+([^()]*)\)")
+ANNOTATED_INAUDIBLE_PATTERN = re.compile(r"\(\?\)")
+ANNOTATED_MASK_PATTERN = re.compile(r"\[[A-Za-z][A-Za-z0-9_-]*\]")
+_FILLER_FAMILIES = {
+    "え": ("えーっと", "えっとー", "えーと", "ええと", "えっと", "えー"),
+    "あの": ("あのー", "あのう", "あの"),
+    "その": ("その",),
+    "まあ": ("まあ",),
+    "うーん": ("うーん",),
+    "んー": ("んー",),
+}
+_FILLER_FAMILY_BY_VARIANT = {
+    variant: family for family, variants in _FILLER_FAMILIES.items() for variant in variants
+}
+_FILLER_VARIANTS = tuple(_FILLER_FAMILY_BY_VARIANT)
+_FILLER_VARIANT_PATTERN = re.compile(
+    "|".join(re.escape(value) for value in sorted(_FILLER_VARIANTS, key=len, reverse=True))
+)
 
 
 def edit_distance(reference: Sequence[str], hypothesis: Sequence[str]) -> int:
@@ -54,6 +75,255 @@ def normalize_characters(text: str) -> list[str]:
 
 def cer(reference: str, hypothesis: str) -> float | None:
     return error_rate(normalize_characters(reference), normalize_characters(hypothesis))
+
+
+def normalize_characters_lenient(text: str) -> list[str]:
+    """NFKC characters without whitespace, punctuation, or symbols.
+
+    Published Japanese ASR numbers (kotoba-whisper, Neosophie 2026) strip punctuation before
+    computing CER. The strict metric keeps punctuation because observed transcripts must not
+    silently lose it; this lenient variant exists only for comparability with such reports.
+    """
+
+    return [
+        character
+        for character in normalize_characters(text)
+        if not unicodedata.category(character).startswith(("P", "S"))
+    ]
+
+
+def lenient_cer(reference: str, hypothesis: str) -> float | None:
+    return error_rate(
+        normalize_characters_lenient(reference),
+        normalize_characters_lenient(hypothesis),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceAnnotationCounts:
+    filler_events: int
+    disfluency_events: int
+    uncertain_spans: int
+    masked_spans: int
+
+    @property
+    def exact_cer_safe(self) -> bool:
+        return self.uncertain_spans == 0 and self.masked_spans == 0
+
+
+def reference_annotation_counts(text: str) -> ReferenceAnnotationCounts:
+    value = unicodedata.normalize("NFKC", str(text or ""))
+    return ReferenceAnnotationCounts(
+        filler_events=len(ANNOTATED_FILLER_PATTERN.findall(value)),
+        disfluency_events=len(ANNOTATED_DISFLUENCY_PATTERN.findall(value)),
+        uncertain_spans=(
+            len(ANNOTATED_UNCERTAIN_PATTERN.findall(value))
+            + len(ANNOTATED_INAUDIBLE_PATTERN.findall(value))
+        ),
+        masked_spans=len(ANNOTATED_MASK_PATTERN.findall(value)),
+    )
+
+
+def spoken_reference_surface(text: str) -> str:
+    """Remove annotation wrappers while preserving every transcribed spoken span."""
+
+    value = unicodedata.normalize("NFKC", str(text or ""))
+    for pattern in (
+        ANNOTATED_FILLER_PATTERN,
+        ANNOTATED_DISFLUENCY_PATTERN,
+        ANNOTATED_UNCERTAIN_PATTERN,
+    ):
+        value = pattern.sub(lambda match: match.group(1), value)
+    value = ANNOTATED_INAUDIBLE_PATTERN.sub("", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+@dataclass(frozen=True, slots=True)
+class _ReferenceEvaluation:
+    surface: str
+    annotations: ReferenceAnnotationCounts | None
+    exact_cer_safe: bool
+
+
+def _reference_evaluation(
+    reference: str,
+    annotated_reference: str | None,
+) -> _ReferenceEvaluation:
+    if annotated_reference is None:
+        return _ReferenceEvaluation(surface=reference, annotations=None, exact_cer_safe=True)
+    annotations = reference_annotation_counts(annotated_reference)
+    return _ReferenceEvaluation(
+        surface=spoken_reference_surface(annotated_reference),
+        annotations=annotations,
+        exact_cer_safe=annotations.exact_cer_safe,
+    )
+
+
+def exact_cer(
+    reference: str,
+    hypothesis: str,
+    *,
+    annotated_reference: str | None = None,
+) -> float | None:
+    """Compute strict CER on the spoken reference surface, failing closed on annotations.
+
+    An annotated reference is authoritative for the scored surface. Any uncertain, inaudible,
+    or masked span makes the exact metric undefined rather than treating an incomplete label as
+    ground truth. Unannotated legacy references retain the historical CER behavior.
+    """
+
+    evaluated = _reference_evaluation(reference, annotated_reference)
+    if not evaluated.exact_cer_safe:
+        return None
+    if not normalize_characters(evaluated.surface):
+        return None
+    return cer(evaluated.surface, hypothesis)
+
+
+@dataclass(frozen=True, slots=True)
+class FillerEventScore:
+    expected_events: int
+    observed_events: int
+    matched_events: int
+    precision: float
+    recall: float
+    f1: float
+
+
+def _canonical_filler(value: str) -> str:
+    normalized = "".join(unicodedata.normalize("NFKC", str(value or "")).split())
+    if not normalized:
+        return "unknown:"
+    return _FILLER_FAMILY_BY_VARIANT.get(normalized, f"unknown:{normalized}")
+
+
+def _surface_filler_events(
+    text: str,
+    *,
+    additional_variants: Iterable[str] = (),
+) -> list[str]:
+    value = unicodedata.normalize("NFKC", str(text or ""))
+    variants = {
+        "".join(unicodedata.normalize("NFKC", str(item or "")).split())
+        for item in additional_variants
+    }
+    variants.discard("")
+    if variants:
+        pattern = re.compile(
+            "|".join(
+                re.escape(item)
+                for item in sorted(
+                    (*_FILLER_VARIANTS, *variants),
+                    key=lambda item: (-len(item), item),
+                )
+            )
+        )
+    else:
+        pattern = _FILLER_VARIANT_PATTERN
+    return [_canonical_filler(match.group(0)) for match in pattern.finditer(value)]
+
+
+def filler_event_score(
+    annotated_reference: str,
+    hypothesis: str,
+) -> FillerEventScore | None:
+    annotated_values = ANNOTATED_FILLER_PATTERN.findall(annotated_reference)
+    expected = [_canonical_filler(value) for value in annotated_values]
+    if not expected:
+        expected = _surface_filler_events(spoken_reference_surface(annotated_reference))
+    unknown_values = [
+        value for value in annotated_values if _canonical_filler(value).startswith("unknown:")
+    ]
+    # Filler events are deliberately utterance-scoped. Unknown annotated forms are matched only
+    # against their own normalized spelling; no timestamp or cross-utterance identity is inferred.
+    observed = _surface_filler_events(hypothesis, additional_variants=unknown_values)
+    if not expected and not observed:
+        return None
+    expected_counts = Counter(expected)
+    observed_counts = Counter(observed)
+    matched = sum((expected_counts & observed_counts).values())
+    precision = matched / len(observed) if observed else 0.0
+    recall = matched / len(expected) if expected else 0.0
+    f1 = 0.0 if precision + recall == 0 else 2 * precision * recall / (precision + recall)
+    return FillerEventScore(
+        expected_events=len(expected),
+        observed_events=len(observed),
+        matched_events=matched,
+        precision=precision,
+        recall=recall,
+        f1=f1,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ContiguousAlignmentDiagnostic:
+    """Reference-to-hypothesis-window diagnostic; never a candidate-selection score."""
+
+    edits: int
+    reference_characters: int
+    hypothesis_characters: int
+    retained_start: int
+    retained_end: int
+    retained_characters: int
+    prefix_overrun_characters: int
+    suffix_overrun_characters: int
+    aligned_cer: float
+
+
+def best_contiguous_alignment(
+    reference: str,
+    hypothesis: str,
+) -> ContiguousAlignmentDiagnostic | None:
+    """Align the full strict reference to the best contiguous hypothesis window.
+
+    Prefix and suffix skips are free only for this diagnostic. The primary CER and all
+    candidate-selection paths remain unchanged. Ties prefer the longest retained window and
+    then the earliest start, so the result is deterministic.
+    """
+
+    expected = normalize_characters(reference)
+    observed = normalize_characters(hypothesis)
+    if not expected:
+        return None
+
+    # Each cell stores (edit cost, retained-window start). A zero-cost row-zero cell lets a
+    # contiguous window begin at any hypothesis boundary without charging the skipped prefix.
+    previous: list[tuple[int, int]] = [(row, 0) for row in range(len(expected) + 1)]
+    best = (len(expected), 0, 0, 0)
+    for end, observed_character in enumerate(observed, 1):
+        current: list[tuple[int, int]] = [(0, end)]
+        for row, expected_character in enumerate(expected, 1):
+            options = (
+                (previous[row][0] + 1, previous[row][1]),
+                (current[row - 1][0] + 1, current[row - 1][1]),
+                (
+                    previous[row - 1][0] + (expected_character != observed_character),
+                    previous[row - 1][1],
+                ),
+            )
+            current.append(min(options, key=lambda value: (value[0], -(end - value[1]), value[1])))
+        previous = current
+        candidate = (
+            current[len(expected)][0],
+            -(end - current[len(expected)][1]),
+            current[len(expected)][1],
+            end,
+        )
+        if candidate < best:
+            best = candidate
+
+    edits, _negative_retained, start, end = best
+    return ContiguousAlignmentDiagnostic(
+        edits=edits,
+        reference_characters=len(expected),
+        hypothesis_characters=len(observed),
+        retained_start=start,
+        retained_end=end,
+        retained_characters=end - start,
+        prefix_overrun_characters=start,
+        suffix_overrun_characters=len(observed) - end,
+        aligned_cer=edits / len(expected),
+    )
 
 
 def kana_cer(reference_reading: str | None, hypothesis_reading: str | None) -> float | None:
@@ -233,6 +503,8 @@ class EvaluationResult:
     punctuation_f1: float | None
     disfluency_preservation: float | None
     unsupported_correction: float
+    filler_events: FillerEventScore | None = None
+    reference_annotations: ReferenceAnnotationCounts | None = None
 
 
 def evaluate_transcript(
@@ -245,19 +517,46 @@ def evaluate_transcript(
     reference_mora: Sequence[str] | None = None,
     observed_mora: Sequence[str] | None = None,
     supported_normalization_spans: Sequence[tuple[int, int]] = (),
+    annotated_reference: str | None = None,
 ) -> EvaluationResult:
+    evaluated_reference = _reference_evaluation(reference, annotated_reference)
+    annotation_counts = evaluated_reference.annotations
+    exact_reference_safe = evaluated_reference.exact_cer_safe
+    metric_reference = evaluated_reference.surface
     return EvaluationResult(
-        cer=cer(reference, observed),
+        cer=exact_cer(
+            reference,
+            observed,
+            annotated_reference=annotated_reference,
+        ),
         kana_cer=kana_cer(reference_reading, observed_reading),
         mora_error_rate=mora_error_rate(reference_mora, observed_mora),
-        number_error_rate=number_error_rate(reference, observed),
-        date_time_error_rate=date_time_error_rate(reference, observed),
-        currency_error_rate=currency_error_rate(reference, observed),
-        negation_error_rate=negation_error_rate(reference, observed),
-        critical_entity_error_rate=critical_entity_error_rate(reference, observed),
-        punctuation_f1=punctuation_f1(reference, observed),
-        disfluency_preservation=disfluency_preservation_rate(reference, observed),
+        number_error_rate=(
+            number_error_rate(metric_reference, observed) if exact_reference_safe else None
+        ),
+        date_time_error_rate=(
+            date_time_error_rate(metric_reference, observed) if exact_reference_safe else None
+        ),
+        currency_error_rate=(
+            currency_error_rate(metric_reference, observed) if exact_reference_safe else None
+        ),
+        negation_error_rate=(
+            negation_error_rate(metric_reference, observed) if exact_reference_safe else None
+        ),
+        critical_entity_error_rate=(
+            critical_entity_error_rate(metric_reference, observed) if exact_reference_safe else None
+        ),
+        punctuation_f1=(
+            punctuation_f1(metric_reference, observed) if exact_reference_safe else None
+        ),
+        disfluency_preservation=disfluency_preservation_rate(metric_reference, observed),
         unsupported_correction=unsupported_correction_rate(
             observed, normalized, supported_normalization_spans
         ),
+        filler_events=(
+            filler_event_score(annotated_reference, observed)
+            if annotated_reference is not None
+            else None
+        ),
+        reference_annotations=annotation_counts,
     )

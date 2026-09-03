@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from semantic_asr.cli import main
+from semantic_asr.cli import build_parser, main
 
 
 def test_demo_and_fuse_cli() -> None:
@@ -90,3 +90,32 @@ def test_rights_cli_fails_closed() -> None:
         assert main(["rights", str(registry), "fixture", "train"]) == 0
         with pytest.raises(PermissionError):
             main(["rights", str(registry), "fixture", "redistribute_raw"])
+
+
+def test_transcribe_cli_carries_hub_and_local_artifact_provenance_options() -> None:
+    args = build_parser().parse_args(
+        [
+            "transcribe",
+            "audio.wav",
+            "--model",
+            "local-whisper",
+            "--model-artifact-sha256",
+            "a" * 64,
+            "--runtime-revision",
+            "runtime-r1",
+            "--qwen-second-ear",
+            "--qwen-model",
+            "local-qwen",
+            "--qwen-model-artifact-sha256",
+            "b" * 64,
+            "--qwen-aligner",
+            "--qwen-aligner-model",
+            "local-aligner",
+            "--qwen-aligner-artifact-sha256",
+            "c" * 64,
+        ]
+    )
+    assert args.model_artifact_sha256 == "a" * 64
+    assert args.runtime_revision == "runtime-r1"
+    assert args.qwen_model_artifact_sha256 == "b" * 64
+    assert args.qwen_aligner_artifact_sha256 == "c" * 64

@@ -5,9 +5,15 @@ import importlib.metadata
 import json
 import math
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .candidate_pool import CandidatePath, CandidatePool
+from .revisions import (
+    FASTER_WHISPER_MODEL_REVISIONS,
+    resolve_hugging_face_revision,
+    verify_artifact_sha256,
+)
 
 
 def _package_version(name: str) -> str | None:
@@ -104,22 +110,50 @@ class FasterWhisperPathAdapter:
         compute_type: str = "default",
         cpu_threads: int = 0,
         num_workers: int = 1,
+        model_revision: str | None = None,
+        model_artifact_sha256: str | None = None,
+        runtime_revision: str | None = None,
     ) -> None:
+        local_model = Path(model).expanduser().is_dir()
+        if local_model:
+            if model_revision is not None:
+                raise ValueError("a local model directory cannot claim a Hub revision")
+            if model_artifact_sha256 is None:
+                raise ValueError("a local model directory requires a verified artifact SHA-256")
+            model_artifact_sha256 = verify_artifact_sha256(
+                model, model_artifact_sha256, identifier="faster-whisper path model"
+            )
+        else:
+            if model_artifact_sha256 is not None:
+                raise ValueError("model artifact SHA-256 is only valid for a local directory")
+            model_revision = resolve_hugging_face_revision(
+                model,
+                model_revision,
+                FASTER_WHISPER_MODEL_REVISIONS,
+            )
         try:
             from faster_whisper import WhisperModel
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise RuntimeError("install semantic-asr with the 'asr' extra") from exc
         self.model_name = model
+        self.model_revision = model_revision
+        self.model_artifact_sha256 = model_artifact_sha256
+        self.runtime_revision = runtime_revision or (
+            f"faster-whisper@{_package_version('faster-whisper') or 'unknown'}"
+            f"+ctranslate2@{_package_version('ctranslate2') or 'unknown'}"
+        )
         self.device = device
         self.compute_type = compute_type
-        self.model = WhisperModel(
-            model,
-            device=device,
-            device_index=device_index,
-            compute_type=compute_type,
-            cpu_threads=cpu_threads,
-            num_workers=num_workers,
-        )
+        model_kwargs = {
+            "device": device,
+            "device_index": device_index,
+            "compute_type": compute_type,
+            "cpu_threads": cpu_threads,
+            "num_workers": num_workers,
+        }
+        if model_revision is not None:
+            model_kwargs["revision"] = model_revision
+        self.model = WhisperModel(model, **model_kwargs)
 
     def _language(self, waveform: Any, requested: str | None) -> tuple[str, float | None, str]:
         if requested not in {None, "", "auto"}:
@@ -197,12 +231,12 @@ class FasterWhisperPathAdapter:
             task="transcribe",
             language=language,
         )
+        from .adapters import pad_features_to_window, window_frames
+
         features = self.model.feature_extractor(waveform)
         if isinstance(features, tuple):
             features = features[0]
-        features = np.asarray(features)
-        if features.ndim == 2:
-            features = np.expand_dims(features, 0)
+        features = pad_features_to_window(np.asarray(features), window_frames(self.model))
         encoded = self.model.encode(features)
         prompt = self._prompt(tokenizer, request)
 
@@ -210,6 +244,9 @@ class FasterWhisperPathAdapter:
         common_metadata = {
             "adapter": self.name,
             "model": self.model_name,
+            "modelRevision": self.model_revision,
+            "modelArtifactSha256": self.model_artifact_sha256,
+            "runtimeRevision": self.runtime_revision,
             "device": self.device,
             "computeType": self.compute_type,
             "durationSeconds": duration_seconds,

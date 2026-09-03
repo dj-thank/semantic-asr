@@ -4,7 +4,31 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from semantic_asr.cli_root import main
+from semantic_asr.frontier_cli import _require_external_reference_output, build_parser
+
+
+def test_candidate_export_requires_explicit_external_destination(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    inside = checkout / "runs" / "candidates.jsonl"
+    outside = tmp_path / "external" / "candidates.jsonl"
+    with pytest.raises(ValueError, match="outside the repository"):
+        _require_external_reference_output(inside, checkout_root=checkout)
+    assert _require_external_reference_output(outside, checkout_root=checkout) == outside.resolve()
+
+    args = build_parser().parse_args(
+        [
+            "generate-candidates",
+            "manifest.jsonl",
+            "--output",
+            str(outside),
+            "--allow-raw-export",
+        ]
+    )
+    assert args.allow_raw_export is True
 
 
 def test_frontier_train_ngram_and_throttle_policy(capsys) -> None:
@@ -32,7 +56,8 @@ def test_frontier_train_ngram_and_throttle_policy(capsys) -> None:
             == 0
         )
         payload = json.loads(model.read_text(encoding="utf-8"))
-        assert payload["schemaVersion"] == "ngram-v1"
+        assert payload["schemaVersion"] == "ngram-v2"
+        assert len(payload["sourceSha256"]) == 64
         assert payload["documentCount"] == 3
         assert main(["throttle-policy", "--effort", "edge-gpu"]) == 0
         stdout = capsys.readouterr().out

@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import random
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -333,14 +334,31 @@ def example_from_row(row: Mapping[str, Any], *, line_number: int = 0) -> RankerE
 
 
 def load_jsonl_examples(path: str | Path) -> list[RankerExample]:
+    """Load ranker examples, skipping utterances that carry no ranking signal.
+
+    Real N-best lists frequently collapse to one surface after path aggregation and
+    loop-guard rejection. Such rows cannot form a pair or a list and are skipped;
+    the count is reported on stderr so a dataset dominated by them is visible.
+    """
+
     output: list[RankerExample] = []
+    skipped = 0
     for line_number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
         payload = json.loads(line)
         if not isinstance(payload, Mapping):
             raise ValueError(f"ranker row {line_number} must be an object")
+        candidates = payload.get("candidates")
+        if isinstance(candidates, list) and len(candidates) < 2:
+            skipped += 1
+            continue
         output.append(example_from_row(payload, line_number=line_number))
+    if skipped:
+        print(
+            json.dumps({"skippedSingleCandidateRows": skipped, "path": str(path)}),
+            file=sys.stderr,
+        )
     if not output:
         raise ValueError("ranker dataset is empty")
     return output
