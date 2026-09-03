@@ -126,3 +126,26 @@ def _warm(adapter: FakeAdapter):
     from semantic_asr.api import load_transcriber
 
     return load_transcriber("cpu-ja-v1", adapter=adapter)
+
+
+def test_run_cli_writes_outputs_with_injected_adapter(tmp_path: Path, capsys) -> None:
+    from semantic_asr.run_cli import build_parser, run_transcription
+
+    audio = tmp_path / "clip.wav"
+    _write_wav(audio, 1.5)
+    args = build_parser().parse_args(
+        [str(audio), "--output-dir", str(tmp_path / "out"), "--formats", "json,observed", "--quiet"]
+    )
+    payload = run_transcription(args, adapter=FakeAdapter())
+    assert payload["status"] == "ok"
+    assert payload["profile"] == "cpu-ja-v1"
+    assert set(payload["outputs"]) == {"json", "observed"}
+    assert (tmp_path / "out").exists()
+
+
+def test_root_cli_routes_run_command() -> None:
+    from semantic_asr.cli_root import main
+
+    with pytest.raises(SystemExit) as info:
+        main(["run", "--help"])
+    assert info.value.code == 0

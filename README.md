@@ -221,6 +221,21 @@ semantic-asr research-smoke --output runs/research-smoke.json
 
 これは学習・MBR・adaptive Kのcode pathを検証しますが、実音声CER改善の証拠ではありません。
 
+## 最短で使う（一呼び出し API）
+
+```python
+from semantic_asr import transcribe
+
+result = transcribe("meeting.wav", profile="cpu-ja-v1")
+print(result.observed_text)      # 実際に話された内容（改変検知ハッシュ付き）
+print(result.normalized_text)    # 読みやすく整えた別レイヤー
+for segment in result.segments:  # window 単位の区間と判定状態
+    print(segment.start_seconds, segment.end_seconds, segment.status, segment.observed)
+result.write("transcripts")      # json / observed.txt / txt / md / srt / vtt
+```
+
+`profile` は不変の名前付き設定です（`cpu-ja-v1`: CPU int8 large-v3-turbo・beam 5・30 秒 window padding・loop guard。`cpu-ja-quality-v1`: beam 12。`gpu-ja-v1`: CUDA float16）。バックエンドのノブは呼び出しに漏らさず、組み合わせが変わるときは新しい profile を足します。Koemo のような既存呼び出し側には `transcribe_segments(audio)` が `[(start, end, text), ...]` を返します。モデルを温めたまま何度も呼ぶ場合は `load_transcriber(profile)` を一度作り、`transcribe(..., transcriber=warm)` に渡してください。
+
 ## 実音声で動かす（2026-09-02 以降）
 
 公開テストセットから権利注記付き manifest を作り、N-best 候補を生成し、分割・学習・較正・ベンチマークまでを CLI で回します。公開データ extra は `datasets`、`numpy`、`scipy`、`soundfile` を含みます。
