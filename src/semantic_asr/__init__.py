@@ -1,6 +1,15 @@
 """Semantic ASR: evidence-preserving Japanese speech recognition."""
 
 from .adaptive import AdaptiveKConfig, AdaptiveKDecision, select_adaptive_k
+from .api import (
+    PROFILES,
+    RuntimeProfile,
+    TranscriptResult,
+    TranscriptSegment,
+    load_transcriber,
+    transcribe,
+    transcribe_segments,
+)
 from .candidate_pool import aggregate_surface_candidates, merge_candidate_pools
 from .cascade import CascadeConfig, CascadeDecision, run_candidate_cascade
 from .contracts import (
@@ -17,6 +26,13 @@ from .mbr import MBRDecision, SemanticMBRConfig, semantic_minimum_bayes_risk
 from .score_semantics import EvidenceScore, ScoreKind
 
 __all__ = [
+    "PROFILES",
+    "RuntimeProfile",
+    "TranscriptResult",
+    "TranscriptSegment",
+    "load_transcriber",
+    "transcribe",
+    "transcribe_segments",
     "AdaptiveKConfig",
     "AdaptiveKDecision",
     "CandidateEvidence",

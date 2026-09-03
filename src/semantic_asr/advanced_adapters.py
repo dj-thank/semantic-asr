@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import os
 import zlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
@@ -200,6 +200,54 @@ def _best_stage_row(rows: Sequence[CandidateEvidence]) -> CandidateEvidence | No
     )
 
 
+WHISPER_TIMESTAMP_STEP_MS = 20
+
+
+def utterance_spans(
+    token_ids: Sequence[int],
+    *,
+    timestamp_begin: int,
+    decode: Callable[[Sequence[int]], str],
+    step_ms: int = WHISPER_TIMESTAMP_STEP_MS,
+) -> list[dict[str, Any]]:
+    """Recover utterance spans from Whisper timestamp tokens.
+
+    Whisper emits ``<|t0|> text <|t1|>`` groups; a timestamp token whose value is
+    ``timestamp_begin + k`` marks ``k * 20 ms``. Text between two timestamps is one
+    utterance. Text without a closing timestamp is closed at the last timestamp seen
+    (or left open with ``endMs=None``). Times are relative to the decoded window.
+    """
+
+    spans: list[dict[str, Any]] = []
+    start: int | None = None
+    buffer: list[int] = []
+    for token in token_ids:
+        token = int(token)
+        if token >= timestamp_begin:
+            moment = (token - timestamp_begin) * step_ms
+            if buffer:
+                text = decode(buffer).strip()
+                if text:
+                    spans.append(
+                        {
+                            "startMs": start if start is not None else 0,
+                            "endMs": moment,
+                            "text": text,
+                        }
+                    )
+                buffer = []
+            start = moment
+        else:
+            buffer.append(token)
+    if buffer:
+        text = decode(buffer).strip()
+        if text:
+            spans.append(
+                {"startMs": start if start is not None else 0, "endMs": None, "text": text}
+            )
+    return spans
+
+
 class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
     """CTranslate2 Whisper N-best with decoder-path probability aggregation."""
 
@@ -307,6 +355,15 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
             degeneracy = guard.degeneracy(
                 text, token_ids, avg_logprob, duration_seconds=duration_seconds
             )
+            spans = (
+                []
+                if self.without_timestamps
+                else utterance_spans(
+                    token_ids,
+                    timestamp_begin=int(tokenizer.timestamp_begin),
+                    decode=tokenizer.decode,
+                )
+            )
             stage_rows.append(
                 CandidateEvidence(
                     candidate_id=f"fw-{stage_id}-{raw_rank:04d}",
@@ -325,6 +382,8 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
                         "samplingTemperature": temperature,
                         "noSpeechProbability": getattr(result, "no_speech_prob", None),
                         "cumulativeLogprob": cumulative_logprob,
+                        "timestampBegin": int(tokenizer.timestamp_begin),
+                        "utteranceSpans": spans,
                         **degeneracy,
                     },
                 )
