@@ -139,7 +139,7 @@ def test_run_cli_writes_outputs_with_injected_adapter(tmp_path: Path, capsys) ->
     payload = run_transcription(args, adapter=FakeAdapter())
     assert payload["status"] == "ok"
     assert payload["profile"] == "cpu-ja-v1"
-    assert set(payload["outputs"]) == {"json", "observed"}
+    assert set(payload["outputs"]) == {"json", "observed", "transcript_json"}
     assert (tmp_path / "out").exists()
 
 

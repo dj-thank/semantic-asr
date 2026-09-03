@@ -26,7 +26,7 @@ import math
 import os
 import tempfile
 import wave
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -156,6 +156,115 @@ class TranscriptSegment:
 
 
 @dataclass(frozen=True, slots=True)
+class Utterance:
+    """Timestamp-token utterance inside a window, in absolute recording time."""
+
+    index: int
+    segment_index: int
+    start_ms: int
+    end_ms: int
+    text: str
+    status: str
+    confidence: float | None = None
+
+    @property
+    def start_seconds(self) -> float:
+        return self.start_ms / 1000.0
+
+    @property
+    def end_seconds(self) -> float:
+        return self.end_ms / 1000.0
+
+
+def _selected_candidate(observed: Any) -> Any:
+    candidates = getattr(observed, "candidates", None) or ()
+    wanted = getattr(observed, "selected_candidate_id", None)
+    for candidate in candidates:
+        identifier = getattr(candidate, "candidate_id", None)
+        if identifier is None and isinstance(candidate, Mapping):
+            identifier = candidate.get("candidate_id")
+        if identifier == wanted:
+            return candidate
+    return None
+
+
+def _candidate_spans(candidate: Any) -> list[Mapping[str, Any]]:
+    metadata = getattr(candidate, "metadata", None)
+    if metadata is None and isinstance(candidate, Mapping):
+        metadata = candidate.get("metadata")
+    spans = (metadata or {}).get("utteranceSpans") if isinstance(metadata, Mapping) else None
+    return [span for span in (spans or []) if isinstance(span, Mapping) and span.get("text")]
+
+
+def utterances_from_segments(
+    longform: LongformResult,
+    segments: Sequence[TranscriptSegment],
+    *,
+    overlap_tolerance_ms: int = 250,
+) -> tuple[Utterance, ...]:
+    """Flatten window-level utterance spans into absolute-time utterances.
+
+    Windows overlap by ``overlap_ms``; an utterance that starts before the previous kept
+    utterance ended (minus a small tolerance) is a duplicate of overlap audio and is dropped.
+    A window whose selected candidate carries no spans contributes itself as one utterance.
+    """
+
+    output: list[Utterance] = []
+    last_end = -1
+    for segment, raw in zip(segments, longform.segments, strict=True):
+        spans = _candidate_spans(_selected_candidate(raw.observed))
+        window_start = int(raw.window.start_ms)
+        window_end = int(raw.window.end_ms)
+        rows: list[tuple[int, int, str]] = []
+        for span in spans:
+            start = window_start + int(span.get("startMs") or 0)
+            end_value = span.get("endMs")
+            end = window_end if end_value is None else window_start + int(end_value)
+            rows.append((start, min(max(end, start), window_end), str(span["text"]).strip()))
+        if not rows:
+            text = segment.observed.strip()
+            if text:
+                rows.append((window_start, window_end, text))
+        for start, end, text in rows:
+            if not text or start < last_end - overlap_tolerance_ms:
+                continue
+            output.append(
+                Utterance(
+                    index=len(output) + 1,
+                    segment_index=segment.index,
+                    start_ms=start,
+                    end_ms=end,
+                    text=text,
+                    status=segment.status,
+                    confidence=segment.confidence,
+                )
+            )
+            last_end = max(last_end, end)
+    return tuple(output)
+
+
+def render_utterance_srt(utterances: Sequence[Utterance]) -> str:
+    def timecode(milliseconds: int) -> str:
+        milliseconds = max(0, int(milliseconds))
+        hours, remainder = divmod(milliseconds, 3_600_000)
+        minutes, remainder = divmod(remainder, 60_000)
+        seconds, millis = divmod(remainder, 1000)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+    lines: list[str] = []
+    for utterance in utterances:
+        lines.extend(
+            [
+                str(utterance.index),
+                f"{timecode(utterance.start_ms)} --> {timecode(utterance.end_ms)}",
+                utterance.text,
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+@dataclass(frozen=True, slots=True)
 class TranscriptResult:
     profile: RuntimeProfile
     source_name: str
@@ -168,6 +277,7 @@ class TranscriptResult:
     provenance: dict[str, Any]
     diagnostics: dict[str, Any]
     longform: LongformResult
+    utterances: tuple[Utterance, ...] = ()
 
     @property
     def provisional_segment_count(self) -> int:
@@ -183,6 +293,7 @@ class TranscriptResult:
             "observedText": self.observed_text,
             "normalizedText": self.normalized_text,
             "segments": [asdict(segment) for segment in self.segments],
+            "utterances": [asdict(utterance) for utterance in self.utterances],
             "evidenceSha256": self.evidence_sha256,
             "provenance": self.provenance,
             "diagnostics": self.diagnostics,
@@ -195,9 +306,25 @@ class TranscriptResult:
         overwrite: bool = False,
         formats: set[str] | None = None,
     ) -> dict[str, str]:
-        """Write the standard artifact set (json/observed/normalized/md/srt/vtt)."""
+        """Write the standard artifact set plus an utterance-level SRT and facade JSON."""
 
-        return write_outputs(self.longform, output_dir, overwrite=overwrite, formats=formats)
+        outputs = write_outputs(self.longform, output_dir, overwrite=overwrite, formats=formats)
+        root = Path(output_dir)
+        stem = Path(self.source_name).stem
+        if self.utterances and (formats is None or "srt" in formats):
+            target = root / f"{stem}.utterances.srt"
+            if overwrite or not target.exists():
+                target.write_text(render_utterance_srt(self.utterances), encoding="utf-8")
+                outputs["utterances_srt"] = str(target)
+        if formats is None or "json" in formats:
+            target = root / f"{stem}.transcript.json"
+            if overwrite or not target.exists():
+                target.write_text(
+                    json.dumps(self.as_dict(), ensure_ascii=False, indent=2, default=str) + "\n",
+                    encoding="utf-8",
+                )
+                outputs["transcript_json"] = str(target)
+        return outputs
 
 
 def build_adapter(profile: RuntimeProfile) -> ASRAdapter:
@@ -347,6 +474,7 @@ def transcribe(
     }
     if on_progress:
         on_progress("done")
+    utterances = utterances_from_segments(longform, segments)
     return TranscriptResult(
         profile=resolved,
         source_name=longform.source_name,
@@ -359,6 +487,7 @@ def transcribe(
         provenance=provenance,
         diagnostics=dict(longform.diagnostics),
         longform=longform,
+        utterances=utterances,
     )
 
 
@@ -388,8 +517,9 @@ def transcribe_segments(
 ) -> list[tuple[float, float, str]]:
     """Koemo-compatible ``[(start_seconds, end_seconds, text), ...]``.
 
-    The observed transcript is returned by default because it is the auditable channel;
-    pass ``normalized=True`` for the readable derivative.
+    Rows are timestamp-token utterances when the decoder produced them, otherwise one row
+    per window. The observed transcript is returned by default because it is the auditable
+    channel; ``normalized=True`` returns the readable derivative at window granularity.
     """
 
     result = transcribe(
@@ -399,6 +529,11 @@ def transcribe_segments(
         on_progress=on_progress,
         transcriber=transcriber,
     )
+    if not normalized and result.utterances:
+        return [
+            (utterance.start_seconds, utterance.end_seconds, utterance.text)
+            for utterance in result.utterances
+        ]
     return [
         (
             segment.start_seconds,
@@ -412,6 +547,8 @@ def transcribe_segments(
 
 __all__ = [
     "PROFILES",
+    "Utterance",
+    "utterances_from_segments",
     "RuntimeProfile",
     "TranscriptResult",
     "TranscriptSegment",
