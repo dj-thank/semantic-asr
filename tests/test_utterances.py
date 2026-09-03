@@ -81,3 +81,55 @@ def test_transcribe_segments_prefers_utterances(tmp_path: Path) -> None:
     warm = load_transcriber("cpu-ja-v1", adapter=SpanAdapter())
     rows = transcribe_segments(audio, transcriber=warm)
     assert rows == [(0.0, 1.0, "はいそうです"), (1.0, 1.6, "いいえ")]
+
+
+def test_overlap_rows_complete_truncated_utterances() -> None:
+    from semantic_asr.api import TranscriptSegment, Utterance, utterances_from_segments
+
+    class _W:
+        def __init__(self, start, end):
+            self.start_ms, self.end_ms = start, end
+
+    class _Obs:
+        def __init__(self, spans):
+            self.selected_candidate_id = "a"
+            self.candidates = (CandidateEvidence("a", "x", metadata={"utteranceSpans": spans}),)
+
+    class _Seg:
+        def __init__(self, start, end, spans):
+            self.window = _W(start, end)
+            self.observed = _Obs(spans)
+            self.diagnostics = {}
+
+    class _LF:
+        segments = (
+            _Seg(
+                0,
+                28_000,
+                [{"startMs": 23_000, "endMs": 28_000, "text": "コートのすぐ隣にありおよそ"}],
+            ),
+            _Seg(
+                26_800,
+                54_800,
+                [
+                    {
+                        "startMs": 200,
+                        "endMs": 6_000,
+                        "text": "コートのすぐ隣にありおよそ15種類の最新器具がそろっている",
+                    },
+                    {"startMs": 6_000, "endMs": 9_000, "text": "次の発話"},
+                ],
+            ),
+        )
+
+    segments = [
+        TranscriptSegment(1, 0, 28_000, "…", "…", "accepted"),
+        TranscriptSegment(2, 26_800, 54_800, "…", "…", "accepted"),
+    ]
+    rows = utterances_from_segments(_LF(), segments)
+    assert [row.text for row in rows] == [
+        "コートのすぐ隣にありおよそ15種類の最新器具がそろっている",
+        "次の発話",
+    ]
+    assert rows[0].start_ms == 23_000 and rows[0].end_ms == 32_800
+    assert isinstance(rows[0], Utterance)

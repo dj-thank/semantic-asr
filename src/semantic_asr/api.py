@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .adapters import ASRAdapter
+from .candidate_pool import lenient_surface_key
 from .longform import LongformResult, SemanticASRTranscriber
 from .outputs import write_outputs
 from .pipeline import EffortName, effort_profile
@@ -226,8 +227,20 @@ def utterances_from_segments(
             if text:
                 rows.append((window_start, window_end, text))
         for start, end, text in rows:
-            if not text or start < last_end - overlap_tolerance_ms:
+            if not text:
                 continue
+            if start < last_end - overlap_tolerance_ms and output:
+                previous = output[-1]
+                previous_key = lenient_surface_key(previous.text)
+                current_key = lenient_surface_key(text)
+                if current_key and current_key in previous_key:
+                    continue  # duplicate of overlap audio already emitted
+                if previous_key and current_key.startswith(previous_key):
+                    # The previous window was cut mid-utterance; this row completes it.
+                    output.pop()
+                    start = min(start, previous.start_ms)
+                else:
+                    start = max(start, last_end)
             output.append(
                 Utterance(
                     index=len(output) + 1,
