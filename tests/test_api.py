@@ -149,3 +149,24 @@ def test_root_cli_routes_run_command() -> None:
     with pytest.raises(SystemExit) as info:
         main(["run", "--help"])
     assert info.value.code == 0
+
+
+def test_calibrated_confidence_is_monotone_and_optional() -> None:
+    from semantic_asr.api import calibrated_confidence
+
+    profile = runtime_profile("cpu-ja-v1")
+    low = calibrated_confidence(profile, 0.2)
+    high = calibrated_confidence(profile, 0.95)
+    assert low is not None and high is not None and 0.0 < low < high < 1.0
+    assert calibrated_confidence(profile, None) is None
+    assert calibrated_confidence(profile, float("nan")) is None
+    disabled = RuntimeProfile(name="x", description="", confidence_calibration=None)
+    assert calibrated_confidence(disabled, 0.9) is None
+
+
+def test_segments_carry_confidence(tmp_path: Path) -> None:
+    audio = tmp_path / "clip.wav"
+    _write_wav(audio, 2.0)
+    result = transcribe(audio, adapter=FakeAdapter())
+    assert result.segments[0].confidence is not None
+    assert 0.0 <= result.segments[0].confidence <= 1.0

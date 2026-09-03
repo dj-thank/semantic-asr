@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
 import os
 import tempfile
 import wave
@@ -62,6 +63,14 @@ class RuntimeProfile:
     loop_guard: bool = True
     language: str = "ja"
     model_revision: str | None = None
+    # Platt mapping (a, b) from logit(top posterior) to P(lenient CER == 0) fitted on the
+    # ReazonSpeech calibration split (n=119, 1-30 s clips, lenient surface pooling, default
+    # fusion). Test split: ECE 0.180 -> 0.029, AUROC 0.80. None disables confidence.
+    confidence_calibration: tuple[float, float] | None = (0.1211, -0.6687)
+    confidence_note: str = (
+        "calibrated on 1-30 s clips of ReazonSpeech (2026-09-03); long-form windows are "
+        "28 s spans, so treat the value as a relative ranking signal, not a guarantee"
+    )
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -134,6 +143,7 @@ class TranscriptSegment:
     observed: str
     normalized: str
     status: str
+    confidence: float | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -202,6 +212,23 @@ def build_adapter(profile: RuntimeProfile) -> ASRAdapter:
         patience=profile.patience,
         loop_guard=LoopGuardConfig(enabled=profile.loop_guard),
     )
+
+
+def calibrated_confidence(profile: RuntimeProfile, top_posterior: Any) -> float | None:
+    """Map the fusion top posterior to a calibrated correctness probability."""
+
+    if profile.confidence_calibration is None:
+        return None
+    try:
+        posterior = float(top_posterior)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(posterior):
+        return None
+    posterior = min(max(posterior, 1e-6), 1.0 - 1e-6)
+    slope, intercept = profile.confidence_calibration
+    logit = math.log(posterior / (1.0 - posterior))
+    return 1.0 / (1.0 + math.exp(-(slope * logit + intercept)))
 
 
 def _segment_status(segment: Any) -> str:
@@ -298,6 +325,9 @@ def transcribe(
             observed=segment.observed.text,
             normalized=segment.normalized.text,
             status=_segment_status(segment),
+            confidence=calibrated_confidence(
+                resolved, dict(segment.diagnostics).get("topPosterior")
+            ),
             diagnostics=dict(segment.diagnostics),
         )
         for index, segment in enumerate(longform.segments, 1)
