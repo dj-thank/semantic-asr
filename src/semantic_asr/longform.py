@@ -5,7 +5,7 @@ import json
 import os
 import subprocess
 import wave
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -18,7 +18,12 @@ from .adapters import (
     score_domain_digest,
 )
 from .cache import CacheKey, EvidenceCache, TeacherCacheEntry
-from .candidate_pool import merge_candidate_pools
+from .candidate_pool import (
+    SurfacePolicy,
+    aggregate_surface_candidates,
+    lenient_surface_key,
+    merge_candidate_pools,
+)
 from .contracts import CandidateEvidence, NormalizedTranscript, ObservedTranscript, sha256_json
 from .evidence_router import (
     QuantileBalancedRouterConfig,
@@ -377,6 +382,65 @@ def merge_candidates(
     return merge_candidate_pools(primary, additional, id_prefix="merged")
 
 
+def _longest_common_substring(left: str, right: str) -> int:
+    if not left or not right:
+        return 0
+    previous = [0] * (len(right) + 1)
+    best = 0
+    for character in left:
+        current = [0] * (len(right) + 1)
+        for index, other in enumerate(right, 1):
+            if character == other:
+                current[index] = previous[index - 1] + 1
+                best = max(best, current[index])
+        previous = current
+    return best
+
+
+def span_agreement(candidate_text: str, span_text: str) -> float:
+    """How much of a sub-span decode is contained in a full-window candidate, in [0, 1]."""
+
+    candidate = lenient_surface_key(candidate_text)
+    span = lenient_surface_key(span_text)
+    if len(span) < 2 or not candidate:
+        return 0.0
+    if span in candidate:
+        return 1.0
+    return _longest_common_substring(candidate, span) / len(span)
+
+
+def apply_span_evidence(
+    candidates: Sequence[CandidateEvidence],
+    span_rows: Sequence[CandidateEvidence],
+) -> list[CandidateEvidence]:
+    """Turn sub-span re-listening decodes into evidence instead of competing transcripts.
+
+    A re-listen of a 300 ms contradiction island returns a few characters. Merging such rows
+    into the window pool let them win the whole window on average log-probability (measured
+    2026-09-03: a 28 s window collapsed to 「お届けする」). Sub-span rows therefore never enter
+    the observed-eligible pool; they raise ``cross_model`` for window candidates that contain
+    their text and are recorded in metadata for audit.
+    """
+
+    if not span_rows:
+        return list(candidates)
+    span_texts = [row.text for row in span_rows if row.text.strip()]
+    output: list[CandidateEvidence] = []
+    for candidate in candidates:
+        agreement = max((span_agreement(candidate.text, text) for text in span_texts), default=0.0)
+        metadata = dict(candidate.metadata)
+        metadata["spanEvidence"] = {
+            "rows": len(span_rows),
+            "agreement": agreement,
+            "namespaces": sorted({str(row.metadata.get("decodeNamespace")) for row in span_rows}),
+        }
+        cross_model = candidate.cross_model
+        if agreement > 0.0:
+            cross_model = agreement if cross_model is None else max(float(cross_model), agreement)
+        output.append(replace(candidate, cross_model=cross_model, metadata=metadata))
+    return output
+
+
 def _lattice_context(lattice: SemanticLattice) -> tuple[str, str]:
     locked = " / ".join("".join(span.units) for span in lattice.locked_consensus)
     contradiction = " | ".join(
@@ -406,6 +470,7 @@ class SemanticASRTranscriber:
         evidence_enricher: Callable[[CandidateEvidence], CandidateEvidence] | None = None,
         window_ms: int = 28_000,
         overlap_ms: int = 1_200,
+        surface_policy: SurfacePolicy = "lenient",
     ) -> None:
         self.base_adapter = base_adapter
         self.second_ear = second_ear
@@ -421,6 +486,9 @@ class SemanticASRTranscriber:
         self.evidence_enricher = evidence_enricher
         self.window_ms = window_ms
         self.overlap_ms = overlap_ms
+        if surface_policy not in {"exact", "lenient"}:
+            raise ValueError("surface_policy must be exact or lenient")
+        self.surface_policy: SurfacePolicy = surface_policy
 
     def _cache_key(
         self,
@@ -594,6 +662,10 @@ class SemanticASRTranscriber:
         )
         if hit:
             cache_hits.append("base-window")
+        if self.surface_policy != "exact":
+            candidates = aggregate_surface_candidates(
+                candidates, id_prefix="window", policy=self.surface_policy
+            )
         ranked = fuse_candidates(candidates, self.fusion_config)
         lattice = build_semantic_lattice(
             candidates,
@@ -646,10 +718,13 @@ class SemanticASRTranscriber:
             }
 
         additional: list[CandidateEvidence] = []
+        span_rows: list[CandidateEvidence] = []
         alignment_rows: list[dict[str, Any]] = []
         for action_index, action in enumerate(plan.selected):
             if action.start_ms is None or action.end_ms is None:
                 continue
+            covers_window = action.start_ms <= window.start_ms and action.end_ms >= window.end_ms
+            sink = additional if covers_window else span_rows
             if action.kind == "whisper-relisten":
                 request = DecodeRequest(
                     audio_path=str(source),
@@ -669,7 +744,7 @@ class SemanticASRTranscriber:
                     context=context,
                     calibration_digest=ranked[0].gate.calibration_digest,
                 )
-                additional.extend(rows)
+                sink.extend(rows)
                 if action_hit:
                     cache_hits.append("whisper-relisten")
             elif action.kind == "qwen-second-ear" and self.second_ear is not None:
@@ -692,7 +767,7 @@ class SemanticASRTranscriber:
                     context=context,
                     calibration_digest=ranked[0].gate.calibration_digest,
                 )
-                additional.extend(rows)
+                sink.extend(rows)
                 if action_hit:
                     cache_hits.append("qwen-second-ear")
             elif action.kind == "forced-align" and self.forced_aligner is not None:
@@ -710,8 +785,11 @@ class SemanticASRTranscriber:
                     for row in aligned
                 )
 
+        if span_rows:
+            candidates = apply_span_evidence(candidates, span_rows)
         if additional:
             candidates = merge_candidates(candidates, additional)
+        if additional or span_rows:
             ranked = fuse_candidates(candidates, self.fusion_config)
             lattice = build_semantic_lattice(
                 candidates,

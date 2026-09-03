@@ -240,14 +240,16 @@ def _materialise_audio(audio: Any, *, sample_rate: int = 16_000) -> tuple[Path, 
         raise ValueError("audio array is empty")
     clipped = np.clip(array, -1.0, 1.0)
     pcm = (clipped * 32767.0).astype("<i2")
-    handle = tempfile.NamedTemporaryFile(prefix="semantic-asr-", suffix=".wav", delete=False)
-    handle.close()
-    with wave.open(handle.name, "wb") as writer:
+    with tempfile.NamedTemporaryFile(
+        prefix="semantic-asr-", suffix=".wav", delete=False
+    ) as handle:
+        name = handle.name
+    with wave.open(name, "wb") as writer:
         writer.setnchannels(1)
         writer.setsampwidth(2)
         writer.setframerate(sample_rate)
         writer.writeframes(pcm.tobytes())
-    path = Path(handle.name)
+    path = Path(name)
     return path, path
 
 

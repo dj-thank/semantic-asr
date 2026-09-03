@@ -353,6 +353,26 @@ def surface_key(text: str) -> str:
     return unicodedata.normalize("NFC", str(text)).strip()
 
 
+def lenient_surface_key(text: str) -> str:
+    """Punctuation-, symbol- and whitespace-insensitive surface class.
+
+    Whisper beams frequently differ only in 、。！ placement. Treating those as separate
+    candidates flattens the posterior and makes every window look uncertain (measured
+    2026-09-03: 11/11 long-form windows provisional). The observed text keeps the strongest
+    path's punctuation; only the *class* used for mass pooling and gating ignores it.
+    """
+
+    value = unicodedata.normalize("NFKC", str(text))
+    return "".join(
+        character
+        for character in value
+        if not character.isspace() and not unicodedata.category(character).startswith(("P", "S"))
+    )
+
+
+SurfacePolicy = Literal["exact", "lenient"]
+
+
 def _optional_finite(value: object) -> float | None:
     try:
         numeric = float(value)
@@ -458,20 +478,27 @@ def aggregate_surface_candidates(
     candidates: Iterable[CandidateEvidence],
     *,
     id_prefix: str = "surface",
+    policy: SurfacePolicy = "exact",
 ) -> list[CandidateEvidence]:
     """Collapse equivalent surface strings without discarding decoder path mass.
 
     Path likelihoods are summed only inside an identical score domain. Scores
     from different models, spans, prompts, or decode namespaces are never added
-    as if they came from one normalized distribution.
+    as if they came from one normalized distribution. With ``policy="lenient"``
+    punctuation/symbol/whitespace variants form one class; the representative
+    (strongest) path supplies the observed text.
     """
 
     rows = list(candidates)
     if not rows:
         return []
+    if policy not in {"exact", "lenient"}:
+        raise ValueError(f"unsupported surface policy: {policy}")
+    key_function = surface_key if policy == "exact" else lenient_surface_key
     grouped: dict[str, list[CandidateEvidence]] = defaultdict(list)
     for candidate in rows:
-        grouped[surface_key(candidate.text)].append(candidate)
+        key = key_function(candidate.text) or surface_key(candidate.text)
+        grouped[key].append(candidate)
 
     output: list[CandidateEvidence] = []
     for output_index, key in enumerate(sorted(grouped), 1):
@@ -495,6 +522,9 @@ def aggregate_surface_candidates(
                 for candidate_id in row.metadata.get("pathCandidateIds", [row.candidate_id])
             }
         )
+        metadata["surfacePolicy"] = policy
+        if policy == "lenient":
+            metadata["surfaceVariants"] = sorted({surface_key(row.text) for row in surface_rows})
         cross_model = representative.cross_model
         if len(sources) >= 2:
             consensus = min(1.0, 0.62 + 0.12 * (len(sources) - 2))
@@ -503,7 +533,7 @@ def aggregate_surface_candidates(
             replace(
                 representative,
                 candidate_id=f"{id_prefix}:{output_index:04d}",
-                text=key,
+                text=key if policy == "exact" else surface_key(representative.text),
                 cross_model=cross_model,
                 metadata=metadata,
             )
