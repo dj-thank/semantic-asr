@@ -19,6 +19,7 @@ faster-whisper call for the evidence-preserving core without changing its caller
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -287,10 +288,8 @@ def transcribe(
         )
     finally:
         if temporary is not None:
-            try:
+            with contextlib.suppress(OSError):
                 temporary.unlink()
-            except OSError:
-                pass
     segments = tuple(
         TranscriptSegment(
             index=index,
