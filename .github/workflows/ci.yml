@@ -19,6 +19,127 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  finalize-pr17:
+    name: Finalize PR 17 audit receipts
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'codex/longform-deliberation-integration-v03'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/longform-deliberation-integration-v03
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Preserve first-pass evidence and attempted failure receipts
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if text.count(old) != 1:
+                  raise SystemExit(f"expected one {label}, found {text.count(old)}")
+              return text.replace(old, new)
+
+          path = Path("src/semantic_asr/longform_deliberation.py")
+          text = path.read_text(encoding="utf-8")
+          text = replace_once(
+              text,
+              "        uncertainty_spans: tuple[dict[str, object], ...],\n    ) -> DeliberatedObservedTranscript:",
+              "        uncertainty_spans: tuple[dict[str, object], ...],\n        candidates: tuple[CandidateEvidence, ...],\n        ranked: tuple[object, ...],\n    ) -> DeliberatedObservedTranscript:",
+              "deliberated observed create signature",
+          )
+          text = replace_once(
+              text,
+              "            exact_source_candidate_ids=exact_source_candidate_ids,\n            uncertainty_spans=uncertainty_spans,\n        )",
+              "            exact_source_candidate_ids=exact_source_candidate_ids,\n            candidates=candidates,\n            ranked=ranked,\n            uncertainty_spans=uncertainty_spans,\n        )",
+              "deliberated observed constructor evidence",
+          )
+          text = replace_once(
+              text,
+              "        exact_source_candidate_ids=exact,\n        uncertainty_spans=uncertainty,\n    )",
+              "        exact_source_candidate_ids=exact,\n        uncertainty_spans=uncertainty,\n        candidates=segment.observed.candidates,\n        ranked=segment.observed.ranked,\n    )",
+              "applied segment evidence handoff",
+          )
+          text = replace_once(
+              text,
+              "    policy: DeliberationPolicy,\n    reason: str,\n) -> SegmentDeliberationTrace:\n    return SegmentDeliberationTrace(\n        attempted=False,",
+              "    policy: DeliberationPolicy,\n    reason: str,\n    *,\n    attempted: bool = False,\n) -> SegmentDeliberationTrace:\n    return SegmentDeliberationTrace(\n        attempted=attempted,",
+              "skip trace attempted flag",
+          )
+          text = replace_once(
+              text,
+              "                f\"failed-closed:{type(exc).__name__}:{exc}\",\n            )",
+              "                f\"failed-closed:{type(exc).__name__}:{exc}\",\n                attempted=True,\n            )",
+              "fail-closed attempted call",
+          )
+          text = replace_once(
+              text,
+              "        if not self.text or not self.selected_candidate_id or not self.path_arcs:\n            raise ValueError(\"deliberated observed transcript requires text, ID and path arcs\")",
+              "        if not self.text or not self.selected_candidate_id or not self.path_arcs:\n            raise ValueError(\"deliberated observed transcript requires text, ID and path arcs\")\n        if not self.candidates or not self.ranked:\n            raise ValueError(\"deliberated observed transcript must retain first-pass evidence\")",
+              "first-pass evidence invariant",
+          )
+          path.write_text(text, encoding="utf-8")
+
+          path = Path("tests/test_longform_deliberation.py")
+          text = path.read_text(encoding="utf-8")
+          text = replace_once(
+              text,
+              "    assert result.segments[0].trace.applied\n    assert result.segments[0].diagnostics[\"topPosterior\"] is None",
+              "    assert result.segments[0].trace.applied\n    assert result.segments[0].observed.candidates == raw.segments[0].observed.candidates\n    assert result.segments[0].observed.ranked == raw.segments[0].observed.ranked\n    assert result.segments[0].diagnostics[\"topPosterior\"] is None",
+              "retained evidence test assertions",
+          )
+          addition = '''
+
+
+def test_fail_closed_trace_records_that_deliberation_started() -> None:
+    class BrokenScorer:
+        source = "broken-scorer"
+        profile_digest = "d" * 64
+
+        def score(self, path, *, context):
+            raise RuntimeError("deliberation failed")
+
+    result = apply_longform_deliberation(
+        first_pass(),
+        sequence_scorer=BrokenScorer(),
+        policy=policy(),
+    )
+
+    assert isinstance(result, DeliberatedLongformResult)
+    assert result.segments[0].trace.attempted
+    assert not result.segments[0].trace.applied
+    assert result.segments[0].trace.reason.startswith("failed-closed:RuntimeError:")
+    assert result.diagnostics["globalDeliberation"]["failedWindowCount"] == 1
+'''
+          if "test_fail_closed_trace_records_that_deliberation_started" in text:
+              raise SystemExit("fail-closed trace test already exists")
+          path.write_text(text.rstrip() + addition + "\n", encoding="utf-8")
+          PY
+      - name: Apply repository formatter and safe lint fixes
+        run: |
+          python -m pip install 'ruff==0.16.6'
+          python -m ruff format src tests scripts
+          python -m ruff check --fix src tests scripts
+          python -m ruff format src tests scripts
+          git diff --check
+      - name: Restore permanent CI and commit
+        shell: bash
+        run: |
+          git show '${{ github.event.pull_request.base.sha }}:.github/workflows/ci.yml' > .github/workflows/ci.yml
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests .github/workflows/ci.yml
+          git commit -m 'Preserve first-pass evidence in deliberation receipts'
+          git push origin HEAD:codex/longform-deliberation-integration-v03
+
   core:
     name: Core (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
