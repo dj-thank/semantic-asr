@@ -55,13 +55,22 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
+
           report = json.loads(Path('/tmp/ja-real-pilot-report.json').read_text())
           assert report['schema'] == 'semantic-asr-ja-real-tuning-v1'
           assert report['dataset']['rawDataPersisted'] is False
           assert report['featureContract']['referenceBlindExtraction'] is True
-          encoded = json.dumps(report, ensure_ascii=False)
-          assert 'reference' not in encoded.lower()
-          assert 'hypothesis' not in encoded.lower()
+
+          forbidden_keys = {'reference', 'transcript', 'hypothesis', 'text', 'audioPath', 'audioBytes'}
+          def visit(value):
+              if isinstance(value, dict):
+                  assert forbidden_keys.isdisjoint(value), forbidden_keys.intersection(value)
+                  for child in value.values():
+                      visit(child)
+              elif isinstance(value, list):
+                  for child in value:
+                      visit(child)
+          visit(report)
           print(json.dumps(report['metrics'], ensure_ascii=False, sort_keys=True))
           PY
       - uses: actions/upload-artifact@v4
