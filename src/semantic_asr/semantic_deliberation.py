@@ -96,7 +96,9 @@ def _candidate_relative_distributions(
 ) -> dict[UtilityChannel, tuple[str, dict[str, float]]]:
     output: dict[UtilityChannel, tuple[str, dict[str, float]]] = {}
     for field_name in ("acoustic", "avg_logprob", "sequence_score"):
-        values = {candidate.candidate_id: getattr(candidate, field_name) for candidate in candidates}
+        values = {
+            candidate.candidate_id: getattr(candidate, field_name) for candidate in candidates
+        }
         if all(value is not None for value in values.values()):
             output["asr_acoustic"] = (
                 field_name,
@@ -112,7 +114,9 @@ def _candidate_relative_distributions(
         ("preservation", "preservation"),
         ("cross_model", "cross_model"),
     ):
-        values = {candidate.candidate_id: getattr(candidate, field_name) for candidate in candidates}
+        values = {
+            candidate.candidate_id: getattr(candidate, field_name) for candidate in candidates
+        }
         if all(value is not None for value in values.values()):
             output[channel] = (
                 field_name,
@@ -399,11 +403,7 @@ class _SpanPlan:
     @property
     def factor_signal(self) -> float:
         width = max(1, self.unit_end - self.unit_start)
-        return (
-            width
-            * max(0.05, self.posterior_ambiguity)
-            * max(0.25, self.semantic_criticality)
-        )
+        return width * max(0.05, self.posterior_ambiguity) * max(0.25, self.semantic_criticality)
 
 
 def _alignments(
@@ -425,9 +425,7 @@ def _alignments(
         )
     ordered = sorted(boundaries)
     intervals = tuple(
-        (left, right)
-        for left, right in zip(ordered, ordered[1:], strict=False)
-        if left < right
+        (left, right) for left, right in zip(ordered, ordered[1:], strict=False) if left < right
     )
     if not intervals:
         raise ValueError("pivot candidate produced no deliberation intervals")
@@ -624,8 +622,7 @@ def _base_arc_groups(
                             "surface": text,
                             "support": support,
                             "candidateMass": tuple(
-                                (candidate_id, values[candidate_id])
-                                for candidate_id in support
+                                (candidate_id, values[candidate_id]) for candidate_id in support
                             ),
                         },
                         factor_weight=factor_weight,
@@ -837,11 +834,7 @@ def _span_plans(
             )
         )
         local_masses = [
-            sum(
-                posterior[candidate_id]
-                for candidate_id, text in texts
-                if text == alternative
-            )
+            sum(posterior[candidate_id] for candidate_id, text in texts if text == alternative)
             for alternative in alternatives
         ]
         output.append(

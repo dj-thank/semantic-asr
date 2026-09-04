@@ -75,9 +75,7 @@ class LatticeArc:
     @property
     def independent_audio_channels(self) -> frozenset[str]:
         return frozenset(
-            utility.channel
-            for utility in self.utilities
-            if utility.factor_weight > 0.0
+            utility.channel for utility in self.utilities if utility.factor_weight > 0.0
         ).intersection(INDEPENDENT_AUDIO_CHANNELS)
 
     @property

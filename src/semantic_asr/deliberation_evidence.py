@@ -39,13 +39,9 @@ DecisionStatus = Literal["accepted", "provisional"]
 
 # ``mora`` is reserved for an audio-to-mora posterior head. Existing candidate-derived mora
 # features are represented by ``mora_shadow`` and therefore cannot authenticate generated text.
-AUDIO_CHANNELS = frozenset(
-    {"asr_acoustic", "phone", "mora", "discrete_unit", "cross_model"}
-)
+AUDIO_CHANNELS = frozenset({"asr_acoustic", "phone", "mora", "discrete_unit", "cross_model"})
 INDEPENDENT_AUDIO_CHANNELS = frozenset({"phone", "mora", "discrete_unit"})
-GENERATED_ORIGINS = frozenset(
-    {"phonetic-proposal", "context-proposal", "guarded-generation"}
-)
+GENERATED_ORIGINS = frozenset({"phonetic-proposal", "context-proposal", "guarded-generation"})
 
 
 def _strict_float(value: object, *, name: str) -> float:

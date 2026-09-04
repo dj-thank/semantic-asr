@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -321,7 +321,10 @@ class DeliberatedLongformSegment:
             "observed": asdict(self.observed),
             "normalized": asdict(self.normalized),
             "diagnostics": dict(self.diagnostics),
-            "actions": [asdict(action) if hasattr(action, "__dataclass_fields__") else action for action in self.actions],
+            "actions": [
+                asdict(action) if hasattr(action, "__dataclass_fields__") else action
+                for action in self.actions
+            ],
             "cache_hits": list(self.cache_hits),
             "firstPassEvidenceSha256": self.first_pass_evidence_sha256,
             "deliberation": asdict(self.trace),
@@ -608,7 +611,7 @@ def _applied_segment(
     )
     normalized = NormalizedTranscript.attach(
         observed,
-        deterministic_normalize(observed.text),
+        text=deterministic_normalize(observed.text),
         mode="deterministic",
     )
     diagnostics = {

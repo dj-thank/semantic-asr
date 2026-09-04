@@ -193,6 +193,7 @@ def test_phone_verified_generated_arc_can_enter_but_remains_provisional() -> Non
         utilities=(utility("phone", 0.55),),
         observed_eligible=True,
         pronunciation_key="mada",
+        source_audio_sha256=AUDIO,
     )
     lattice = DeliberationLattice(
         document_id="doc",

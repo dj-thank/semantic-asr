@@ -162,9 +162,7 @@ class PathHypothesis:
             raise ValueError("context_score must be in [-1, 1]")
         if (self.context_source is None) != (self.context_profile_digest is None):
             raise ValueError("context source and profile digest must be supplied together")
-        if self.context_profile_digest is not None and not _is_sha256(
-            self.context_profile_digest
-        ):
+        if self.context_profile_digest is not None and not _is_sha256(self.context_profile_digest):
             raise ValueError("context_profile_digest must be a SHA-256 value")
 
     @property
@@ -207,9 +205,7 @@ class GlobalDeliberationDecision:
             raise ValueError("decision margin must be non-negative")
         if (self.scorer_source is None) != (self.scorer_profile_digest is None):
             raise ValueError("decision scorer source and profile must be supplied together")
-        if self.scorer_profile_digest is not None and not _is_sha256(
-            self.scorer_profile_digest
-        ):
+        if self.scorer_profile_digest is not None and not _is_sha256(self.scorer_profile_digest):
             raise ValueError("scorer_profile_digest must be a SHA-256 value")
         object.__setattr__(self, "margin", margin)
 
@@ -240,8 +236,7 @@ class GlobalDeliberationDecision:
 
 def _weighted_arc_score(arc: LatticeArc, weights: Mapping[UtilityChannel, float]) -> float:
     return sum(
-        weights.get(utility.channel, 0.0) * utility.weighted_value
-        for utility in arc.utilities
+        weights.get(utility.channel, 0.0) * utility.weighted_value for utility in arc.utilities
     )
 
 
@@ -276,8 +271,7 @@ def _mean_audio_support(
     rows = [
         (_arc_factor_weight(arc), value)
         for arc in path
-        if (value := _audio_support(arc, weights)) is not None
-        and _arc_factor_weight(arc) > 0
+        if (value := _audio_support(arc, weights)) is not None and _arc_factor_weight(arc) > 0
     ]
     if not rows:
         return -1.0

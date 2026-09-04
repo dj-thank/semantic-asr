@@ -19,64 +19,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  format-pr17:
-    name: One-shot PR 17 source formatter
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'codex/longform-deliberation-integration-v03'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: codex/longform-deliberation-integration-v03
-          fetch-depth: 0
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - name: Apply known integration fixes
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("src/semantic_asr/longform_deliberation.py")
-          text = path.read_text(encoding="utf-8")
-          old = "        deterministic_normalize(observed.text),"
-          new = "        text=deterministic_normalize(observed.text),"
-          if text.count(old) != 1:
-              raise SystemExit("expected one NormalizedTranscript.attach call to patch")
-          path.write_text(text.replace(old, new), encoding="utf-8")
-
-          path = Path("tests/test_multilevel_lattice.py")
-          text = path.read_text(encoding="utf-8")
-          old = '        pronunciation_key="mada",\n    )'
-          new = '        pronunciation_key="mada",\n        source_audio_sha256=AUDIO,\n    )'
-          if text.count(old) != 1:
-              raise SystemExit("expected one generated lattice arc to patch")
-          path.write_text(text.replace(old, new), encoding="utf-8")
-          PY
-      - name: Apply repository formatter and safe lint fixes
-        run: |
-          python -m pip install 'ruff==0.16.6'
-          python -m ruff format src tests scripts
-          python -m ruff check --fix src tests scripts
-          python -m ruff format src tests scripts
-          git diff --check
-      - name: Restore permanent workflows and commit
-        shell: bash
-        run: |
-          git show '${{ github.event.pull_request.base.sha }}:.github/workflows/ci.yml' > .github/workflows/ci.yml
-          rm -f .github/workflows/format-pr17.yml
-          if git diff --quiet; then
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src tests scripts .github/workflows/ci.yml .github/workflows/format-pr17.yml
-          git commit -m 'Apply Ruff formatting and integration fixes'
-          git push origin HEAD:codex/longform-deliberation-integration-v03
-
   core:
     name: Core (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}

@@ -74,9 +74,7 @@ def test_exact_projection_reconstructs_every_whole_candidate() -> None:
     assert len(result.lattice.source_paths) == 4
     assert math.isclose(sum(row.posterior for row in result.lattice.source_paths), 1.0)
     assert all(
-        arc.source_audio_sha256 == AUDIO
-        for span in result.lattice.spans
-        for arc in span.arcs
+        arc.source_audio_sha256 == AUDIO for span in result.lattice.spans for arc in span.arcs
     )
 
 
@@ -106,10 +104,7 @@ def test_projected_factor_budget_is_finite_and_mora_is_not_independent() -> None
         abs_tol=1e-12,
     )
     channels = {
-        utility.channel
-        for span in active_spans
-        for arc in span.arcs
-        for utility in arc.utilities
+        utility.channel for span in active_spans for arc in span.arcs for utility in arc.utilities
     }
     assert "mora_shadow" in channels
     assert "mora" not in channels
@@ -123,9 +118,7 @@ def test_projected_factor_budget_is_finite_and_mora_is_not_independent() -> None
             for utility in arc.utilities
             if utility.channel == channel
         }
-        assert factors.issubset(
-            {float(span.metadata["factorWeight"]) for span in active_spans}
-        )
+        assert factors.issubset({float(span.metadata["factorWeight"]) for span in active_spans})
 
 
 def test_candidate_derived_mora_cannot_authenticate_a_generated_proposal() -> None:
@@ -140,9 +133,7 @@ def test_candidate_derived_mora_cannot_authenticate_a_generated_proposal() -> No
 
 def test_verified_proposal_is_audio_bound_and_rebased_to_span_factor() -> None:
     initial = build()
-    target = next(
-        span for span in initial.lattice.spans if bool(span.metadata["isContradiction"])
-    )
+    target = next(span for span in initial.lattice.spans if bool(span.metadata["isContradiction"]))
     proposal = VerifiedSpanProposal(
         proposal_id="phonetic-nao",
         text="なお",
@@ -162,9 +153,7 @@ def test_verified_proposal_is_audio_bound_and_rebased_to_span_factor() -> None:
 
 def test_wrong_audio_proposal_fails_closed() -> None:
     initial = build()
-    target = next(
-        span for span in initial.lattice.spans if bool(span.metadata["isContradiction"])
-    )
+    target = next(span for span in initial.lattice.spans if bool(span.metadata["isContradiction"]))
     proposal = VerifiedSpanProposal(
         proposal_id="wrong-audio",
         text="なお",
@@ -178,8 +167,6 @@ def test_wrong_audio_proposal_fails_closed() -> None:
 
 def test_transition_factors_have_one_total_boundary_budget() -> None:
     result = build()
-    factors = {
-        row.utility.factor_weight for row in result.lattice.transitions
-    }
+    factors = {row.utility.factor_weight for row in result.lattice.transitions}
 
     assert factors == {1.0 / (len(result.lattice.spans) - 1)}

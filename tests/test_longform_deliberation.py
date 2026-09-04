@@ -131,8 +131,7 @@ def scorer() -> CallableGlobalSequenceScorer:
     return CallableGlobalSequenceScorer(
         lambda path, context: (
             1.0
-            if "まだ" in "".join(arc.text for arc in path)
-            and "承認後" in context.right_context
+            if "まだ" in "".join(arc.text for arc in path) and "承認後" in context.right_context
             else -1.0
         ),
         source="test-bidirectional-document-scorer",

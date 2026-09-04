@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .contracts import canonical_json, sha256_json
@@ -49,8 +49,10 @@ def _scorer_identity(
         ),
         None,
     )
-    if immutable is None and model_revision is None and not bool(
-        getattr(scorer, "allow_legacy_deliberation_identity", False)
+    if (
+        immutable is None
+        and model_revision is None
+        and not bool(getattr(scorer, "allow_legacy_deliberation_identity", False))
     ):
         raise ValueError(
             "global sequence scorer identity is not immutable; provide an exact model revision, "
