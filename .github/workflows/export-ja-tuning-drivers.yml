@@ -1,0 +1,43 @@
+name: Export Japanese tuning drivers
+
+on:
+  push:
+    branches:
+      - codex/japanese-audio-tuning-20260904
+    paths:
+      - .github/workflows/export-ja-tuning-drivers.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct exact drivers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ja-drivers
+          cat .ja-tuning/v3/part-*.b64 > /tmp/v3.py.gz.b64
+          base64 --decode /tmp/v3.py.gz.b64 > /tmp/v3.py.gz
+          gzip -dc /tmp/v3.py.gz > /tmp/ja-drivers/tune_japanese_audio_real_v3.py
+          cat \
+            .ja-tuning/v4/part-00.b64 \
+            .ja-tuning/v4/part-00a.b64 \
+            .ja-tuning/v4/part-00b.b64 \
+            .ja-tuning/v4/part-01.b64 \
+            .ja-tuning/v4/part-02.b64 \
+            > /tmp/v4.py.gz.b64
+          base64 --decode /tmp/v4.py.gz.b64 > /tmp/v4.py.gz
+          gzip -dc /tmp/v4.py.gz > /tmp/ja-drivers/tune_japanese_audio_real_v4.py
+          python -m py_compile /tmp/ja-drivers/*.py
+          sha256sum /tmp/ja-drivers/*.py > /tmp/ja-drivers/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semantic-asr-ja-tuning-drivers
+          path: /tmp/ja-drivers
+          if-no-files-found: error
+          retention-days: 1
