@@ -77,8 +77,8 @@ from .phonetic_bridge import (
     propose_text_from_pronunciation,
 )
 from .phonetic_evidence import (
-    CTCPronunciationScore,
     CandidatePronunciation,
+    CTCPronunciationScore,
     PhoneticCandidateEvidence,
     PosteriorFrame,
     PosteriorSequence,

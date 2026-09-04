@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from .contracts import sha256_json
 from .deliberation_evidence import (
     AUDIO_CHANNELS,
+    GENERATED_ORIGINS,
     BoundedUtility,
     DecisionStatus,
-    GENERATED_ORIGINS,
     ResolutionMode,
     UtilityChannel,
     _strict_float,

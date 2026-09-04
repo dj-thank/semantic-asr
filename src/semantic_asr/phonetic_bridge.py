@@ -1,7 +1,7 @@
 """Bridge independent phone/mora posteriors into acoustically verified text arcs.
 
 A frozen pronunciation lexicon is the dependency-free baseline for phoneme-to-grapheme proposal.
-Neural P2G adapters can implement the same output contract later.  The bridge never promotes raw
+Neural P2G adapters can implement the same output contract later. The bridge never promotes raw
 CTC likelihoods directly: each score must pass a held-out utility calibration profile first.
 """
 
@@ -18,8 +18,8 @@ from .multilevel_lattice import (
     UtilityCalibrationProfile,
 )
 from .phonetic_evidence import (
-    CTCPronunciationScore,
     CandidatePronunciation,
+    CTCPronunciationScore,
     PosteriorSequence,
     ctc_pronunciation_score,
 )
@@ -212,7 +212,7 @@ def propose_text_from_pronunciation(
     proposals: list[PhoneticTextProposal] = []
     for entry in lexicon.entries:
         candidate_id = hashlib.sha256(
-            f"{lexicon.digest}:{entry.entry_id}".encode("utf-8")
+            f"{lexicon.digest}:{entry.entry_id}".encode()
         ).hexdigest()[:24]
         phone_score: CTCPronunciationScore | None = None
         mora_score: CTCPronunciationScore | None = None

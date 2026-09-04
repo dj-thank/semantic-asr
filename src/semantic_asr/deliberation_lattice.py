@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 
 from .contracts import sha256_json
 from .deliberation_evidence import (
+    INDEPENDENT_AUDIO_CHANNELS,
     ArcOrigin,
     BoundedUtility,
-    INDEPENDENT_AUDIO_CHANNELS,
     UtilityChannel,
     _is_sha256,
 )

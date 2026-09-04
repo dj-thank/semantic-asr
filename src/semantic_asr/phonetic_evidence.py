@@ -279,12 +279,16 @@ class PhoneticCandidateEvidence:
             raise ValueError("candidate_id is required")
         if self.phone is None and self.mora is None:
             raise ValueError("at least one phone or mora score is required")
-        if self.phone is not None:
-            if self.phone.candidate_id != self.candidate_id or self.phone.kind != "phone":
-                raise ValueError("phone evidence does not match the candidate")
-        if self.mora is not None:
-            if self.mora.candidate_id != self.candidate_id or self.mora.kind != "mora":
-                raise ValueError("mora evidence does not match the candidate")
+        if (
+            self.phone is not None
+            and (self.phone.candidate_id != self.candidate_id or self.phone.kind != "phone")
+        ):
+            raise ValueError("phone evidence does not match the candidate")
+        if (
+            self.mora is not None
+            and (self.mora.candidate_id != self.candidate_id or self.mora.kind != "mora")
+        ):
+            raise ValueError("mora evidence does not match the candidate")
 
     @property
     def scores(self) -> tuple[EvidenceScore, ...]:
