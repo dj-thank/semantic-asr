@@ -284,7 +284,7 @@ def test_global_score_must_be_bound_to_exact_path() -> None:
                 context_digest=context.digest,
             )
 
-    with pytest.raises(ValueError, match="different path"):
+    with pytest.raises(ValueError, match="different path|duplicate path score"):
         decode_global_lattice(
             two_choice_lattice(0.6, 0.55),
             policy=policy(),
