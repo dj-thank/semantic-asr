@@ -1,0 +1,91 @@
+name: Probe Kotoba Whisper on real Japanese audio
+
+on:
+  push:
+    branches:
+      - codex/japanese-audio-tuning-20260904
+    paths:
+      - .github/workflows/ja-kotoba-audio-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Restore Kotoba model cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: semantic-asr-ja-kotoba-f44edd35-${{ runner.os }}
+      - name: Install CPU ASR stack
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[asr]'
+          python -m pip install 'datasets==3.6.0' soundfile
+      - name: Decode one immutable real utterance
+        env:
+          HF_HUB_DOWNLOAD_TIMEOUT: "300"
+        run: |
+          python - <<'PY'
+          import io
+          import json
+          import tempfile
+          from pathlib import Path
+
+          import soundfile as sf
+          from datasets import Audio, load_dataset
+          from semantic_asr.adapters import DecodeRequest, FasterWhisperAdapter
+
+          dataset_id = 'japanese-asr/ja_asr.reazonspeech_test'
+          dataset_revision = 'dd08bfb9dfc1cef4e4d0609fd78c3755d48b926f'
+          model_id = 'kotoba-tech/kotoba-whisper-v2.0-faster'
+          model_revision = 'f44edd35eaeb2274e85ac7b31fb2c6f59ff1c4bc'
+
+          dataset = load_dataset(dataset_id, revision=dataset_revision, split='test')
+          dataset = dataset.cast_column('audio', Audio(decode=False))
+          row = dataset[17]
+          audio, rate = sf.read(io.BytesIO(row['audio']['bytes']), dtype='float32')
+          if audio.ndim > 1:
+              audio = audio.mean(axis=1)
+          adapter = FasterWhisperAdapter(
+              model=model_id,
+              model_revision=model_revision,
+              runtime_revision='real-ja-kotoba-probe-v1',
+              device='cpu',
+              compute_type='int8',
+              cpu_threads=4,
+          )
+          with tempfile.TemporaryDirectory() as directory:
+              path = Path(directory) / 'sample.wav'
+              sf.write(path, audio, rate, subtype='PCM_16')
+              candidates = adapter.decode(
+                  DecodeRequest(
+                      audio_path=str(path),
+                      language='ja',
+                      beam_size=4,
+                      hypotheses=4,
+                  )
+              )
+          assert 1 <= len(candidates) <= 4
+          assert all(candidate.text.strip() for candidate in candidates)
+          assert [candidate.rank for candidate in candidates] == list(range(1, len(candidates) + 1))
+          print('KOTOBA_AUDIO_PROBE=' + json.dumps({
+              'model': model_id,
+              'revision': model_revision,
+              'durationSeconds': round(len(audio) / rate, 3),
+              'candidateCount': len(candidates),
+              'scoresFinite': all(
+                  candidate.sequence_score is not None or candidate.avg_logprob is not None
+                  for candidate in candidates
+              ),
+              'ranks': [candidate.rank for candidate in candidates],
+          }, ensure_ascii=False, sort_keys=True))
+          PY
