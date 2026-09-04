@@ -42,29 +42,16 @@ jobs:
 
           path = Path("src/semantic_asr/longform_deliberation.py")
           text = path.read_text(encoding="utf-8")
-          old = '''    normalized = NormalizedTranscript.attach(
-              observed,
-              deterministic_normalize(observed.text),
-              mode="deterministic",
-          )'''
-          new = '''    normalized = NormalizedTranscript.attach(
-              observed,
-              text=deterministic_normalize(observed.text),
-              mode="deterministic",
-          )'''
+          old = "        deterministic_normalize(observed.text),"
+          new = "        text=deterministic_normalize(observed.text),"
           if text.count(old) != 1:
               raise SystemExit("expected one NormalizedTranscript.attach call to patch")
           path.write_text(text.replace(old, new), encoding="utf-8")
 
           path = Path("tests/test_multilevel_lattice.py")
           text = path.read_text(encoding="utf-8")
-          old = '''        observed_eligible=True,
-              pronunciation_key="mada",
-          )'''
-          new = '''        observed_eligible=True,
-              pronunciation_key="mada",
-              source_audio_sha256=AUDIO,
-          )'''
+          old = '        pronunciation_key="mada",\n    )'
+          new = '        pronunciation_key="mada",\n        source_audio_sha256=AUDIO,\n    )'
           if text.count(old) != 1:
               raise SystemExit("expected one generated lattice arc to patch")
           path.write_text(text.replace(old, new), encoding="utf-8")
