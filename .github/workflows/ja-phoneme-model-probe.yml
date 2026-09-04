@@ -1,0 +1,96 @@
+name: Probe Japanese phoneme CTC on real audio
+
+on:
+  push:
+    branches:
+      - codex/japanese-audio-tuning-20260904
+    paths:
+      - .github/workflows/ja-phoneme-model-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install CPU-only dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.6.0'
+          python -m pip install 'transformers==4.56.2' 'datasets==3.6.0' soundfile scipy 'pyopenjtalk>=0.4'
+      - name: Inspect vocabulary and decode one real utterance
+        env:
+          HF_HUB_DOWNLOAD_TIMEOUT: "180"
+        run: |
+          python - <<'PY'
+          import hashlib
+          import io
+          import json
+
+          import numpy as np
+          import pyopenjtalk
+          import soundfile as sf
+          import torch
+          from datasets import Audio, load_dataset
+          from huggingface_hub import HfApi
+          from transformers import AutoModelForCTC, AutoProcessor
+
+          dataset_id = 'japanese-asr/ja_asr.reazonspeech_test'
+          dataset_revision = 'dd08bfb9dfc1cef4e4d0609fd78c3755d48b926f'
+          model_id = 'prj-beatrice/japanese-hubert-base-phoneme-ctc-v4'
+          model_revision = HfApi().model_info(model_id).sha
+          print(json.dumps({'model': model_id, 'revision': model_revision}, ensure_ascii=False))
+
+          processor = AutoProcessor.from_pretrained(model_id, revision=model_revision)
+          model = AutoModelForCTC.from_pretrained(model_id, revision=model_revision)
+          model.eval()
+          vocab = processor.tokenizer.get_vocab()
+          id_to_token = {index: token for token, index in vocab.items()}
+          print(json.dumps({
+              'vocabSize': len(vocab),
+              'blankId': model.config.pad_token_id,
+              'vocab': sorted(vocab.items(), key=lambda item: item[1]),
+              'lmHeadShape': list(model.lm_head.weight.shape),
+          }, ensure_ascii=False))
+
+          ds = load_dataset(dataset_id, revision=dataset_revision, split='test')
+          ds = ds.cast_column('audio', Audio(decode=False))
+          row = ds[2]
+          audio, rate = sf.read(io.BytesIO(row['audio']['bytes']), dtype='float32')
+          if audio.ndim > 1:
+              audio = audio.mean(axis=1)
+          assert rate == 16000
+          inputs = processor(audio, sampling_rate=rate, return_tensors='pt')
+          with torch.inference_mode():
+              logits = model(**inputs).logits[0]
+          ids = logits.argmax(dim=-1).tolist()
+          blank = model.config.pad_token_id
+          collapsed = []
+          previous = None
+          for unit in ids:
+              if unit != previous and unit != blank:
+                  collapsed.append(unit)
+              previous = unit
+          predicted = [id_to_token.get(unit, f'<{unit}>') for unit in collapsed]
+          reference = str(row['transcription'])
+          phones = pyopenjtalk.g2p(reference, kana=False).split()
+          normalized_phones = [phone for phone in phones if phone not in {'sil', 'pau'}]
+          missing = sorted({phone for phone in normalized_phones if phone not in vocab})
+          print(json.dumps({
+              'referenceSha256': hashlib.sha256(reference.encode('utf-8')).hexdigest(),
+              'duration': round(len(audio) / rate, 3),
+              'reference': reference,
+              'g2p': normalized_phones,
+              'missingPhones': missing,
+              'predictedPhones': predicted,
+              'frames': int(logits.shape[0]),
+              'finite': bool(np.isfinite(logits.detach().numpy()).all()),
+          }, ensure_ascii=False))
+          PY
