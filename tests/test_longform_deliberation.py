@@ -245,7 +245,7 @@ def test_standard_outputs_use_final_observed_text(tmp_path: Path) -> None:
     )
     assert isinstance(result, DeliberatedLongformResult)
 
-    outputs = write_outputs(result, tmp_path, formats={"json", "txt", "srt"})
+    outputs = write_outputs(result, tmp_path, formats={"json", "observed", "srt"})
 
     assert "まだマージ" in Path(outputs["observed_txt"]).read_text(encoding="utf-8")
     assert "まだマージ" in Path(outputs["srt"]).read_text(encoding="utf-8")
