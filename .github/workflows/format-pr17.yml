@@ -1,0 +1,77 @@
+name: Format PR 17 deliberation changes
+
+on:
+  push:
+    branches:
+      - codex/longform-deliberation-integration-v03
+    paths:
+      - .github/workflows/format-pr17.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/longform-deliberation-integration-v03
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Apply known contract fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/semantic_asr/longform_deliberation.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    normalized = NormalizedTranscript.attach(
+              observed,
+              deterministic_normalize(observed.text),
+              mode="deterministic",
+          )'''
+          new = '''    normalized = NormalizedTranscript.attach(
+              observed,
+              text=deterministic_normalize(observed.text),
+              mode="deterministic",
+          )'''
+          if text.count(old) != 1:
+              raise SystemExit('expected one NormalizedTranscript.attach call to patch')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+
+          path = Path('tests/test_multilevel_lattice.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''        observed_eligible=True,
+              pronunciation_key="mada",
+          )'''
+          new = '''        observed_eligible=True,
+              pronunciation_key="mada",
+              source_audio_sha256=AUDIO,
+          )'''
+          if text.count(old) != 1:
+              raise SystemExit('expected one generated lattice arc to patch')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+      - name: Format and apply safe lint fixes
+        run: |
+          python -m pip install 'ruff==0.16.6'
+          python -m ruff format src tests scripts
+          python -m ruff check --fix src tests scripts
+          python -m ruff format src tests scripts
+          git diff --check
+      - name: Commit formatter output
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests scripts
+          git commit -m 'Apply Ruff formatting and integration fixes'
+          git push origin HEAD:codex/longform-deliberation-integration-v03
