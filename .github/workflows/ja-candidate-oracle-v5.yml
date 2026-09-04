@@ -1,0 +1,108 @@
+name: Measure fresh Japanese N-best oracle headroom
+
+on:
+  push:
+    branches:
+      - codex/japanese-audio-tuning-20260904
+    paths:
+      - ".ja-tuning/v5/**"
+      - ".github/workflows/ja-candidate-oracle-v5.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  oracle-sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Restore pinned ASR and dataset snapshots
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/huggingface
+          key: semantic-asr-ja-oracle-v5-${{ runner.os }}-primary-0a363e9-kotoba-f44edd35
+          restore-keys: |
+            semantic-asr-ja-kotoba-f44edd35-${{ runner.os }}
+            semantic-asr-ja-real-v3-${{ runner.os }}-
+            semantic-asr-ja-real-v2-${{ runner.os }}-
+      - name: Reconstruct and verify round-4 selection driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum -c <<'EOF'
+          b158da4b2cc6aae0e62f11dda5f491e4a31e39b399211672784d3f06223bf11c  .ja-tuning/v4/part-00.b64
+          7b2723d0c9353937af0f49e514af9b501b29e65af39af40ae8615c28d1b329a6  .ja-tuning/v4/part-00a.b64
+          94e3510dc8664c0992aedfbc4d1c4ad8a593a148fbfbebdbefc53dda6e09ee2c  .ja-tuning/v4/part-00b.b64
+          1f214558a475a9c9e224cc7130b1d6b07a0c615c532929bc663b209df6a9c0eb  .ja-tuning/v4/part-01.b64
+          8c77d72fbf912717388ec0d27ce54ad991a777d870049905e53e00ef8f57c86a  .ja-tuning/v4/part-02.b64
+          EOF
+          cat .ja-tuning/v4/part-00.b64 .ja-tuning/v4/part-00a.b64 .ja-tuning/v4/part-00b.b64 .ja-tuning/v4/part-01.b64 .ja-tuning/v4/part-02.b64 > /tmp/tune-v4.py.gz.b64
+          echo "369e0b6b770e43cb3fda0f9a6811e12eb506ba52a40cf324b40531fc8ecb073b  /tmp/tune-v4.py.gz.b64" | sha256sum -c -
+          base64 --decode /tmp/tune-v4.py.gz.b64 > /tmp/tune-v4.py.gz
+          echo "e4400c22abadebab6ca37a7977d875b7db2bfa5708cd6c9d36a35424cb2c1a8a  /tmp/tune-v4.py.gz" | sha256sum -c -
+          gzip -dc /tmp/tune-v4.py.gz > /tmp/tune-v4.py
+          echo "a1826d97ea370c30e832601f28cc795b347a489a1e5c2c16789b7734e458c96c  /tmp/tune-v4.py" | sha256sum -c -
+          echo "b1e053c8d46ce37680d09cd0229e4291755302ce994aa38045ec811d52c2d869  .ja-tuning/v5/oracle_sweep.py" | sha256sum -c -
+          python -m py_compile /tmp/tune-v4.py .ja-tuning/v5/oracle_sweep.py
+      - name: Install CPU inference stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[asr]'
+          python -m pip install 'datasets==3.6.0' soundfile scipy 'ruff==0.16.6'
+          python -m ruff format --check .ja-tuning/v5/oracle_sweep.py
+          python -m ruff check --ignore E501 .ja-tuning/v5/oracle_sweep.py
+      - name: Decode 45 completely fresh Japanese utterances
+        env:
+          HF_HUB_DOWNLOAD_TIMEOUT: "300"
+          OMP_NUM_THREADS: "4"
+          MKL_NUM_THREADS: "4"
+        run: |
+          python .ja-tuning/v5/oracle_sweep.py \
+            --v4-driver /tmp/tune-v4.py \
+            --count-per-dataset 15 \
+            --max-duration 12 \
+            --cpu-threads 4 \
+            --output /tmp/ja-candidate-oracle-v5.json
+      - name: Validate aggregate-only report
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('/tmp/ja-candidate-oracle-v5.json').read_text())
+          assert report['schema'] == 'semantic-asr-ja-candidate-oracle-v5'
+          assert sum(row['samples'] for row in report['datasets']) == 45
+          assert report['previousAudioExcluded']['round4SamplesReconstructed'] == 120
+          assert report['previousAudioExcluded']['round4ReferenceHashesReconstructed'] == 120
+          assert report['previousAudioExcluded']['overlapDetected'] is False
+          assert report['dataContract']['notPromotionEvidence'] is True
+          assert len(report['datasetFingerprint']) == 64
+          assert len(report['hashedOutcomes']) == 45
+          forbidden = {'reference', 'transcript', 'hypothesis', 'text', 'audioPath', 'audioBytes', 'rawAudio'}
+          def visit(value):
+              if isinstance(value, dict):
+                  assert forbidden.isdisjoint(value), forbidden.intersection(value)
+                  for child in value.values():
+                      visit(child)
+              elif isinstance(value, list):
+                  for child in value:
+                      visit(child)
+          visit(report)
+          print(json.dumps({'pooled': report['pooled'], 'byDataset': report['byDataset'], 'diagnostics': report['diagnostics']}, ensure_ascii=False, sort_keys=True))
+          PY
+      - name: Upload diagnostic report even when validation fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-asr-ja-candidate-oracle-v5
+          path: /tmp/ja-candidate-oracle-v5.json
+          if-no-files-found: warn
+          retention-days: 7
