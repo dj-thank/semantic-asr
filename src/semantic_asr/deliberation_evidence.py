@@ -36,9 +36,7 @@ DecisionStatus = Literal["accepted", "provisional"]
 
 AUDIO_CHANNELS = frozenset({"asr_acoustic", "phone", "mora", "discrete_unit"})
 INDEPENDENT_AUDIO_CHANNELS = frozenset({"phone", "mora", "discrete_unit"})
-GENERATED_ORIGINS = frozenset(
-    {"phonetic-proposal", "context-proposal", "guarded-generation"}
-)
+GENERATED_ORIGINS = frozenset({"phonetic-proposal", "context-proposal", "guarded-generation"})
 
 
 def _strict_float(value: object, *, name: str) -> float:
@@ -124,7 +122,7 @@ class BoundedUtility:
 class UtilityCalibrationProfile:
     """Frozen affine+tanh mapping fitted on held-out data.
 
-    This mapping only puts heterogeneous scores on a bounded utility scale.  It does not turn a
+    This mapping only puts heterogeneous scores on a bounded utility scale. It does not turn a
     log likelihood, raw score or preference into a correctness probability.
     """
 

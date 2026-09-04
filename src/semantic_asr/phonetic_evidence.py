@@ -1,8 +1,8 @@
 """Candidate-independent phone/mora posterior evidence.
 
-The ASR candidate does not create these posteriors.  A frozen acoustic model emits a frame-level
+The ASR candidate does not create these posteriors. A frozen acoustic model emits a frame-level
 posterior distribution first; candidate pronunciations are then scored with the exact CTC forward
-algorithm.  Phone and mora scores stay in separate score domains until a held-out normalization
+algorithm. Phone and mora scores stay in separate score domains until a held-out normalization
 profile converts them to bounded utilities for deliberation.
 """
 
@@ -231,7 +231,7 @@ class CandidatePronunciation:
 
 @dataclass(frozen=True, slots=True)
 class CTCPronunciationScore:
-    """Raw CTC sequence likelihood.  It is not a correctness probability."""
+    """Raw CTC sequence likelihood. It is not a correctness probability."""
 
     candidate_id: str
     kind: PosteriorKind
@@ -254,8 +254,7 @@ class CTCPronunciationScore:
         if self.target_symbol_count < 1 or self.frame_count < 1:
             raise ValueError("CTC score counts must be positive")
         if any(
-            not _is_sha256(value)
-            for value in (self.posterior_digest, self.pronunciation_digest)
+            not _is_sha256(value) for value in (self.posterior_digest, self.pronunciation_digest)
         ):
             raise ValueError("CTC score provenance digests must be SHA-256 values")
         if self.evidence.kind != ScoreKind.LOG_LIKELIHOOD:
@@ -289,9 +288,7 @@ class PhoneticCandidateEvidence:
 
     @property
     def scores(self) -> tuple[EvidenceScore, ...]:
-        return tuple(
-            item.evidence for item in (self.phone, self.mora) if item is not None
-        )
+        return tuple(item.evidence for item in (self.phone, self.mora) if item is not None)
 
 
 def ctc_pronunciation_score(

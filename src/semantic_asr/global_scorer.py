@@ -81,7 +81,5 @@ def frozen_profile_digest(name: str, revision: str, payload: Mapping[str, object
 
     if not name or not revision:
         raise ValueError("profile name and revision are required")
-    canonical = canonical_json(
-        {"name": name, "revision": revision, "payload": dict(payload)}
-    )
+    canonical = canonical_json({"name": name, "revision": revision, "payload": dict(payload)})
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

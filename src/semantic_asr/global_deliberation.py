@@ -246,9 +246,7 @@ def _eligible_arcs(
 def _transition_map(
     lattice: DeliberationLattice,
 ) -> dict[tuple[str, str], BoundedUtility]:
-    return {
-        (row.left_arc_id, row.right_arc_id): row.utility for row in lattice.transitions
-    }
+    return {(row.left_arc_id, row.right_arc_id): row.utility for row in lattice.transitions}
 
 
 def _retained_path(
