@@ -216,6 +216,8 @@ class DeliberatedObservedTranscript:
     def __post_init__(self) -> None:
         if not self.text or not self.selected_candidate_id or not self.path_arcs:
             raise ValueError("deliberated observed transcript requires text, ID and path arcs")
+        if not self.candidates or not self.ranked:
+            raise ValueError("deliberated observed transcript must retain first-pass evidence")
         for digest in (
             self.source_audio_sha256,
             self.evidence_sha256,
@@ -242,6 +244,8 @@ class DeliberatedObservedTranscript:
         path_arcs: tuple[PathArcReceipt, ...],
         exact_source_candidate_ids: tuple[str, ...],
         uncertainty_spans: tuple[dict[str, object], ...],
+        candidates: tuple[CandidateEvidence, ...],
+        ranked: tuple[object, ...],
     ) -> DeliberatedObservedTranscript:
         selected_candidate_id = f"deliberation-path-{decision.selected.digest[:20]}"
         payload = {
@@ -269,6 +273,8 @@ class DeliberatedObservedTranscript:
             decision=decision.status,
             path_arcs=path_arcs,
             exact_source_candidate_ids=exact_source_candidate_ids,
+            candidates=candidates,
+            ranked=ranked,
             uncertainty_spans=uncertainty_spans,
         )
 
@@ -505,9 +511,11 @@ def _skip_trace(
     config: LongformDeliberationConfig,
     policy: DeliberationPolicy,
     reason: str,
+    *,
+    attempted: bool = False,
 ) -> SegmentDeliberationTrace:
     return SegmentDeliberationTrace(
-        attempted=False,
+        attempted=attempted,
         applied=False,
         reason=reason,
         first_pass_evidence_sha256=segment.observed.evidence_sha256,
@@ -608,6 +616,8 @@ def _applied_segment(
         path_arcs=receipts,
         exact_source_candidate_ids=exact,
         uncertainty_spans=uncertainty,
+        candidates=segment.observed.candidates,
+        ranked=segment.observed.ranked,
     )
     normalized = NormalizedTranscript.attach(
         observed,
@@ -749,6 +759,7 @@ def apply_longform_deliberation(
                 config,
                 policy,
                 f"failed-closed:{type(exc).__name__}:{exc}",
+                attempted=True,
             )
             final_segments.append(_unchanged_segment(segment, trace))
 

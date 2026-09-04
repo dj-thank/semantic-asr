@@ -172,6 +172,8 @@ def test_opt_in_second_pass_changes_contextually_incoherent_window() -> None:
     assert result.segments[0].observed.text == "レビュー完了まではまだマージしません。"
     assert result.segments[0].changed
     assert result.segments[0].trace.applied
+    assert result.segments[0].observed.candidates == raw.segments[0].observed.candidates
+    assert result.segments[0].observed.ranked == raw.segments[0].observed.ranked
     assert result.segments[0].diagnostics["topPosterior"] is None
     assert result.segments[0].normalized.observed_evidence_sha256 == (
         result.segments[0].observed.evidence_sha256
@@ -278,3 +280,24 @@ def test_wrapper_runs_first_pass_once_and_preserves_profile_attributes() -> None
     assert base.calls == 1
     assert wrapped.runtime_profile_name == "cpu-ja-v1"
     assert isinstance(result, DeliberatedLongformResult)
+
+
+def test_fail_closed_trace_records_that_deliberation_started() -> None:
+    class BrokenScorer:
+        source = "broken-scorer"
+        profile_digest = "d" * 64
+
+        def score(self, path, *, context):
+            raise RuntimeError("deliberation failed")
+
+    result = apply_longform_deliberation(
+        first_pass(),
+        sequence_scorer=BrokenScorer(),
+        policy=policy(),
+    )
+
+    assert isinstance(result, DeliberatedLongformResult)
+    assert result.segments[0].trace.attempted
+    assert not result.segments[0].trace.applied
+    assert result.segments[0].trace.reason.startswith("failed-closed:RuntimeError:")
+    assert result.diagnostics["globalDeliberation"]["failedWindowCount"] == 1

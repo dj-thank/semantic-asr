@@ -1,126 +1,124 @@
-name: Finalize PR 17 evidence receipts
+name: Semantic ASR CI
 
 on:
+  pull_request:
   push:
     branches:
-      - codex/longform-deliberation-integration-v03
+      - main
+  workflow_dispatch:
+  workflow_call:
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  PYTHONUTF8: "1"
+
+concurrency:
+  group: semantic-asr-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  finalize:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  core:
+    name: Core (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: codex/longform-deliberation-integration-v03
-          fetch-depth: 0
+          persist-credentials: false
+      - name: Record the checked source revision
+        run: git show -s --format='HEAD=%H%nTREE=%T' HEAD
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install base validation environment
+        run: python -m pip install -e '.[dev]'
+      - name: Require the dependency-free test path
+        run: python -c "import importlib.util; assert importlib.util.find_spec('torch') is None"
+      - name: Check formatting without modifying source
+        run: python -m ruff format --check src tests scripts
+      - name: Check lint without modifying source
+        run: python -m ruff check src tests scripts
+      - name: Compile
+        run: python -m compileall -q src tests scripts
+      - name: Run base tests
+        run: python -m pytest -q
+      - name: Run the model-free v0.1 demo
+        run: semantic-asr demo --output runs/demo.json
+      - name: Train and evaluate the deterministic v0.2 smoke ranker
+        run: semantic-asr research-smoke --output runs/research-smoke.json
+      - name: Verify advanced CLI discovery
+        run: |
+          semantic-asr cascade --help
+          semantic-asr train-ranker --help
+          semantic-asr transcribe-v2 --help
+      - name: Build a wheel
+        run: python -m build --wheel
+      - name: Verify tracked source stayed unchanged
+        run: git diff --exit-code
+
+  training-cpu:
+    name: Optional training and acoustic verifier (CPU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Record the checked source revision
+        run: git show -s --format='HEAD=%H%nTREE=%T' HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Patch audit receipts and tests
-        shell: bash
+          cache: pip
+      - name: Install CPU-only training test dependencies
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import textwrap
-
-          def replace_once(text: str, old: str, new: str, label: str) -> str:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit("expected one " + label + ", found " + str(count))
-              return text.replace(old, new)
-
-          path = Path("src/semantic_asr/longform_deliberation.py")
-          text = path.read_text(encoding="utf-8")
-          text = replace_once(
-              text,
-              "        uncertainty_spans: tuple[dict[str, object], ...],\n    ) -> DeliberatedObservedTranscript:",
-              "        uncertainty_spans: tuple[dict[str, object], ...],\n        candidates: tuple[CandidateEvidence, ...],\n        ranked: tuple[object, ...],\n    ) -> DeliberatedObservedTranscript:",
-              "create signature",
-          )
-          text = replace_once(
-              text,
-              "            exact_source_candidate_ids=exact_source_candidate_ids,\n            uncertainty_spans=uncertainty_spans,\n        )",
-              "            exact_source_candidate_ids=exact_source_candidate_ids,\n            candidates=candidates,\n            ranked=ranked,\n            uncertainty_spans=uncertainty_spans,\n        )",
-              "constructor evidence",
-          )
-          text = replace_once(
-              text,
-              "        exact_source_candidate_ids=exact,\n        uncertainty_spans=uncertainty,\n    )",
-              "        exact_source_candidate_ids=exact,\n        uncertainty_spans=uncertainty,\n        candidates=segment.observed.candidates,\n        ranked=segment.observed.ranked,\n    )",
-              "applied evidence handoff",
-          )
-          text = replace_once(
-              text,
-              "    policy: DeliberationPolicy,\n    reason: str,\n) -> SegmentDeliberationTrace:\n    return SegmentDeliberationTrace(\n        attempted=False,",
-              "    policy: DeliberationPolicy,\n    reason: str,\n    *,\n    attempted: bool = False,\n) -> SegmentDeliberationTrace:\n    return SegmentDeliberationTrace(\n        attempted=attempted,",
-              "attempted flag",
-          )
-          text = replace_once(
-              text,
-              '                f"failed-closed:{type(exc).__name__}:{exc}",\n            )',
-              '                f"failed-closed:{type(exc).__name__}:{exc}",\n                attempted=True,\n            )',
-              "failure call",
-          )
-          text = replace_once(
-              text,
-              '        if not self.text or not self.selected_candidate_id or not self.path_arcs:\n            raise ValueError("deliberated observed transcript requires text, ID and path arcs")',
-              '        if not self.text or not self.selected_candidate_id or not self.path_arcs:\n            raise ValueError("deliberated observed transcript requires text, ID and path arcs")\n        if not self.candidates or not self.ranked:\n            raise ValueError("deliberated observed transcript must retain first-pass evidence")',
-              "evidence invariant",
-          )
-          path.write_text(text, encoding="utf-8")
-
-          path = Path("tests/test_longform_deliberation.py")
-          text = path.read_text(encoding="utf-8")
-          text = replace_once(
-              text,
-              '    assert result.segments[0].trace.applied\n    assert result.segments[0].diagnostics["topPosterior"] is None',
-              '    assert result.segments[0].trace.applied\n    assert result.segments[0].observed.candidates == raw.segments[0].observed.candidates\n    assert result.segments[0].observed.ranked == raw.segments[0].observed.ranked\n    assert result.segments[0].diagnostics["topPosterior"] is None',
-              "retained evidence assertions",
-          )
-          addition = '''
-          def test_fail_closed_trace_records_that_deliberation_started() -> None:
-              class BrokenScorer:
-                  source = "broken-scorer"
-                  profile_digest = "d" * 64
-
-                  def score(self, path, *, context):
-                      raise RuntimeError("deliberation failed")
-
-              result = apply_longform_deliberation(
-                  first_pass(),
-                  sequence_scorer=BrokenScorer(),
-                  policy=policy(),
-              )
-
-              assert isinstance(result, DeliberatedLongformResult)
-              assert result.segments[0].trace.attempted
-              assert not result.segments[0].trace.applied
-              assert result.segments[0].trace.reason.startswith("failed-closed:RuntimeError:")
-              assert result.diagnostics["globalDeliberation"]["failedWindowCount"] == 1
-          '''
-          addition = textwrap.dedent(addition)
-          if "test_fail_closed_trace_records_that_deliberation_started" in text:
-              raise SystemExit("failure receipt test already exists")
-          path.write_text(text.rstrip() + "\n\n\n" + addition.rstrip() + "\n", encoding="utf-8")
-          PY
-      - name: Format and test
-        run: |
+          python -m pip install 'torch>=2.4' --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -e '.[dev]'
-          python -m ruff format src tests scripts
-          python -m ruff check --fix src tests scripts
-          python -m ruff format src tests scripts
-          python -m pytest -q
-          git diff --check
-      - name: Restore permanent CI and commit
-        shell: bash
+      - name: Require CPU PyTorch and run real backward tests
         run: |
-          git show '8bfc00e1273832cd29eb34496c6e1de2b56d862d:.github/workflows/ci.yml' > .github/workflows/ci.yml
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src tests .github/workflows/ci.yml
-          git commit -m 'Preserve first-pass evidence in deliberation receipts'
-          git push origin HEAD:codex/longform-deliberation-integration-v03
+          python -c "import torch; print(torch.__version__); assert torch.empty(0).device.type == 'cpu'"
+          python -m pytest -q tests/test_training_optional.py tests/test_acoustic_verifier_optional.py
+      - name: Verify tracked source stayed unchanged
+        run: git diff --exit-code
+
+  wheel-install:
+    name: Clean wheel installation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel
+      - name: Install into a clean virtual environment
+        run: |
+          python -m venv .wheel-venv
+          .wheel-venv/bin/python -m pip install dist/*.whl
+          .wheel-venv/bin/semantic-asr demo --output runs/wheel-demo.json
+          .wheel-venv/bin/semantic-asr research-smoke --output runs/wheel-research-smoke.json
+          .wheel-venv/bin/semantic-asr transcribe-v2 --help
+      - name: Verify tracked source stayed unchanged
+        run: git diff --exit-code
