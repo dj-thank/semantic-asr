@@ -1,0 +1,134 @@
+name: Tune Semantic ASR on fresh Japanese audio — second-ear safety
+
+on:
+  push:
+    branches:
+      - codex/japanese-audio-tuning-20260904
+    paths:
+      - ".ja-tuning/v3/**"
+      - ".github/workflows/ja-audio-tuning-v3.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  tune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Restore pinned model and dataset snapshots
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: semantic-asr-ja-real-v3-${{ runner.os }}-primary-0a363e9-second-536b066-ctc-f5fe070
+          restore-keys: |
+            semantic-asr-ja-real-v1-${{ runner.os }}-
+            semantic-asr-ja-real-v2-${{ runner.os }}-
+      - name: Materialize and verify tuning driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum -c <<'EOF'
+          4a1a09eecba8ea7bdfb8c9640e65f579f9e79aa034a4b67afc955da6b8aa54da  .ja-tuning/v3/part-00.b64
+          8d5c78c30199ae20bd29362b8eb607105b832e58052be1acec2cdeec45bae8d5  .ja-tuning/v3/part-01.b64
+          598401b7586b469d5d14790334be69ffc9120da60f811e46c891f6b6d2333f4a  .ja-tuning/v3/part-02.b64
+          bb457666a2a55c95dec6682ce8592754c99f1db22543eec927569692b78f164d  .ja-tuning/v3/part-03.b64
+          fd6970effd78b1d8524ef79470550410922d0e657613e7696e14cc3704ef4438  .ja-tuning/v3/part-04.b64
+          218e2a0fa84217b28d41e2c65ee3b16533eea8908d716ab3f34252af66c16f36  .ja-tuning/v3/part-05.b64
+          6af4035738596aee0b4456f49169aebbc378f9b3754b8282632d0ed422402bcf  .ja-tuning/v3/part-06.b64
+          EOF
+          cat .ja-tuning/v3/part-*.b64 > /tmp/tune-v3.py.gz.b64
+          echo "c394f17b32cf35117815405be2a55692104ef63fc9f5d8eb3f744c31a91a6e94  /tmp/tune-v3.py.gz.b64" | sha256sum -c -
+          base64 --decode /tmp/tune-v3.py.gz.b64 > /tmp/tune-v3.py.gz
+          echo "0a6f7da6bc6a9715a31c5f4ae1667594d8a92f284fc0726f81c91fd7e699c98f  /tmp/tune-v3.py.gz" | sha256sum -c -
+          gzip -dc /tmp/tune-v3.py.gz > /tmp/tune-v3.py
+          echo "6dd8674940541ea66ea7e8c698b2924dbfe76cbfea2cdb8b8a56a3f4ee2b67ff  /tmp/tune-v3.py" | sha256sum -c -
+          python -m py_compile /tmp/tune-v3.py
+      - name: Install CPU inference and validation stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.6.0'
+          python -m pip install -e '.[asr]'
+          python -m pip install 'transformers==4.56.2' 'datasets==3.6.0' soundfile scipy 'pyopenjtalk==0.4.1' 'ruff==0.16.6'
+          python -m ruff format --check /tmp/tune-v3.py
+          python -m ruff check --ignore E501 /tmp/tune-v3.py
+          python -m py_compile /tmp/tune-v3.py
+      - name: Run repeated tuning and fresh locked evaluations
+        env:
+          HF_HUB_DOWNLOAD_TIMEOUT: "300"
+          OMP_NUM_THREADS: "4"
+          MKL_NUM_THREADS: "4"
+        run: |
+          python /tmp/tune-v3.py \
+            --reazon-fit 36 \
+            --reazon-calibration 18 \
+            --reazon-test 22 \
+            --jsut-fit 14 \
+            --jsut-calibration 10 \
+            --jsut-test 12 \
+            --common-voice-fit 14 \
+            --common-voice-calibration 10 \
+            --common-voice-test 20 \
+            --beam-size 6 \
+            --hypotheses 6 \
+            --second-beam-size 3 \
+            --second-hypotheses 3 \
+            --max-duration 12 \
+            --cpu-threads 4 \
+            --bootstrap 3000 \
+            --output /tmp/ja-real-v3-report.json
+      - name: Validate aggregate-only report
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('/tmp/ja-real-v3-report.json')
+          report = json.loads(path.read_text())
+          assert report['schema'] == 'semantic-asr-ja-real-tuning-v3'
+          assert report['dataContract']['referenceBlindFeatureExtraction'] is True
+          assert report['dataContract']['rawAudioPersisted'] is False
+          assert report['dataContract']['rawReferencePersisted'] is False
+          assert report['dataContract']['rawHypothesisPersisted'] is False
+          assert report['dataContract']['lockedSetsUsedForSelection'] is False
+          assert report['priorRoundsExcluded']['overlapDetected'] is False
+          assert report['iterations'][-1]['profileChangedAfterEvaluation'] is False
+          assert sum(item['sampleCount'] for item in report['datasets']) == 156
+          assert len(report['datasetFingerprint']) == 64
+          assert report['models']['secondEarWhisper']['revision'] == '536b0662742c02347bc0e980a01041f333bce120'
+
+          forbidden_keys = {
+              'reference', 'transcript', 'hypothesis', 'text',
+              'audioPath', 'audioBytes', 'rawAudio', 'rawReference',
+          }
+          def visit(value):
+              if isinstance(value, dict):
+                  assert forbidden_keys.isdisjoint(value), forbidden_keys.intersection(value)
+                  for child in value.values():
+                      visit(child)
+              elif isinstance(value, list):
+                  for child in value:
+                      visit(child)
+          visit(report)
+          print(json.dumps({
+              'promotionReady': report['promotionReady'],
+              'selectedProfile': report['selectedProfile'],
+              'metrics': report['metrics'],
+              'selectionSummary': report['iterations'][2]['selectionSummary'],
+          }, ensure_ascii=False, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semantic-asr-ja-real-v3-report
+          path: /tmp/ja-real-v3-report.json
+          if-no-files-found: error
+          retention-days: 7
