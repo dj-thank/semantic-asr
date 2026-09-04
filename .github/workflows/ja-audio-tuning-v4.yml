@@ -40,11 +40,19 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum -c <<'EOF'
-          674aa515cebdce54f9ee2c05f347b43482df7fa2f3d3adc78bdfc7f711b0ba25  .ja-tuning/v4/part-00.b64
+          b158da4b2cc6aae0e62f11dda5f491e4a31e39b399211672784d3f06223bf11c  .ja-tuning/v4/part-00.b64
+          7b2723d0c9353937af0f49e514af9b501b29e65af39af40ae8615c28d1b329a6  .ja-tuning/v4/part-00a.b64
+          94e3510dc8664c0992aedfbc4d1c4ad8a593a148fbfbebdbefc53dda6e09ee2c  .ja-tuning/v4/part-00b.b64
           1f214558a475a9c9e224cc7130b1d6b07a0c615c532929bc663b209df6a9c0eb  .ja-tuning/v4/part-01.b64
           8c77d72fbf912717388ec0d27ce54ad991a777d870049905e53e00ef8f57c86a  .ja-tuning/v4/part-02.b64
           EOF
-          cat .ja-tuning/v4/part-*.b64 > /tmp/tune-v4.py.gz.b64
+          cat \
+            .ja-tuning/v4/part-00.b64 \
+            .ja-tuning/v4/part-00a.b64 \
+            .ja-tuning/v4/part-00b.b64 \
+            .ja-tuning/v4/part-01.b64 \
+            .ja-tuning/v4/part-02.b64 \
+            > /tmp/tune-v4.py.gz.b64
           echo "369e0b6b770e43cb3fda0f9a6811e12eb506ba52a40cf324b40531fc8ecb073b  /tmp/tune-v4.py.gz.b64" | sha256sum -c -
           base64 --decode /tmp/tune-v4.py.gz.b64 > /tmp/tune-v4.py.gz
           echo "e4400c22abadebab6ca37a7977d875b7db2bfa5708cd6c9d36a35424cb2c1a8a  /tmp/tune-v4.py.gz" | sha256sum -c -
