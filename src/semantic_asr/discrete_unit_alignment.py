@@ -27,6 +27,15 @@ def _population_std(values: tuple[float, ...]) -> float:
     return pstdev(values) if len(values) > 1 else 0.0
 
 
+def _strict_float(value: object, *, name: str) -> float:
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be a real number")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{name} must be a real number") from exc
+
+
 @dataclass(frozen=True, slots=True)
 class CentroidDistanceTable:
     """Pairwise Euclidean distances between frozen codebook centroids."""
@@ -39,7 +48,10 @@ class CentroidDistanceTable:
     def __post_init__(self) -> None:
         size = self.space.codebook_size
         try:
-            normalized = tuple(tuple(float(value) for value in row) for row in self.distances)
+            normalized = tuple(
+                tuple(_strict_float(value, name="centroid distance") for value in row)
+                for row in self.distances
+            )
         except (TypeError, ValueError) as exc:
             raise TypeError("centroid distances must be a numeric square matrix") from exc
         if len(normalized) != size or any(len(row) != size for row in normalized):
@@ -80,7 +92,7 @@ class CentroidDistanceTable:
             raise ValueError("centroids must share a positive dimensionality")
         normalized: list[tuple[float, ...]] = []
         for row in centroids:
-            values = tuple(float(value) for value in row)
+            values = tuple(_strict_float(value, name="centroid coordinate") for value in row)
             if any(not math.isfinite(value) for value in values):
                 raise ValueError("centroid coordinates must be finite")
             normalized.append(values)
@@ -187,6 +199,7 @@ class DTWConfig:
                 "maxCells": self.max_cells,
                 "projection": self.projection,
                 "schemaVersion": self.schema_version,
+                "optimization": ("minimum-total-cost", "minimum-path-length"),
                 "tieBreak": ("diagonal", "canonical-step", "observed-step"),
             }
         )
@@ -219,7 +232,9 @@ class DTWAlignment:
             ):
                 raise TypeError("DTW path indexes must be integers")
             normalized_path.append((int(left), int(right)))
-        local_costs = tuple(float(value) for value in self.local_costs)
+        local_costs = tuple(
+            _strict_float(value, name="DTW local cost") for value in self.local_costs
+        )
         if any(not isinstance(value, bool) for value in self.mismatches):
             raise TypeError("DTW mismatch flags must be booleans")
         mismatches = tuple(self.mismatches)
@@ -232,8 +247,8 @@ class DTWAlignment:
             or not isinstance(self.observed_length, Integral)
         ):
             raise TypeError("DTW sequence lengths must be integers")
-        total_cost = float(self.total_cost)
-        normalized_cost = float(self.normalized_cost)
+        total_cost = _strict_float(self.total_cost, name="DTW total_cost")
+        normalized_cost = _strict_float(self.normalized_cost, name="DTW normalized_cost")
         path = tuple(normalized_path)
         if not path or not (len(path) == len(local_costs) == len(mismatches)):
             raise ValueError("DTW path, costs and mismatch flags must align")
@@ -355,24 +370,50 @@ def align_collapsed_units(
         )
 
     infinity = math.inf
-    previous = [infinity] * (columns + 1)
-    previous[0] = 0.0
+    unreachable_length = rows + columns + 1
+    previous_costs = [infinity] * (columns + 1)
+    previous_lengths = [unreachable_length] * (columns + 1)
+    previous_costs[0] = 0.0
+    previous_lengths[0] = 0
     backpointers = bytearray((rows + 1) * (columns + 1))
     stride = columns + 1
     for row_index in range(1, rows + 1):
-        current = [infinity] * (columns + 1)
+        current_costs = [infinity] * (columns + 1)
+        current_lengths = [unreachable_length] * (columns + 1)
         canonical_unit = canonical.units[row_index - 1]
         for column_index in range(1, columns + 1):
-            choices = (
-                (previous[column_index - 1], 0),  # diagonal
-                (previous[column_index], 1),  # advance canonical only
-                (current[column_index - 1], 2),  # advance observed only
-            )
-            predecessor_cost, direction = min(choices, key=lambda item: (item[0], item[1]))
+            # Minimize total DTW cost first, then choose the shortest path among
+            # equal-cost optima. The secondary objective is global rather than a
+            # local direction preference, so path-length normalization remains
+            # invariant when canonical and observed inputs are transposed.
+            predecessor_cost = previous_costs[column_index - 1]
+            predecessor_length = previous_lengths[column_index - 1]
+            direction = 0
+
+            canonical_step_cost = previous_costs[column_index]
+            canonical_step_length = previous_lengths[column_index]
+            if canonical_step_cost < predecessor_cost or (
+                canonical_step_cost == predecessor_cost
+                and canonical_step_length < predecessor_length
+            ):
+                predecessor_cost = canonical_step_cost
+                predecessor_length = canonical_step_length
+                direction = 1
+
+            observed_step_cost = current_costs[column_index - 1]
+            observed_step_length = current_lengths[column_index - 1]
+            if observed_step_cost < predecessor_cost or (
+                observed_step_cost == predecessor_cost and observed_step_length < predecessor_length
+            ):
+                predecessor_cost = observed_step_cost
+                predecessor_length = observed_step_length
+                direction = 2
             local = distance_table.distance(canonical_unit, observed.units[column_index - 1])
-            current[column_index] = predecessor_cost + local
+            current_costs[column_index] = predecessor_cost + local
+            current_lengths[column_index] = predecessor_length + 1
             backpointers[row_index * stride + column_index] = direction
-        previous = current
+        previous_costs = current_costs
+        previous_lengths = current_lengths
 
     row_index = rows
     column_index = columns
@@ -428,8 +469,8 @@ class CentroidDTWFeatures:
     config_digest: str
 
     def __post_init__(self) -> None:
-        dtw_distance = float(self.dtw_distance)
-        mismatch_rate = float(self.token_mismatch_rate)
+        dtw_distance = _strict_float(self.dtw_distance, name="dtw_distance")
+        mismatch_rate = _strict_float(self.token_mismatch_rate, name="token_mismatch_rate")
         if not math.isfinite(dtw_distance) or dtw_distance < 0:
             raise ValueError("dtw_distance must be finite and non-negative")
         if not math.isfinite(mismatch_rate) or not 0 <= mismatch_rate <= 1:
@@ -553,11 +594,20 @@ class TranscriptGuidedFeatures:
 
     def __post_init__(self) -> None:
         numeric = {
-            "dtw_distance": float(self.dtw_distance),
-            "token_mismatch_rate": float(self.token_mismatch_rate),
-            "mismatch_surprisal_std_bits": float(self.mismatch_surprisal_std_bits),
-            "weighted_surprisal_std_bits": float(self.weighted_surprisal_std_bits),
-            "alpha": float(self.alpha),
+            "dtw_distance": _strict_float(self.dtw_distance, name="dtw_distance"),
+            "token_mismatch_rate": _strict_float(
+                self.token_mismatch_rate,
+                name="token_mismatch_rate",
+            ),
+            "mismatch_surprisal_std_bits": _strict_float(
+                self.mismatch_surprisal_std_bits,
+                name="mismatch_surprisal_std_bits",
+            ),
+            "weighted_surprisal_std_bits": _strict_float(
+                self.weighted_surprisal_std_bits,
+                name="weighted_surprisal_std_bits",
+            ),
+            "alpha": _strict_float(self.alpha, name="alpha"),
         }
         if any(not math.isfinite(value) for value in numeric.values()):
             raise ValueError("transcript-guided features must be finite")

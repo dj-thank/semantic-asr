@@ -84,13 +84,15 @@ acoustic re-verification gateを通す。
 
 layer、codebook、revisionのどれか一つでも異なる場合は例外にし、似たtoken IDを同じ意味と
 見なさない。Text2DUnitの出力語彙とAudio2DUnitのcodebookが偶然同じサイズでも、digestが
-異なれば使用できない。
+異なれば使用できない。さらにText2DUnit出力の`source_sha256`は入力候補文のUTF-8 SHA-256と
+一致しなければならず、別候補の古いunit列や誤ったadapter応答をscoreへ混入させない。
 
 `DiscreteTokenLanguageModel`、`SurprisalThreshold`、`CentroidDistanceTable`は、内部digestと
 envelope digestを含むJSON artifactとして`save()` / `load()`できる。読み込み時には
-count/contextの整合性、matrixの
+count/contextの整合性、schema version、serialized keyの一意性、matrixの
 対称性・対角ゼロ、unit-space identity、SHA-256を再検証し、pickleや暗黙のruntime stateへ
-依存しない。
+依存しない。`SurprisalProfile`もtoken列・thresholdから再計算したmean、standard deviation、
+spike rateと一致しなければ拒否する。
 
 ## 論文との対応
 
@@ -102,7 +104,7 @@ count/contextの整合性、matrixの
 | 90 percentile spike threshold | `fit_spike_threshold()` | frozen native calibration setから再計算 |
 | consecutive deduplication | `DiscreteUnitSequence.collapse()` | raw frameへの逆写像を保持 |
 | centroid L2 matrix | `CentroidDistanceTable` | symmetric・finite・zero diagonalを検証 |
-| DTW / path normalization | `align_collapsed_units()` | deterministic tie-break、path長正規化 |
+| DTW / path normalization | `align_collapsed_units()` | 最小costの中で最短pathを選ぶdeterministic tie-break、path長正規化 |
 | LMなしDTW特徴 | `centroid_dtw_features()` | zero-shot候補順位に利用可能 |
 | mismatch surprisal std | `transcript_guided_features()` | mismatchに投影されたraw frameで算出 |
 | weighted surprisal std | 同上 | `S_i × (1 + alpha × distance_i)` |
@@ -122,6 +124,12 @@ digestをreceiptへ残す。
 DTW pathで一つのobserved unitが複数canonical unitへ対応する場合、論文本文ではraw frameへ
 戻す局所距離の集約規則が一意に記述されていない。実装は`mean`を既定とし、`maximum`も
 明示選択できる。選択値は`DTWConfig.digest`へ含める。
+
+同じ最小total costを持つDTW pathが複数ある場合、局所的な方向優先だけで選ぶと、入力を
+入れ替えた際にpath長が変わり、path長で正規化したdistanceまで変わり得る。実装は
+`total cost`を第一目的、`path length`を第二目的として最短の最適pathを選び、それでも同率の
+場合だけdiagonal、canonical-step、observed-stepの順で決定する。この最適化規則も
+`DTWConfig.digest`へ含める。
 
 ## 最小利用例
 

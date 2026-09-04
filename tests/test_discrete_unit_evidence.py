@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import replace
 
 import pytest
 
@@ -12,10 +13,12 @@ from semantic_asr.discrete_unit_evidence import (
     CollapsedUnitSequence,
     DiscreteTokenLanguageModel,
     DiscreteUnitAcousticRanker,
+    DiscreteUnitCandidateScore,
     DiscreteUnitSequence,
     DiscreteUnitSpace,
     DTWConfig,
     StaticTextToDiscreteUnitEncoder,
+    SurprisalProfile,
     SurprisalThreshold,
     align_collapsed_units,
     centroid_dtw_features,
@@ -259,6 +262,26 @@ def test_ranker_records_surprisal_features_only_when_native_lm_is_supplied() -> 
     assert row.rank_score.provenance.metadata["candidateFeatureSet"] == ("centroid-dtw-surprisal")
 
 
+def test_path_normalized_dtw_is_orientation_invariant_for_equal_cost_ties() -> None:
+    space = DiscreteUnitSpace(
+        encoder="fixture/ssl",
+        encoder_revision="revision-1",
+        layer=0,
+        codebook_size=3,
+        codebook_sha256="a" * 64,
+    )
+    table = CentroidDistanceTable.from_centroids(space, ((0.0,), (1.0,), (2.0,)))
+    first = _sequence((0, 2, 0), space=space).collapse()
+    second = _sequence((0, 1, 0, 2), space=space).collapse()
+
+    forward = align_collapsed_units(first, second, distance_table=table)
+    reverse = align_collapsed_units(second, first, distance_table=table)
+
+    assert forward.total_cost == pytest.approx(reverse.total_cost)
+    assert forward.path_length == reverse.path_length == 4
+    assert forward.normalized_cost == pytest.approx(reverse.normalized_cost)
+
+
 def test_centroid_dtw_features_do_not_require_a_native_token_lm() -> None:
     space = _space()
     features = centroid_dtw_features(
@@ -468,3 +491,144 @@ def test_surprisal_threshold_artifact_round_trip_and_binding(tmp_path) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="digest mismatch"):
         SurprisalThreshold.load(path)
+
+
+def test_surprisal_profile_rejects_inconsistent_spike_rate() -> None:
+    with pytest.raises(ValueError, match="spike_rate must match"):
+        SurprisalProfile(
+            token_surprisal_bits=(1.0, 10.0),
+            mean_bits=5.5,
+            std_bits=4.5,
+            spike_rate=0.0,
+            duration_units=2,
+            threshold_bits=9.0,
+            sequence_digest="a" * 64,
+            token_lm_digest="b" * 64,
+            threshold_digest="c" * 64,
+        )
+
+
+def test_token_lm_loader_rejects_unknown_schema_and_duplicate_rows(tmp_path) -> None:
+    model = _lm()
+    row = model.as_dict()
+    row["schemaVersion"] = "discrete-token-lm-v2"
+    with pytest.raises(ValueError, match="unsupported discrete token LM schema"):
+        DiscreteTokenLanguageModel.from_dict(row)
+
+    path = tmp_path / "duplicate-token-lm.json"
+    model.save(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["artifact"]["counts"][0].append(payload["artifact"]["counts"][0][0])
+    # Keep the digest of the canonical model: the loader must reject duplicate
+    # serialized keys before dictionary construction can silently collapse them.
+    payload["artifactSha256"] = model.digest
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate serialized keys"):
+        DiscreteTokenLanguageModel.load(path)
+
+
+def test_ranker_rejects_text_encoder_output_not_bound_to_candidate() -> None:
+    space = _space()
+
+    class UnboundEncoder:
+        name = "unbound-text2dunit"
+        revision = "fixture-v1"
+        configuration_digest = "d" * 64
+
+        def __init__(self, unit_space: DiscreteUnitSpace) -> None:
+            self.space = unit_space
+
+        def encode(self, text: str) -> DiscreteUnitSequence:
+            del text
+            return DiscreteUnitSequence(
+                units=(0, 1, 2),
+                space=self.space,
+                source_sha256="e" * 64,
+            )
+
+    ranker = DiscreteUnitAcousticRanker(
+        observed=_sequence((0, 1, 2), space=space),
+        distance_table=_table(space),
+        text_encoder=UnboundEncoder(space),
+    )
+    with pytest.raises(ValueError, match="source SHA-256"):
+        ranker.score_detailed((CandidateEvidence(candidate_id="candidate", text="候補"),))
+
+
+def test_candidate_score_binds_features_and_provenance() -> None:
+    space = _space()
+    encoder = StaticTextToDiscreteUnitEncoder(
+        {"候補": (0, 1, 2)},
+        space=space,
+        revision="fixture-v1",
+    )
+    row = DiscreteUnitAcousticRanker(
+        observed=_sequence((0, 1, 2), space=space),
+        distance_table=_table(space),
+        text_encoder=encoder,
+    ).score_detailed((CandidateEvidence(candidate_id="candidate", text="候補"),))[0]
+
+    with pytest.raises(ValueError, match="attached DTW features"):
+        DiscreteUnitCandidateScore(
+            candidate_id=row.candidate_id,
+            alignment_cost=row.alignment_cost,
+            rank_score=row.rank_score,
+            features=replace(row.features, dtw_distance=row.features.dtw_distance + 1.0),
+        )
+
+    with pytest.raises(ValueError, match="identical provenance"):
+        DiscreteUnitCandidateScore(
+            candidate_id=row.candidate_id,
+            alignment_cost=row.alignment_cost,
+            rank_score=replace(
+                row.rank_score,
+                provenance=replace(row.rank_score.provenance, scorer="different-scorer"),
+            ),
+            features=row.features,
+        )
+
+    with pytest.raises(ValueError, match="bind the attached candidate features"):
+        DiscreteUnitCandidateScore(
+            candidate_id=row.candidate_id,
+            alignment_cost=row.alignment_cost,
+            rank_score=row.rank_score,
+            features=replace(row.features, alignment_digest="f" * 64),
+        )
+
+
+def test_unit_space_loader_rejects_unknown_or_missing_schema() -> None:
+    row = _space().as_dict()
+    row["schemaVersion"] = "discrete-unit-space-v2"
+    with pytest.raises(ValueError, match="unsupported discrete-unit space schema"):
+        DiscreteUnitSpace.from_dict(row)
+    row.pop("schemaVersion")
+    with pytest.raises(ValueError, match="unsupported discrete-unit space schema"):
+        DiscreteUnitSpace.from_dict(row)
+
+
+def test_boolean_real_number_configuration_fails_closed() -> None:
+    space = _space()
+    with pytest.raises(TypeError, match="frame_hop_ms must be a real number"):
+        DiscreteUnitSequence(units=(0,), space=space, frame_hop_ms=True)
+    with pytest.raises(TypeError, match="add_k must be a real number"):
+        DiscreteTokenLanguageModel.fit((_sequence((0, 1), space=space),), add_k=True)
+    model = _lm(space)
+    with pytest.raises(TypeError, match="quantile must be a real number"):
+        model.fit_spike_threshold((_sequence((0, 1), space=space),), quantile=True)
+    with pytest.raises(TypeError, match="numeric square matrix"):
+        CentroidDistanceTable(
+            space=space,
+            distances=((False, 1, 3, 9), (1, 0, 2, 8), (3, 2, 0, 6), (9, 8, 6, 0)),
+        )
+    encoder = StaticTextToDiscreteUnitEncoder(
+        {"候補": (0, 1)},
+        space=space,
+        revision="fixture-v1",
+    )
+    with pytest.raises(TypeError, match="alpha must be a real number"):
+        DiscreteUnitAcousticRanker(
+            observed=_sequence((0, 1), space=space),
+            distance_table=_table(space),
+            text_encoder=encoder,
+            alpha=True,
+        )

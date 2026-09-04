@@ -48,6 +48,15 @@ def _integer(value: object, *, name: str, minimum: int | None = None) -> int:
     return normalized
 
 
+def _strict_float(value: object, *, name: str) -> float:
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be a real number")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{name} must be a real number") from exc
+
+
 def _non_empty_text(value: object, *, name: str, lowercase: bool = False) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string")
@@ -59,6 +68,36 @@ def _non_empty_text(value: object, *, name: str, lowercase: bool = False) -> str
 
 def _population_std(values: Sequence[float]) -> float:
     return pstdev(values) if len(values) > 1 else 0.0
+
+
+def _decode_serialized_count_tables(
+    raw_tables: object,
+    *,
+    name: str,
+) -> tuple[dict[tuple[Any, ...], Any], ...]:
+    if isinstance(raw_tables, (str, bytes)) or not isinstance(raw_tables, Sequence):
+        raise TypeError(f"{name} must be a sequence of count tables")
+    decoded_tables: list[dict[tuple[Any, ...], Any]] = []
+    for raw_table in raw_tables:
+        if isinstance(raw_table, (str, bytes)) or not isinstance(raw_table, Sequence):
+            raise TypeError(f"each {name} table must be a sequence")
+        decoded: dict[tuple[Any, ...], Any] = {}
+        for item in raw_table:
+            if isinstance(item, (str, bytes)) or not isinstance(item, Sequence) or len(item) != 2:
+                raise ValueError(f"each {name} entry must contain one key and one count")
+            raw_key, count = item
+            if isinstance(raw_key, (str, bytes)) or not isinstance(raw_key, Sequence):
+                raise TypeError(f"each {name} key must be a token sequence")
+            key = tuple(raw_key)
+            try:
+                duplicate = key in decoded
+            except TypeError as exc:
+                raise TypeError(f"each {name} key must contain hashable tokens") from exc
+            if duplicate:
+                raise ValueError(f"{name} contains duplicate serialized keys")
+            decoded[key] = count
+        decoded_tables.append(decoded)
+    return tuple(decoded_tables)
 
 
 def ensure_same_unit_space(
@@ -112,11 +151,10 @@ class DiscreteUnitSpace:
             "language",
             _non_empty_text(self.language, name="language", lowercase=True),
         )
-        object.__setattr__(
-            self,
-            "schema_version",
-            _non_empty_text(self.schema_version, name="schema_version"),
-        )
+        schema_version = _non_empty_text(self.schema_version, name="schema_version")
+        if schema_version != "discrete-unit-space-v1":
+            raise ValueError("unsupported discrete-unit space schema")
+        object.__setattr__(self, "schema_version", schema_version)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -132,6 +170,8 @@ class DiscreteUnitSpace:
 
     @classmethod
     def from_dict(cls, row: Mapping[str, Any]) -> Self:
+        if row.get("schemaVersion") != "discrete-unit-space-v1":
+            raise ValueError("unsupported discrete-unit space schema")
         return cls(
             encoder=row["encoder"],
             encoder_revision=row["encoderRevision"],
@@ -169,7 +209,7 @@ class DiscreteUnitSequence:
                 raise ValueError("discrete unit is outside the codebook")
             normalized.append(value)
         object.__setattr__(self, "units", tuple(normalized))
-        frame_hop_ms = float(self.frame_hop_ms)
+        frame_hop_ms = _strict_float(self.frame_hop_ms, name="frame_hop_ms")
         if not math.isfinite(frame_hop_ms) or frame_hop_ms <= 0:
             raise ValueError("frame_hop_ms must be finite and positive")
         object.__setattr__(self, "frame_hop_ms", frame_hop_ms)
@@ -192,7 +232,7 @@ class DiscreteUnitSequence:
         return cls(
             units=tuple(row["units"]),
             space=DiscreteUnitSpace.from_dict(dict(row["unitSpace"])),
-            frame_hop_ms=float(row.get("frameHopMs", 20.0)),
+            frame_hop_ms=row.get("frameHopMs", 20.0),
             source_sha256=row.get("sourceSha256"),
         )
 
@@ -326,7 +366,7 @@ class DiscreteTokenLanguageModel:
         order = _integer(self.order, name="order", minimum=1)
         if len(self.counts) != order or len(self.context_totals) != order:
             raise ValueError("count and context-total tables must match n-gram order")
-        add_k = float(self.add_k)
+        add_k = _strict_float(self.add_k, name="add_k")
         if not math.isfinite(add_k) or add_k <= 0:
             raise ValueError("add_k must be finite and positive")
         training_sequence_count = _integer(
@@ -341,6 +381,8 @@ class DiscreteTokenLanguageModel:
         )
         training_digest = validate_sha256(self.training_digest, name="training_digest")
         schema_version = _non_empty_text(self.schema_version, name="schema_version")
+        if schema_version != "discrete-token-lm-v1":
+            raise ValueError("unsupported discrete token LM schema")
 
         frozen_counts: list[Mapping[tuple[int, ...], int]] = []
         frozen_totals: list[Mapping[tuple[int, ...], int]] = []
@@ -404,7 +446,7 @@ class DiscreteTokenLanguageModel:
         add_k: float = 0.1,
     ) -> Self:
         order = _integer(order, name="order", minimum=1)
-        add_k = float(add_k)
+        add_k = _strict_float(add_k, name="add_k")
         if not math.isfinite(add_k) or add_k <= 0:
             raise ValueError("add_k must be finite and positive")
         if not sequences:
@@ -475,6 +517,7 @@ class DiscreteTokenLanguageModel:
         *,
         quantile: float = 0.90,
     ) -> SurprisalThreshold:
+        quantile = _strict_float(quantile, name="quantile")
         if not 0 < quantile <= 1 or not math.isfinite(quantile):
             raise ValueError("quantile must be finite and in (0, 1]")
         if not native_sequences:
@@ -544,20 +587,23 @@ class DiscreteTokenLanguageModel:
 
     @classmethod
     def from_dict(cls, row: Mapping[str, Any]) -> Self:
-        counts = tuple({tuple(item[0]): item[1] for item in table} for table in row["counts"])
-        context_totals = tuple(
-            {tuple(item[0]): item[1] for item in table} for table in row["contextTotals"]
+        if row.get("schemaVersion") != "discrete-token-lm-v1":
+            raise ValueError("unsupported discrete token LM schema")
+        counts = _decode_serialized_count_tables(row["counts"], name="n-gram counts")
+        context_totals = _decode_serialized_count_tables(
+            row["contextTotals"],
+            name="context totals",
         )
         return cls(
             space=DiscreteUnitSpace.from_dict(dict(row["unitSpace"])),
             order=row["order"],
-            add_k=float(row["addK"]),
+            add_k=row["addK"],
             counts=counts,
             context_totals=context_totals,
             training_sequence_count=row["trainingSequenceCount"],
             training_token_count=row["trainingTokenCount"],
             training_digest=row["trainingDigest"],
-            schema_version=row.get("schemaVersion", "discrete-token-lm-v1"),
+            schema_version=row["schemaVersion"],
         )
 
     def save(self, path: str | Path) -> None:
@@ -599,8 +645,8 @@ class SurprisalThreshold:
     method: str = "nearest-rank-v1"
 
     def __post_init__(self) -> None:
-        value_bits = float(self.value_bits)
-        quantile = float(self.quantile)
+        value_bits = _strict_float(self.value_bits, name="value_bits")
+        quantile = _strict_float(self.quantile, name="quantile")
         if not math.isfinite(value_bits) or value_bits < 0:
             raise ValueError("surprisal threshold must be finite and non-negative")
         if not math.isfinite(quantile) or not 0 < quantile <= 1:
@@ -637,8 +683,8 @@ class SurprisalThreshold:
         if row.get("schemaVersion") != "surprisal-threshold-v1":
             raise ValueError("unsupported surprisal threshold schema")
         return cls(
-            value_bits=float(row["valueBits"]),
-            quantile=float(row["quantile"]),
+            value_bits=row["valueBits"],
+            quantile=row["quantile"],
             sample_count=row["sampleCount"],
             source_digest=row["sourceDigest"],
             token_lm_digest=row["tokenLmDigest"],
@@ -687,16 +733,19 @@ class SurprisalProfile:
     threshold_digest: str
 
     def __post_init__(self) -> None:
-        values = tuple(float(value) for value in self.token_surprisal_bits)
+        values = tuple(
+            _strict_float(value, name="token_surprisal_bits value")
+            for value in self.token_surprisal_bits
+        )
         duration_units = _integer(
             self.duration_units,
             name="duration_units",
             minimum=1,
         )
-        mean_bits = float(self.mean_bits)
-        std_bits = float(self.std_bits)
-        spike_rate = float(self.spike_rate)
-        threshold_bits = float(self.threshold_bits)
+        mean_bits = _strict_float(self.mean_bits, name="mean_bits")
+        std_bits = _strict_float(self.std_bits, name="std_bits")
+        spike_rate = _strict_float(self.spike_rate, name="spike_rate")
+        threshold_bits = _strict_float(self.threshold_bits, name="threshold_bits")
         if len(values) != duration_units:
             raise ValueError("surprisal values must match positive duration_units")
         if any(not math.isfinite(value) or value < 0 for value in values):
@@ -716,6 +765,16 @@ class SurprisalProfile:
             abs_tol=1e-9,
         ):
             raise ValueError("surprisal std_bits must match token_surprisal_bits")
+        expected_spike_rate = sum(value > threshold_bits for value in values) / len(values)
+        if not math.isclose(
+            spike_rate,
+            expected_spike_rate,
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                "surprisal spike_rate must match token_surprisal_bits and threshold_bits"
+            )
         object.__setattr__(self, "token_surprisal_bits", values)
         object.__setattr__(self, "duration_units", duration_units)
         object.__setattr__(self, "mean_bits", mean_bits)

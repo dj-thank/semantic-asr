@@ -111,6 +111,20 @@ class DiscreteUnitCandidateScore:
             abs_tol=1e-12,
         ):
             raise ValueError("rank_score must be the negated DTW cost")
+        if not math.isclose(
+            self.alignment_cost.value,
+            self.features.dtw_distance,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            raise ValueError("alignment_cost must match the attached DTW features")
+        if self.alignment_cost.provenance.digest != self.rank_score.provenance.digest:
+            raise ValueError("alignment_cost and rank_score must share identical provenance")
+        if (
+            self.alignment_cost.provenance.metadata.get("candidateFeatureDigest")
+            != self.features.digest
+        ):
+            raise ValueError("score provenance must bind the attached candidate features")
 
     @property
     def includes_surprisal_features(self) -> bool:
@@ -140,7 +154,12 @@ class DiscreteUnitAcousticRanker:
         self.token_lm = token_lm
         self.distance_table = distance_table
         self.text_encoder = text_encoder
-        self.alpha = float(alpha)
+        if isinstance(alpha, bool):
+            raise TypeError("alpha must be a real number")
+        try:
+            self.alpha = float(alpha)
+        except (TypeError, ValueError) as exc:
+            raise TypeError("alpha must be a real number") from exc
         self.config = config or DTWConfig()
         if not math.isfinite(self.alpha) or self.alpha < 0:
             raise ValueError("alpha must be finite and non-negative")
@@ -209,6 +228,11 @@ class DiscreteUnitAcousticRanker:
         for candidate in candidates:
             canonical = self.text_encoder.encode(candidate.text)
             ensure_same_unit_space(self.observed.space, canonical.space, name="canonical candidate")
+            candidate_text_sha256 = hashlib.sha256(candidate.text.encode("utf-8")).hexdigest()
+            if canonical.source_sha256 != candidate_text_sha256:
+                raise ValueError(
+                    "text encoder output source SHA-256 does not match the candidate text"
+                )
             features = self._candidate_features(canonical)
             metadata: dict[str, object] = {
                 "paperRevision": DISCRETE_SURPRISAL_PAPER_REVISION,
@@ -216,6 +240,8 @@ class DiscreteUnitAcousticRanker:
                 "tokenLmDigest": self.token_lm.digest if self.token_lm is not None else None,
                 "distanceTableDigest": self.distance_table.digest,
                 "textEncoderConfigurationDigest": self.text_encoder.configuration_digest,
+                "candidateTextSha256": candidate_text_sha256,
+                "candidateFeatureDigest": features.digest,
                 "candidateIndependentSurprisalUsedForRanking": False,
                 "candidateFeatureSet": (
                     "centroid-dtw-surprisal"
