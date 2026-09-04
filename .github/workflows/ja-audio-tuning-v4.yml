@@ -1,0 +1,157 @@
+name: Tune Semantic ASR on fresh Japanese audio — Kotoba consensus
+
+on:
+  push:
+    branches:
+      - codex/japanese-audio-tuning-20260904
+    paths:
+      - ".ja-tuning/v4/**"
+      - ".github/workflows/ja-audio-tuning-v4.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  tune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Restore primary, phoneme, and dataset snapshots
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/huggingface
+          key: semantic-asr-ja-real-v3-${{ runner.os }}-primary-0a363e9-second-536b066-ctc-f5fe070
+          restore-keys: |
+            semantic-asr-ja-real-v3-${{ runner.os }}-
+            semantic-asr-ja-real-v2-${{ runner.os }}-
+            semantic-asr-ja-real-v1-${{ runner.os }}-
+      - name: Restore pinned Kotoba snapshot
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/huggingface
+          key: semantic-asr-ja-kotoba-f44edd35-${{ runner.os }}
+      - name: Materialize and verify tuning driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum -c <<'EOF'
+          674aa515cebdce54f9ee2c05f347b43482df7fa2f3d3adc78bdfc7f711b0ba25  .ja-tuning/v4/part-00.b64
+          1f214558a475a9c9e224cc7130b1d6b07a0c615c532929bc663b209df6a9c0eb  .ja-tuning/v4/part-01.b64
+          8c77d72fbf912717388ec0d27ce54ad991a777d870049905e53e00ef8f57c86a  .ja-tuning/v4/part-02.b64
+          EOF
+          cat .ja-tuning/v4/part-*.b64 > /tmp/tune-v4.py.gz.b64
+          echo "369e0b6b770e43cb3fda0f9a6811e12eb506ba52a40cf324b40531fc8ecb073b  /tmp/tune-v4.py.gz.b64" | sha256sum -c -
+          base64 --decode /tmp/tune-v4.py.gz.b64 > /tmp/tune-v4.py.gz
+          echo "e4400c22abadebab6ca37a7977d875b7db2bfa5708cd6c9d36a35424cb2c1a8a  /tmp/tune-v4.py.gz" | sha256sum -c -
+          gzip -dc /tmp/tune-v4.py.gz > /tmp/tune-v4.py
+          echo "a1826d97ea370c30e832601f28cc795b347a489a1e5c2c16789b7734e458c96c  /tmp/tune-v4.py" | sha256sum -c -
+          python -m py_compile /tmp/tune-v4.py
+      - name: Install CPU inference and validation stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.6.0'
+          python -m pip install -e '.[asr]'
+          python -m pip install 'transformers==4.56.2' 'datasets==3.6.0' soundfile scipy 'pyopenjtalk==0.4.1' 'ruff==0.16.6'
+          (
+            cd /tmp
+            python -m ruff format --check tune-v4.py
+            python -m ruff check --ignore E501 tune-v4.py
+            python -m py_compile tune-v4.py
+          )
+      - name: Run repeated tuning and fresh locked evaluations
+        env:
+          HF_HUB_DOWNLOAD_TIMEOUT: "300"
+          OMP_NUM_THREADS: "4"
+          MKL_NUM_THREADS: "4"
+        run: |
+          python /tmp/tune-v4.py \
+            --reazon-fit 28 \
+            --reazon-calibration 14 \
+            --reazon-test 18 \
+            --jsut-fit 10 \
+            --jsut-calibration 8 \
+            --jsut-test 10 \
+            --common-voice-fit 10 \
+            --common-voice-calibration 8 \
+            --common-voice-test 14 \
+            --beam-size 6 \
+            --hypotheses 6 \
+            --second-beam-size 4 \
+            --second-hypotheses 4 \
+            --max-duration 12 \
+            --cpu-threads 4 \
+            --bootstrap 4000 \
+            --output /tmp/ja-real-v4-report.json
+      - name: Validate aggregate-only report and promotion contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('/tmp/ja-real-v4-report.json')
+          report = json.loads(path.read_text())
+          assert report['schema'] == 'semantic-asr-ja-real-tuning-v4'
+          assert report['dataContract']['referenceBlindFeatureExtraction'] is True
+          assert report['dataContract']['rawAudioPersisted'] is False
+          assert report['dataContract']['rawReferencePersisted'] is False
+          assert report['dataContract']['rawHypothesisPersisted'] is False
+          assert report['dataContract']['lockedSetsUsedForSelection'] is False
+          assert report['priorRoundsExcluded']['overlapDetected'] is False
+          assert report['priorRoundsExcluded']['round3Samples'] == 156
+          assert report['iterations'][-1]['profileChangedAfterEvaluation'] is False
+          assert sum(item['sampleCount'] for item in report['datasets']) == 120
+          assert len(report['datasetFingerprint']) == 64
+          assert report['models']['secondEarWhisper'] == {
+              'id': 'kotoba-tech/kotoba-whisper-v2.0-faster',
+              'revision': 'f44edd35eaeb2274e85ac7b31fb2c6f59ff1c4bc',
+              'beamSize': 4,
+              'hypotheses': 4,
+              'computeType': 'int8',
+          }
+          selected = report['selectedProfile']
+          if selected['modelId'] is not None:
+              assert selected['secondMatchPolicy'] in {'top', 'any'}
+              locked = [report['metrics'][name] for name in ('reazon_test', 'jsut_test', 'external_test')]
+              assert all(item['absoluteCerReduction'] >= 0 for item in locked)
+              assert sum(item['harmfulFlips'] for item in locked) == 0
+              assert sum(item['helpfulFlips'] for item in locked) >= 2
+              assert report['promotionReady'] is True
+          else:
+              assert selected['configId'] == 'baseline'
+              assert report['promotionReady'] is False
+
+          forbidden_keys = {
+              'reference', 'transcript', 'hypothesis', 'text',
+              'audioPath', 'audioBytes', 'rawAudio', 'rawReference',
+          }
+          def visit(value):
+              if isinstance(value, dict):
+                  assert forbidden_keys.isdisjoint(value), forbidden_keys.intersection(value)
+                  for child in value.values():
+                      visit(child)
+              elif isinstance(value, list):
+                  for child in value:
+                      visit(child)
+          visit(report)
+          print(json.dumps({
+              'promotionReady': report['promotionReady'],
+              'selectedProfile': report['selectedProfile'],
+              'metrics': report['metrics'],
+              'selectionSummary': report['iterations'][3]['selectionSummary'],
+          }, ensure_ascii=False, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semantic-asr-ja-real-v4-report
+          path: /tmp/ja-real-v4-report.json
+          if-no-files-found: error
+          retention-days: 7
