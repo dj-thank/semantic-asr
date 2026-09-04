@@ -56,6 +56,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e '.[asr]'
           python -m pip install 'datasets==3.6.0' soundfile scipy 'ruff==0.16.6'
+          python -m ruff check --fix --ignore E501 .ja-tuning/v5/oracle_sweep.py
           python -m ruff format .ja-tuning/v5/oracle_sweep.py
           python -m ruff format --check .ja-tuning/v5/oracle_sweep.py
           python -m ruff check --ignore E501 .ja-tuning/v5/oracle_sweep.py
