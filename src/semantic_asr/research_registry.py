@@ -67,7 +67,7 @@ class ArchitectureTranslation:
 class ResearchRegistry:
     sources: tuple[ResearchSource, ...]
     translations: tuple[ArchitectureTranslation, ...]
-    version: str = "2026-09-02-v0.2.1"
+    version: str = "2026-09-04-v0.2.2"
     metadata: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -270,6 +270,14 @@ def default_research_registry() -> ResearchRegistry:
             notes="Retrieve a compact hotword set before decoding; hotwords remain prompt bias, never acoustic proof.",
         ),
         ResearchSource(
+            source_id="discrete-speech-token-surprisal",
+            title="Light-weight Pronunciation Assessment via Discrete Speech Token Surprisal",
+            status=SourceStatus.PINNED_PRIMARY,
+            primary_url="https://arxiv.org/abs/2606.19910",
+            publication="Interspeech 2026; arXiv:2606.19910v2",
+            notes="English pronunciation-assessment evidence only. Semantic ASR translates audio-only surprisal into a candidate-independent routing signal and same-codebook centroid DTW into experimental candidate evidence; no Japanese CER gain is claimed.",
+        ),
+        ResearchSource(
             source_id="glm-5.3",
             title="GLM 5.3 (user-provided model name)",
             status=SourceStatus.PROVISIONAL,
@@ -372,6 +380,20 @@ def default_research_registry() -> ResearchRegistry:
             implementation_paths=(
                 "src/semantic_asr/advanced_adapters.py",
                 "src/semantic_asr/mbr.py",
+            ),
+        ),
+        ArchitectureTranslation(
+            translation_id="discrete-unit-surprisal-and-centroid-dtw",
+            source_ids=("discrete-speech-token-surprisal",),
+            source_mechanism="Native discrete-token surprisal plus transcript-conditioned canonical-unit centroid DTW.",
+            semantic_asr_mechanism="Use audio-only surprisal only for evidence routing; rank existing ASR candidates with negative path-normalized centroid DTW in an exactly shared frozen unit space, while retaining the paper's additional mismatch/surprisal features for held-out fitting.",
+            kind=TranslationKind.EXPERIMENTAL_HYPOTHESIS,
+            claim_boundary="The source evaluates English pronunciation PCC, not Japanese ASR CER. HuBERT layer, codebook size and thresholds are not copied as Japanese defaults, and zero-shot ranking excludes candidate-independent surprisal.",
+            falsification_test="On frozen Japanese calibration/test manifests compare ASR-only, token-ID DTW, centroid DTW, held-out fitted transcript-guided features, and distractor/mismatched-codebook controls; report CER, semantic-critical error, selective risk, ECE/AURC, invocation rate and RTF.",
+            implementation_paths=(
+                "src/semantic_asr/discrete_units.py",
+                "src/semantic_asr/discrete_unit_alignment.py",
+                "src/semantic_asr/discrete_unit_ranker.py",
             ),
         ),
         ArchitectureTranslation(

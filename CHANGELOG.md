@@ -2,6 +2,7 @@
 
 ## Unreleased — 2026-09-02
 
+- Added research-only discrete-unit pronunciation evidence inspired by arXiv:2606.19910v2: frozen unit-space identity, native token surprisal for candidate-independent routing, same-codebook centroid DTW for zero-shot candidate ranking, optional transcript-guided features, bounded computation, and tamper-checked artifacts. No Japanese CER improvement or default enablement is claimed.
 - Bound facade effort profiles to the executed evidence budget and reject warm transcribers from a different profile.
 - Fixed runtime profile propagation: `cpu-ja-quality-v1` and `gpu-ja-v1` now send their declared beam/hypothesis counts to the base decoder instead of silently running the hard-coded 5/5 request; effective decode settings and immutable model revision are recorded in provenance.
 - Added a frozen, dependency-free `ContextCatalog` with deterministic lexical/reading retrieval, explicit no-bias abstention, catalog/query/cache binding, privacy-safe receipts, Python and CLI integration, and a distractor-aware promotion protocol.

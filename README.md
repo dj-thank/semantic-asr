@@ -52,6 +52,7 @@ v0.2で追加した主な機構:
 - [`docs/RERANKER_TRAINING.md`](docs/RERANKER_TRAINING.md)
 - [`docs/KOEMO_INTEGRATION.md`](docs/KOEMO_INTEGRATION.md)
 - [`docs/BENCHMARK_PROTOCOL.md`](docs/BENCHMARK_PROTOCOL.md)
+- [`docs/DISCRETE_UNIT_EVIDENCE.md`](docs/DISCRETE_UNIT_EVIDENCE.md)
 
 ## 設計原則
 
@@ -143,6 +144,12 @@ candidate mora query
 ```
 
 これはQwen3.8のsparse selection、Kimi K3のAttention Residuals/高疎MoE、GLM-5.3のmHCをASR証拠処理へ翻訳した研究設計です。各モデルの内部kernelやweightsを複製したという主張ではありません。
+
+### Discrete-unit pronunciation evidence（research-only）
+
+音声を固定SSL encoder／固定codebookの離散unit列へ変換し、native token LMのsurprisalを再検証ルーティングへ、同じcodebookでText2DUnitが予測した標準unit列とのcentroid DTWを候補別の音響証拠へ使う実験kernelを追加しました。audio-only surprisalは同一発話の全候補で共通なので候補rankingには加えません。zero-shot scoreは`-normalized_centroid_DTW`だけです。日本語CER改善は未計測で、既定では無効です。
+
+詳細な同一codebook条件、artifact固定、計算量guard、評価matrixは[`docs/DISCRETE_UNIT_EVIDENCE.md`](docs/DISCRETE_UNIT_EVIDENCE.md)を参照してください。
 
 ### Grammar Honeytrap
 
