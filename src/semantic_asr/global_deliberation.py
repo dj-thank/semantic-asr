@@ -1,4 +1,4 @@
-"""Complete-path decoding with hard acoustic-retention guards."""
+"""Complete-path decoding with finite factors and hard acoustic-retention guards."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from .deliberation_evidence import (
     DecisionStatus,
     ResolutionMode,
     UtilityChannel,
+    _is_sha256,
     _strict_float,
 )
 from .deliberation_lattice import (
@@ -22,7 +23,7 @@ from .deliberation_lattice import (
     LatticeArc,
     path_digest,
 )
-from .global_scorer import GlobalSequenceScorer
+from .global_scorer import GlobalPathScore, GlobalSequenceScorer
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +39,7 @@ class DeliberationPolicy:
     provisional_on_generated: bool = True
 
     def __post_init__(self) -> None:
-        if self.beam_size < 1:
+        if isinstance(self.beam_size, bool) or self.beam_size < 1:
             raise ValueError("beam_size must be positive")
         numeric = {
             "global_context_weight": self.global_context_weight,
@@ -61,12 +62,15 @@ class DeliberationPolicy:
         weights: list[tuple[UtilityChannel, float]] = []
         seen: set[str] = set()
         valid_channels = {
+            "first_pass",
             "asr_acoustic",
             "phone",
             "mora",
+            "mora_shadow",
             "discrete_unit",
             "lexical",
             "preservation",
+            "cross_model",
             "semantic",
             "transition",
         }
@@ -90,14 +94,17 @@ class DeliberationPolicy:
     def conservative_default(cls) -> DeliberationPolicy:
         return cls(
             channel_weights=(
+                ("first_pass", 0.85),
                 ("asr_acoustic", 1.0),
                 ("phone", 0.8),
                 ("mora", 0.8),
+                ("mora_shadow", 0.25),
                 ("discrete_unit", 0.5),
-                ("lexical", 0.2),
+                ("lexical", 0.15),
                 ("preservation", 0.5),
-                ("semantic", 0.3),
-                ("transition", 0.4),
+                ("cross_model", 0.45),
+                ("semantic", 0.25),
+                ("transition", 0.35),
             )
         )
 
@@ -120,6 +127,7 @@ class DeliberationPolicy:
                     self.require_independent_audio_for_generated
                 ),
                 "provisionalOnGenerated": self.provisional_on_generated,
+                "factorSemantics": "utility-value-times-factor-weight-v1",
             }
         )
 
@@ -131,12 +139,16 @@ class PathHypothesis:
     mean_audio_support: float
     context_score: float = 0.0
     final_score: float = 0.0
+    context_source: str | None = None
+    context_profile_digest: str | None = None
 
     def __post_init__(self) -> None:
         if not self.arcs:
             raise ValueError("path hypothesis requires at least one arc")
         if len({arc.span_id for arc in self.arcs}) != len(self.arcs):
             raise ValueError("path hypothesis may select only one arc per span")
+        if not self.text:
+            raise ValueError("a complete deliberation path must not be empty")
         for name in (
             "base_score",
             "mean_audio_support",
@@ -148,6 +160,12 @@ class PathHypothesis:
             raise ValueError("mean_audio_support must be in [-1, 1]")
         if not -1.0 <= self.context_score <= 1.0:
             raise ValueError("context_score must be in [-1, 1]")
+        if (self.context_source is None) != (self.context_profile_digest is None):
+            raise ValueError("context source and profile digest must be supplied together")
+        if self.context_profile_digest is not None and not _is_sha256(
+            self.context_profile_digest
+        ):
+            raise ValueError("context_profile_digest must be a SHA-256 value")
 
     @property
     def digest(self) -> str:
@@ -180,14 +198,55 @@ class GlobalDeliberationDecision:
     lattice_digest: str
     policy_digest: str
     context_digest: str
+    scorer_source: str | None = None
+    scorer_profile_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        margin = _strict_float(self.margin, name="decision margin")
+        if margin < 0.0:
+            raise ValueError("decision margin must be non-negative")
+        if (self.scorer_source is None) != (self.scorer_profile_digest is None):
+            raise ValueError("decision scorer source and profile must be supplied together")
+        if self.scorer_profile_digest is not None and not _is_sha256(
+            self.scorer_profile_digest
+        ):
+            raise ValueError("scorer_profile_digest must be a SHA-256 value")
+        object.__setattr__(self, "margin", margin)
 
     @property
     def observed_text(self) -> str:
         return self.selected.text
 
+    @property
+    def digest(self) -> str:
+        return sha256_json(
+            {
+                "selectedPathDigest": self.selected.digest,
+                "retainedPathDigest": self.retained.digest,
+                "alternativePathDigests": [path.digest for path in self.alternatives],
+                "selectedText": self.selected.text,
+                "status": self.status,
+                "margin": self.margin,
+                "resolutions": self.resolutions,
+                "reasons": self.reasons,
+                "latticeDigest": self.lattice_digest,
+                "policyDigest": self.policy_digest,
+                "contextDigest": self.context_digest,
+                "scorerSource": self.scorer_source,
+                "scorerProfileDigest": self.scorer_profile_digest,
+            }
+        )
+
 
 def _weighted_arc_score(arc: LatticeArc, weights: Mapping[UtilityChannel, float]) -> float:
-    return sum(weights.get(utility.channel, 0.0) * utility.value for utility in arc.utilities)
+    return sum(
+        weights.get(utility.channel, 0.0) * utility.weighted_value
+        for utility in arc.utilities
+    )
+
+
+def _arc_factor_weight(arc: LatticeArc) -> float:
+    return max((utility.factor_weight for utility in arc.utilities), default=0.0)
 
 
 def _audio_support(
@@ -195,9 +254,14 @@ def _audio_support(
     weights: Mapping[UtilityChannel, float],
 ) -> float | None:
     rows = [
-        (weights.get(utility.channel, 0.0), utility.value)
+        (
+            weights.get(utility.channel, 0.0) * utility.factor_weight,
+            utility.value,
+        )
         for utility in arc.utilities
-        if utility.channel in AUDIO_CHANNELS and weights.get(utility.channel, 0.0) > 0
+        if utility.channel in AUDIO_CHANNELS
+        and weights.get(utility.channel, 0.0) > 0
+        and utility.factor_weight > 0
     ]
     if not rows:
         return None
@@ -209,8 +273,16 @@ def _mean_audio_support(
     path: Sequence[LatticeArc],
     weights: Mapping[UtilityChannel, float],
 ) -> float:
-    values = [value for arc in path if (value := _audio_support(arc, weights)) is not None]
-    return sum(values) / len(values) if values else -1.0
+    rows = [
+        (_arc_factor_weight(arc), value)
+        for arc in path
+        if (value := _audio_support(arc, weights)) is not None
+        and _arc_factor_weight(arc) > 0
+    ]
+    if not rows:
+        return -1.0
+    total = sum(factor for factor, _ in rows)
+    return sum(factor * value for factor, value in rows) / total
 
 
 def _eligible_arcs(
@@ -249,6 +321,18 @@ def _transition_map(
     return {(row.left_arc_id, row.right_arc_id): row.utility for row in lattice.transitions}
 
 
+def _transition_score(
+    left: LatticeArc,
+    right: LatticeArc,
+    transitions: Mapping[tuple[str, str], BoundedUtility],
+    weights: Mapping[UtilityChannel, float],
+) -> float:
+    utility = transitions.get((left.arc_id, right.arc_id))
+    if utility is None:
+        return 0.0
+    return weights.get("transition", 0.0) * utility.weighted_value
+
+
 def _retained_path(
     lattice: DeliberationLattice,
     *,
@@ -260,11 +344,10 @@ def _retained_path(
     base = 0.0
     previous: LatticeArc | None = None
     for arc in arcs:
-        base += _weighted_arc_score(arc, weights) + policy.retention_bonus
+        base += _weighted_arc_score(arc, weights)
+        base += policy.retention_bonus * _arc_factor_weight(arc)
         if previous is not None:
-            transition = transitions.get((previous.arc_id, arc.arc_id))
-            if transition is not None:
-                base += weights.get("transition", 0.0) * transition.value
+            base += _transition_score(previous, arc, transitions, weights)
         previous = arc
     return PathHypothesis(
         arcs=arcs,
@@ -288,11 +371,9 @@ def _enumerate_base_paths(
             for arc in _eligible_arcs(span, policy=policy):
                 score = prefix_score + _weighted_arc_score(arc, weights)
                 if arc.arc_id == span.retained_arc_id:
-                    score += policy.retention_bonus
+                    score += policy.retention_bonus * _arc_factor_weight(arc)
                 if prefix:
-                    transition = transitions.get((prefix[-1].arc_id, arc.arc_id))
-                    if transition is not None:
-                        score += weights.get("transition", 0.0) * transition.value
+                    score += _transition_score(prefix[-1], arc, transitions, weights)
                 expanded.append((prefix + (arc,), score))
         expanded.sort(
             key=lambda row: (
@@ -309,6 +390,7 @@ def _enumerate_base_paths(
             final_score=score,
         )
         for arcs, score in beam
+        if any(arc.text for arc in arcs)
     )
 
 
@@ -323,6 +405,36 @@ def _resolution_mode(selected: LatticeArc, retained: LatticeArc) -> ResolutionMo
     if selected.origin in GENERATED_ORIGINS:
         return "acoustically-verified-proposal"
     return "acoustic-context-consensus"
+
+
+def _global_scores(
+    paths: Sequence[PathHypothesis],
+    scorer: GlobalSequenceScorer,
+    *,
+    context: DocumentContext,
+) -> tuple[dict[str, GlobalPathScore], str, str]:
+    score_many = getattr(scorer, "score_many", None)
+    if callable(score_many):
+        rows = tuple(score_many(tuple(path.arcs for path in paths), context=context))
+    else:
+        rows = tuple(scorer.score(path.arcs, context=context) for path in paths)
+    if len(rows) != len(paths):
+        raise ValueError("global sequence scorer returned the wrong number of path scores")
+    by_digest: dict[str, GlobalPathScore] = {}
+    for row in rows:
+        if row.context_digest != context.digest:
+            raise ValueError("global sequence score is bound to different context")
+        if row.path_digest in by_digest:
+            raise ValueError("global sequence scorer returned a duplicate path score")
+        by_digest[row.path_digest] = row
+    expected = {path.digest for path in paths}
+    if set(by_digest) != expected:
+        raise ValueError("global sequence scorer returned unknown or missing path scores")
+    sources = {row.source for row in rows}
+    profiles = {row.profile_digest for row in rows}
+    if len(sources) != 1 or len(profiles) != 1:
+        raise ValueError("one deliberation decision cannot mix global scorer identities")
+    return by_digest, next(iter(sources)), next(iter(profiles))
 
 
 def decode_global_lattice(
@@ -351,16 +463,20 @@ def decode_global_lattice(
     elif retained.digest not in {path.digest for path in guarded_paths}:
         guarded_paths.append(retained)
 
+    score_rows: dict[str, GlobalPathScore] = {}
+    scorer_source: str | None = None
+    scorer_profile: str | None = None
+    if sequence_scorer is not None:
+        score_rows, scorer_source, scorer_profile = _global_scores(
+            guarded_paths,
+            sequence_scorer,
+            context=context,
+        )
+
     rescored: list[PathHypothesis] = []
     for path in guarded_paths:
-        context_value = 0.0
-        if sequence_scorer is not None:
-            score = sequence_scorer.score(path.arcs, context=context)
-            if score.path_digest != path.digest:
-                raise ValueError("global sequence score is bound to a different path")
-            if score.context_digest != context.digest:
-                raise ValueError("global sequence score is bound to different context")
-            context_value = score.value
+        row = score_rows.get(path.digest)
+        context_value = 0.0 if row is None else row.value
         final = path.base_score + policy.global_context_weight * context_value
         rescored.append(
             PathHypothesis(
@@ -369,6 +485,8 @@ def decode_global_lattice(
                 mean_audio_support=path.mean_audio_support,
                 context_score=context_value,
                 final_score=final,
+                context_source=None if row is None else row.source,
+                context_profile_digest=None if row is None else row.profile_digest,
             )
         )
     rescored.sort(
@@ -431,4 +549,6 @@ def decode_global_lattice(
         lattice_digest=lattice.digest,
         policy_digest=policy.digest,
         context_digest=context.digest,
+        scorer_source=scorer_source,
+        scorer_profile_digest=scorer_profile,
     )

@@ -1,21 +1,24 @@
-"""Typed held-out-normalized evidence for multi-level ASR deliberation."""
+"""Typed, held-out-normalized evidence for multi-level ASR deliberation."""
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from .contracts import sha256_json
 from .score_semantics import EvidenceScore, ScoreKind
 
 UtilityChannel = Literal[
+    "first_pass",
     "asr_acoustic",
     "phone",
     "mora",
+    "mora_shadow",
     "discrete_unit",
     "lexical",
     "preservation",
+    "cross_model",
     "semantic",
     "transition",
 ]
@@ -34,9 +37,15 @@ ResolutionMode = Literal[
 ]
 DecisionStatus = Literal["accepted", "provisional"]
 
-AUDIO_CHANNELS = frozenset({"asr_acoustic", "phone", "mora", "discrete_unit"})
+# ``mora`` is reserved for an audio-to-mora posterior head. Existing candidate-derived mora
+# features are represented by ``mora_shadow`` and therefore cannot authenticate generated text.
+AUDIO_CHANNELS = frozenset(
+    {"asr_acoustic", "phone", "mora", "discrete_unit", "cross_model"}
+)
 INDEPENDENT_AUDIO_CHANNELS = frozenset({"phone", "mora", "discrete_unit"})
-GENERATED_ORIGINS = frozenset({"phonetic-proposal", "context-proposal", "guarded-generation"})
+GENERATED_ORIGINS = frozenset(
+    {"phonetic-proposal", "context-proposal", "guarded-generation"}
+)
 
 
 def _strict_float(value: object, *, name: str) -> float:
@@ -77,25 +86,37 @@ def _evidence_digest(score: EvidenceScore) -> str:
 
 @dataclass(frozen=True, slots=True)
 class BoundedUtility:
-    """A dimensionless held-out-normalized utility, not a probability."""
+    """Dimensionless held-out-normalized path utility, never a correctness probability.
+
+    ``factor_weight`` allocates a finite evidence budget across local spans. A whole-hypothesis
+    score projected into ten spans must not count ten times; the builder makes the corresponding
+    factor weights sum to at most one for each projected evidence family.
+    """
 
     channel: UtilityChannel
     value: float
     source: str
     profile_digest: str
     input_digest: str
+    factor_weight: float = 1.0
 
     def __post_init__(self) -> None:
         value = _strict_float(self.value, name="bounded utility")
+        factor_weight = _strict_float(self.factor_weight, name="factor_weight")
         if not -1.0 <= value <= 1.0:
             raise ValueError("bounded utility must be in [-1, 1]")
+        if not 0.0 <= factor_weight <= 1.0:
+            raise ValueError("factor_weight must be in [0, 1]")
         if self.channel not in {
+            "first_pass",
             "asr_acoustic",
             "phone",
             "mora",
+            "mora_shadow",
             "discrete_unit",
             "lexical",
             "preservation",
+            "cross_model",
             "semantic",
             "transition",
         }:
@@ -104,6 +125,15 @@ class BoundedUtility:
             raise ValueError("bounded utility source is required")
         if not _is_sha256(self.profile_digest) or not _is_sha256(self.input_digest):
             raise ValueError("bounded utility digests must be SHA-256 values")
+        object.__setattr__(self, "value", value)
+        object.__setattr__(self, "factor_weight", factor_weight)
+
+    @property
+    def weighted_value(self) -> float:
+        return self.value * self.factor_weight
+
+    def with_factor_weight(self, value: float) -> BoundedUtility:
+        return replace(self, factor_weight=value)
 
     @property
     def digest(self) -> str:
@@ -114,6 +144,7 @@ class BoundedUtility:
                 "source": self.source,
                 "profileDigest": self.profile_digest,
                 "inputDigest": self.input_digest,
+                "factorWeight": self.factor_weight,
             }
         )
 
@@ -122,8 +153,8 @@ class BoundedUtility:
 class UtilityCalibrationProfile:
     """Frozen affine+tanh mapping fitted on held-out data.
 
-    This mapping only puts heterogeneous scores on a bounded utility scale. It does not turn a
-    log likelihood, raw score or preference into a correctness probability.
+    The mapping only puts heterogeneous scores on a bounded utility scale. It does not turn a log
+    likelihood, raw score or preference into a correctness probability.
     """
 
     channel: UtilityChannel
@@ -165,7 +196,12 @@ class UtilityCalibrationProfile:
             }
         )
 
-    def transform(self, score: EvidenceScore) -> BoundedUtility:
+    def transform(
+        self,
+        score: EvidenceScore,
+        *,
+        factor_weight: float = 1.0,
+    ) -> BoundedUtility:
         if score.source != self.score_source:
             raise ValueError("score source does not match the frozen calibration profile")
         if score.kind != self.score_kind:
@@ -181,4 +217,5 @@ class UtilityCalibrationProfile:
             source=f"{self.score_source}:{self.revision}",
             profile_digest=self.digest,
             input_digest=_evidence_digest(score),
+            factor_weight=factor_weight,
         )

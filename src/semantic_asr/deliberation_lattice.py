@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from .contracts import sha256_json
 from .deliberation_evidence import (
+    GENERATED_ORIGINS,
     INDEPENDENT_AUDIO_CHANNELS,
     ArcOrigin,
     BoundedUtility,
     UtilityChannel,
     _is_sha256,
+    _strict_float,
 )
 
 
@@ -25,11 +29,18 @@ class LatticeArc:
     observed_eligible: bool = True
     pronunciation_key: str | None = None
     source_candidate_ids: tuple[str, ...] = ()
+    source_audio_sha256: str | None = None
+    is_epsilon: bool = False
     metadata: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.arc_id or not self.span_id or not self.text:
-            raise ValueError("lattice arc requires arc_id, span_id and text")
+        if not self.arc_id or not self.span_id:
+            raise ValueError("lattice arc requires arc_id and span_id")
+        if self.is_epsilon:
+            if self.text:
+                raise ValueError("epsilon lattice arcs must have empty text")
+        elif not self.text:
+            raise ValueError("empty lattice arc text must be explicitly marked epsilon")
         if self.origin not in {
             "first-pass",
             "phonetic-proposal",
@@ -43,6 +54,8 @@ class LatticeArc:
             raise ValueError("a lattice arc may contain at most one utility per channel")
         if self.pronunciation_key is not None and not self.pronunciation_key:
             raise ValueError("pronunciation_key must be non-empty when supplied")
+        if self.source_audio_sha256 is not None and not _is_sha256(self.source_audio_sha256):
+            raise ValueError("source_audio_sha256 must be a SHA-256 value")
         object.__setattr__(
             self,
             "utilities",
@@ -61,7 +74,11 @@ class LatticeArc:
 
     @property
     def independent_audio_channels(self) -> frozenset[str]:
-        return frozenset(self.utility_map).intersection(INDEPENDENT_AUDIO_CHANNELS)
+        return frozenset(
+            utility.channel
+            for utility in self.utilities
+            if utility.factor_weight > 0.0
+        ).intersection(INDEPENDENT_AUDIO_CHANNELS)
 
     @property
     def digest(self) -> str:
@@ -75,6 +92,8 @@ class LatticeArc:
                 "observedEligible": self.observed_eligible,
                 "pronunciationKey": self.pronunciation_key,
                 "sourceCandidateIds": self.source_candidate_ids,
+                "sourceAudioSha256": self.source_audio_sha256,
+                "isEpsilon": self.is_epsilon,
                 "metadata": self.metadata,
             }
         )
@@ -88,6 +107,7 @@ class DeliberationSpan:
     end_ms: int
     arcs: tuple[LatticeArc, ...]
     retained_arc_id: str
+    metadata: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.span_id or self.index < 0:
@@ -106,6 +126,7 @@ class DeliberationSpan:
             raise ValueError("retained_arc_id is absent from the span") from exc
         if retained.origin != "first-pass":
             raise ValueError("the retained arc must be a first-pass ASR arc")
+        object.__setattr__(self, "metadata", dict(self.metadata))
 
     def arc(self, arc_id: str) -> LatticeArc:
         for arc in self.arcs:
@@ -116,6 +137,20 @@ class DeliberationSpan:
     @property
     def retained_arc(self) -> LatticeArc:
         return self.arc(self.retained_arc_id)
+
+    @property
+    def digest(self) -> str:
+        return sha256_json(
+            {
+                "spanId": self.span_id,
+                "index": self.index,
+                "startMs": self.start_ms,
+                "endMs": self.end_ms,
+                "retainedArcId": self.retained_arc_id,
+                "arcDigests": [arc.digest for arc in self.arcs],
+                "metadata": self.metadata,
+            }
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,12 +177,50 @@ class TransitionUtility:
 
 
 @dataclass(frozen=True, slots=True)
+class SourcePath:
+    """One exact first-pass hypothesis projected through every lattice span."""
+
+    candidate_id: str
+    arc_ids: tuple[str, ...]
+    text_sha256: str
+    posterior: float
+    metadata: dict[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.candidate_id or not self.arc_ids:
+            raise ValueError("source path requires candidate_id and arc_ids")
+        if len(self.arc_ids) != len(set(self.arc_ids)):
+            raise ValueError("source path arc IDs must be unique")
+        if not _is_sha256(self.text_sha256):
+            raise ValueError("source path text_sha256 must be a SHA-256 value")
+        posterior = _strict_float(self.posterior, name="source path posterior")
+        if not 0.0 <= posterior <= 1.0:
+            raise ValueError("source path posterior must be in [0, 1]")
+        object.__setattr__(self, "posterior", posterior)
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+    @property
+    def digest(self) -> str:
+        return sha256_json(
+            {
+                "candidateId": self.candidate_id,
+                "arcIds": self.arc_ids,
+                "textSha256": self.text_sha256,
+                "posterior": self.posterior,
+                "metadata": self.metadata,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class DeliberationLattice:
     document_id: str
     source_audio_sha256: str
     spans: tuple[DeliberationSpan, ...]
     transitions: tuple[TransitionUtility, ...] = ()
-    schema_version: str = "1"
+    source_paths: tuple[SourcePath, ...] = ()
+    metadata: dict[str, object] = field(default_factory=dict)
+    schema_version: str = "2"
 
     def __post_init__(self) -> None:
         if not self.document_id:
@@ -159,7 +232,7 @@ class DeliberationLattice:
         if tuple(span.index for span in self.spans) != tuple(range(len(self.spans))):
             raise ValueError("deliberation span indexes must be contiguous from zero")
         previous_end = -1
-        all_arcs: dict[str, int] = {}
+        all_arcs: dict[str, tuple[int, LatticeArc]] = {}
         for span in self.spans:
             if span.start_ms < previous_end:
                 raise ValueError("deliberation spans must be ordered and non-overlapping")
@@ -167,7 +240,22 @@ class DeliberationLattice:
             for arc in span.arcs:
                 if arc.arc_id in all_arcs:
                     raise ValueError("lattice arc IDs must be globally unique")
-                all_arcs[arc.arc_id] = span.index
+                if (
+                    arc.source_audio_sha256 is not None
+                    and arc.source_audio_sha256 != self.source_audio_sha256
+                ):
+                    raise ValueError("lattice arc is bound to a different source audio")
+                if (
+                    arc.origin in GENERATED_ORIGINS
+                    and arc.observed_eligible
+                    and arc.independent_audio_channels
+                    and arc.source_audio_sha256 != self.source_audio_sha256
+                ):
+                    raise ValueError(
+                        "acoustically verified generated arcs must bind the source-audio SHA-256"
+                    )
+                all_arcs[arc.arc_id] = (span.index, arc)
+
         seen_transitions: set[tuple[str, str]] = set()
         for transition in self.transitions:
             key = (transition.left_arc_id, transition.right_arc_id)
@@ -175,12 +263,44 @@ class DeliberationLattice:
                 raise ValueError("duplicate transition utility")
             seen_transitions.add(key)
             try:
-                left_index = all_arcs[transition.left_arc_id]
-                right_index = all_arcs[transition.right_arc_id]
+                left_index = all_arcs[transition.left_arc_id][0]
+                right_index = all_arcs[transition.right_arc_id][0]
             except KeyError as exc:
                 raise ValueError("transition references an unknown arc") from exc
             if right_index != left_index + 1:
                 raise ValueError("transition utilities may only connect adjacent spans")
+
+        if len({path.candidate_id for path in self.source_paths}) != len(self.source_paths):
+            raise ValueError("source path candidate IDs must be unique")
+        for path in self.source_paths:
+            if len(path.arc_ids) != len(self.spans):
+                raise ValueError("every source path must select one arc from every span")
+            text: list[str] = []
+            for span_index, arc_id in enumerate(path.arc_ids):
+                try:
+                    actual_index, arc = all_arcs[arc_id]
+                except KeyError as exc:
+                    raise ValueError("source path references an unknown arc") from exc
+                if actual_index != span_index:
+                    raise ValueError("source path arc order does not match lattice span order")
+                if path.candidate_id not in arc.source_candidate_ids:
+                    raise ValueError("source path uses an arc that does not support its candidate")
+                text.append(arc.text)
+            digest = hashlib.sha256("".join(text).encode("utf-8")).hexdigest()
+            if digest != path.text_sha256:
+                raise ValueError("source path does not reconstruct its exact candidate text")
+        if self.source_paths:
+            total = sum(path.posterior for path in self.source_paths)
+            if not math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-6):
+                raise ValueError("source path posteriors must sum to one")
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+    def arc(self, arc_id: str) -> LatticeArc:
+        for span in self.spans:
+            for arc in span.arcs:
+                if arc.arc_id == arc_id:
+                    return arc
+        raise KeyError(arc_id)
 
     @property
     def digest(self) -> str:
@@ -189,18 +309,10 @@ class DeliberationLattice:
                 "schemaVersion": self.schema_version,
                 "documentId": self.document_id,
                 "sourceAudioSha256": self.source_audio_sha256,
-                "spans": [
-                    {
-                        "spanId": span.span_id,
-                        "index": span.index,
-                        "startMs": span.start_ms,
-                        "endMs": span.end_ms,
-                        "retainedArcId": span.retained_arc_id,
-                        "arcDigests": [arc.digest for arc in span.arcs],
-                    }
-                    for span in self.spans
-                ],
+                "spanDigests": [span.digest for span in self.spans],
                 "transitionDigests": [row.digest for row in self.transitions],
+                "sourcePathDigests": [path.digest for path in self.source_paths],
+                "metadata": self.metadata,
             }
         )
 

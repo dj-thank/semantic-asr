@@ -16,6 +16,7 @@ from .deliberation_lattice import (
     DeliberationSpan,
     DocumentContext,
     LatticeArc,
+    SourcePath,
     TransitionUtility,
     path_digest,
 )
@@ -28,6 +29,7 @@ from .global_deliberation import (
 )
 from .global_scorer import (
     CallableGlobalSequenceScorer,
+    GlobalBatchSequenceScorer,
     GlobalPathScore,
     GlobalSequenceScorer,
     frozen_profile_digest,
@@ -45,12 +47,14 @@ __all__ = [
     "DeliberationPolicy",
     "DeliberationSpan",
     "DocumentContext",
+    "GlobalBatchSequenceScorer",
     "GlobalDeliberationDecision",
     "GlobalPathScore",
     "GlobalSequenceScorer",
     "LatticeArc",
     "PathHypothesis",
     "ResolutionMode",
+    "SourcePath",
     "SpanResolution",
     "TransitionUtility",
     "UtilityCalibrationProfile",

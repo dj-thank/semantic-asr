@@ -17,7 +17,12 @@ from difflib import SequenceMatcher
 from typing import Literal
 
 from .contracts import CandidateEvidence, sha256_json
-from .deliberation_evidence import BoundedUtility, INDEPENDENT_AUDIO_CHANNELS
+from .deliberation_evidence import (
+    INDEPENDENT_AUDIO_CHANNELS,
+    BoundedUtility,
+    UtilityChannel,
+    _is_sha256,
+)
 from .deliberation_lattice import (
     DeliberationLattice,
     DeliberationSpan,
@@ -69,32 +74,54 @@ def _softmax(values: Mapping[str, float], *, temperature: float) -> dict[str, fl
     numeric: dict[str, float] = {}
     for key, value in values.items():
         if isinstance(value, bool):
-            raise TypeError("acoustic scores must be real numbers")
+            raise TypeError("evidence scores must be real numbers")
         number = float(value)
         if not math.isfinite(number):
-            raise ValueError("acoustic scores must be finite")
+            raise ValueError("evidence scores must be finite")
         numeric[key] = number
     maximum = max(numeric.values())
     exponentials = {
-        key: math.exp((value - maximum) / temperature) for key, value in numeric.items()
+        key: math.exp(max(-80.0, min(80.0, (value - maximum) / temperature)))
+        for key, value in numeric.items()
     }
-    total = sum(exponentials.values())
+    total = sum(exponentials.values()) or 1.0
     return {key: value / total for key, value in exponentials.items()}
 
 
-def _candidate_acoustic_distribution(
+def _candidate_relative_distributions(
     candidates: Sequence[CandidateEvidence],
     *,
-    temperature: float,
-) -> tuple[str, dict[str, float]] | None:
+    acoustic_temperature: float,
+    stream_temperature: float,
+) -> dict[UtilityChannel, tuple[str, dict[str, float]]]:
+    output: dict[UtilityChannel, tuple[str, dict[str, float]]] = {}
     for field_name in ("acoustic", "avg_logprob", "sequence_score"):
         values = {candidate.candidate_id: getattr(candidate, field_name) for candidate in candidates}
         if all(value is not None for value in values.values()):
-            return field_name, _softmax(
-                {candidate_id: float(value) for candidate_id, value in values.items()},
-                temperature=temperature,
+            output["asr_acoustic"] = (
+                field_name,
+                _softmax(
+                    {candidate_id: float(value) for candidate_id, value in values.items()},
+                    temperature=acoustic_temperature,
+                ),
             )
-    return None
+            break
+    for channel, field_name in (
+        ("mora_shadow", "mora"),
+        ("lexical", "lexical"),
+        ("preservation", "preservation"),
+        ("cross_model", "cross_model"),
+    ):
+        values = {candidate.candidate_id: getattr(candidate, field_name) for candidate in candidates}
+        if all(value is not None for value in values.values()):
+            output[channel] = (
+                field_name,
+                _softmax(
+                    {candidate_id: float(value) for candidate_id, value in values.items()},
+                    temperature=stream_temperature,
+                ),
+            )
+    return output
 
 
 def _bounded_mass(mass: float) -> float:
@@ -106,6 +133,8 @@ def _profile_digest(kind: str, payload: Mapping[str, object]) -> str:
 
 
 def _pronunciation_key(candidates: Sequence[CandidateEvidence]) -> str | None:
+    """Return a key only when every supporting full candidate has one identical reading."""
+
     values: set[str] = set()
     for candidate in candidates:
         if candidate.mora_units:
@@ -113,7 +142,7 @@ def _pronunciation_key(candidates: Sequence[CandidateEvidence]) -> str | None:
         elif candidate.reading:
             units = tuple(candidate.reading)
         else:
-            continue
+            return None
         values.add(sha256_json({"kind": "candidate-pronunciation-v1", "units": units}))
     return next(iter(values)) if len(values) == 1 else None
 
@@ -125,7 +154,7 @@ class ProjectedCandidate:
     span_texts: tuple[tuple[str, str], ...]
 
     def __post_init__(self) -> None:
-        if not self.candidate_id or len(self.source_text_sha256) != 64:
+        if not self.candidate_id or not _is_sha256(self.source_text_sha256):
             raise ValueError("projected candidate requires an ID and source-text SHA-256")
         if not self.span_texts:
             raise ValueError("projected candidate requires at least one span")
@@ -147,6 +176,7 @@ class VerifiedSpanProposal:
     proposal_id: str
     text: str
     utilities: tuple[BoundedUtility, ...]
+    source_audio_sha256: str
     origin: ProposalOrigin = "phonetic-proposal"
     pronunciation_key: str | None = None
     source_candidate_ids: tuple[str, ...] = ()
@@ -162,6 +192,8 @@ class VerifiedSpanProposal:
             "guarded-generation",
         }:
             raise ValueError("verified span proposal has an invalid origin")
+        if not _is_sha256(self.source_audio_sha256):
+            raise ValueError("verified span proposal requires source-audio SHA-256")
         channels = [utility.channel for utility in self.utilities]
         if len(channels) != len(set(channels)):
             raise ValueError("proposal utility channels must be unique")
@@ -189,6 +221,7 @@ class VerifiedSpanProposal:
                 "text": self.text,
                 "origin": self.origin,
                 "utilityDigests": [utility.digest for utility in self.utilities],
+                "sourceAudioSha256": self.source_audio_sha256,
                 "pronunciationKey": self.pronunciation_key,
                 "sourceCandidateIds": self.source_candidate_ids,
                 "observedEligible": self.observed_eligible,
@@ -200,6 +233,7 @@ class VerifiedSpanProposal:
 @dataclass(frozen=True, slots=True)
 class SemanticDeliberationConfig:
     acoustic_temperature: float = 1.0
+    stream_temperature: float = 1.0
     transition_temperature: float = 1.0
     transition_epsilon: float = 1e-9
     include_consensus_utilities: bool = False
@@ -207,6 +241,7 @@ class SemanticDeliberationConfig:
     def __post_init__(self) -> None:
         for name in (
             "acoustic_temperature",
+            "stream_temperature",
             "transition_temperature",
             "transition_epsilon",
         ):
@@ -223,11 +258,13 @@ class SemanticDeliberationConfig:
         return sha256_json(
             {
                 "acousticTemperature": self.acoustic_temperature,
+                "streamTemperature": self.stream_temperature,
                 "transitionTemperature": self.transition_temperature,
                 "transitionEpsilon": self.transition_epsilon,
                 "includeConsensusUtilities": self.include_consensus_utilities,
-                "projection": "union-edit-boundaries-with-forward-insertions-v1",
+                "projection": "union-edit-boundaries-with-forward-insertions-v2",
                 "factorBudget": "normalized-ambiguity-criticality-width-v1",
+                "moraSemantics": "candidate-derived-mora-is-mora-shadow-v1",
             }
         )
 
@@ -242,7 +279,7 @@ class SemanticDeliberationBuild:
     proposal_digests: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if len(self.config_digest) != 64:
+        if not _is_sha256(self.config_digest):
             raise ValueError("config_digest must be a SHA-256 value")
         if len({candidate_id for candidate_id, _ in self.candidate_posteriors}) != len(
             self.candidate_posteriors
@@ -378,9 +415,7 @@ def _alignments(
     alignments: dict[str, _CandidateAlignment] = {}
     for candidate in candidates:
         units = tuple(candidate.text)
-        opcodes = tuple(
-            SequenceMatcher(a=pivot_units, b=units, autojunk=False).get_opcodes()
-        )
+        opcodes = tuple(SequenceMatcher(a=pivot_units, b=units, autojunk=False).get_opcodes())
         for _tag, start, end, _candidate_start, _candidate_end in opcodes:
             boundaries.update((start, end))
         alignments[candidate.candidate_id] = _CandidateAlignment(
@@ -428,27 +463,28 @@ def _timeline_time_boundaries(
     end_ms: int,
     pivot_timeline: Sequence[tuple[int, int, int, int]],
 ) -> tuple[tuple[tuple[int, int], ...], str]:
+    fallback = (
+        _proportional_time_boundaries(
+            intervals,
+            pivot_length=pivot_length,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        ),
+        "proportional-surface",
+    )
     rows = tuple(pivot_timeline)
     if not rows:
-        return (
-            _proportional_time_boundaries(
-                intervals,
-                pivot_length=pivot_length,
-                start_ms=start_ms,
-                end_ms=end_ms,
-            ),
-            "proportional-surface",
-        )
+        return fallback
     previous_char_end = 0
     previous_time_end = start_ms
     boundary_times = {0: start_ms, pivot_length: end_ms}
     for char_start, char_end, time_start, time_end in rows:
         if not (0 <= char_start < char_end <= pivot_length):
-            raise ValueError("pivot timeline character range is invalid")
+            return fallback
         if not (start_ms <= time_start < time_end <= end_ms):
-            raise ValueError("pivot timeline time range is invalid")
+            return fallback
         if char_start != previous_char_end or time_start < previous_time_end:
-            raise ValueError("pivot timeline must be contiguous and monotonic")
+            return fallback
         width = char_end - char_start
         for offset in range(width + 1):
             boundary_times[char_start + offset] = time_start + round(
@@ -457,15 +493,7 @@ def _timeline_time_boundaries(
         previous_char_end = char_end
         previous_time_end = time_end
     if previous_char_end != pivot_length:
-        return (
-            _proportional_time_boundaries(
-                intervals,
-                pivot_length=pivot_length,
-                start_ms=start_ms,
-                end_ms=end_ms,
-            ),
-            "proportional-surface",
-        )
+        return fallback
     times: list[tuple[int, int]] = []
     previous = start_ms
     for index, (left, right) in enumerate(intervals):
@@ -507,7 +535,7 @@ def _factor_weights(
 
 def _utility(
     *,
-    channel: str,
+    channel: UtilityChannel,
     value: float,
     source: str,
     profile_digest: str,
@@ -515,7 +543,7 @@ def _utility(
     factor_weight: float,
 ) -> BoundedUtility:
     return BoundedUtility(
-        channel=channel,  # type: ignore[arg-type]
+        channel=channel,
         value=value,
         source=source,
         profile_digest=profile_digest,
@@ -529,9 +557,10 @@ def _base_arc_groups(
     texts: Mapping[str, str],
     candidates_by_id: Mapping[str, CandidateEvidence],
     posterior: Mapping[str, float],
-    acoustic: tuple[str, Mapping[str, float]] | None,
+    distributions: Mapping[UtilityChannel, tuple[str, Mapping[str, float]]],
     *,
     retained_candidate_id: str,
+    source_audio_sha256: str,
     semantic_kinds: tuple[str, ...],
     semantic_criticality: float,
     ambiguity: float,
@@ -545,14 +574,6 @@ def _base_arc_groups(
         "first-pass-local-surface-marginal",
         {"configDigest": config.digest},
     )
-    acoustic_profile = _profile_digest(
-        "candidate-acoustic-local-surface-marginal",
-        {
-            "temperature": config.acoustic_temperature,
-            "configDigest": config.digest,
-            "sourceField": None if acoustic is None else acoustic[0],
-        },
-    )
     retained_text = texts[retained_candidate_id]
     arcs: list[LatticeArc] = []
     for text, candidate_ids in sorted(
@@ -562,6 +583,7 @@ def _base_arc_groups(
         support = tuple(sorted(candidate_ids))
         local_posterior = sum(posterior[candidate_id] for candidate_id in support)
         utilities: list[BoundedUtility] = []
+        local_masses: dict[str, float] = {}
         if factor_weight > 0.0:
             utilities.append(
                 _utility(
@@ -580,23 +602,29 @@ def _base_arc_groups(
                     factor_weight=factor_weight,
                 )
             )
-        local_acoustic: float | None = None
-        if acoustic is not None:
-            source_field, acoustic_values = acoustic
-            local_acoustic = sum(acoustic_values[candidate_id] for candidate_id in support)
-            if factor_weight > 0.0:
+            for channel, (field_name, values) in distributions.items():
+                local_mass = sum(values[candidate_id] for candidate_id in support)
+                local_masses[channel] = local_mass
+                profile = _profile_digest(
+                    f"candidate-{field_name}-local-surface-marginal",
+                    {
+                        "configDigest": config.digest,
+                        "sourceField": field_name,
+                        "channel": channel,
+                    },
+                )
                 utilities.append(
                     _utility(
-                        channel="asr_acoustic",
-                        value=_bounded_mass(local_acoustic),
-                        source=f"candidate-{source_field}-local-softmax-v1",
-                        profile_digest=acoustic_profile,
+                        channel=channel,
+                        value=_bounded_mass(local_mass),
+                        source=f"candidate-{field_name}-local-softmax-v1",
+                        profile_digest=profile,
                         payload={
                             "spanId": span_id,
                             "surface": text,
                             "support": support,
-                            "candidateAcousticMass": tuple(
-                                (candidate_id, acoustic_values[candidate_id])
+                            "candidateMass": tuple(
+                                (candidate_id, values[candidate_id])
                                 for candidate_id in support
                             ),
                         },
@@ -615,10 +643,11 @@ def _base_arc_groups(
                 observed_eligible=True,
                 pronunciation_key=_pronunciation_key(supporting_candidates),
                 source_candidate_ids=support,
+                source_audio_sha256=source_audio_sha256,
                 is_epsilon=not text,
                 metadata={
                     "localPosteriorMass": local_posterior,
-                    "localAcousticMass": local_acoustic,
+                    "localEvidenceMasses": local_masses,
                     "semanticKinds": semantic_kinds,
                     "semanticCriticality": semantic_criticality,
                     "posteriorAmbiguity": ambiguity,
@@ -633,9 +662,21 @@ def _base_arc_groups(
 def _merge_proposals(
     span: DeliberationSpan,
     proposals: Sequence[VerifiedSpanProposal],
+    *,
+    source_audio_sha256: str,
 ) -> DeliberationSpan:
+    if not proposals:
+        return span
+    factor_weight = float(span.metadata.get("factorWeight", 0.0))
+    if factor_weight <= 0.0:
+        raise ValueError("verified proposals may only target an active deliberation span")
     arcs = list(span.arcs)
     for proposal in proposals:
+        if proposal.source_audio_sha256 != source_audio_sha256:
+            raise ValueError("verified proposal is bound to different source audio")
+        bound_utilities = tuple(
+            utility.with_factor_weight(factor_weight) for utility in proposal.utilities
+        )
         matching_index = next(
             (index for index, arc in enumerate(arcs) if arc.text == proposal.text),
             None,
@@ -647,21 +688,23 @@ def _merge_proposals(
                     span_id=span.span_id,
                     text=proposal.text,
                     origin=proposal.origin,
-                    utilities=proposal.utilities,
+                    utilities=bound_utilities,
                     observed_eligible=proposal.observed_eligible,
                     pronunciation_key=proposal.pronunciation_key,
                     source_candidate_ids=proposal.source_candidate_ids,
+                    source_audio_sha256=proposal.source_audio_sha256,
                     is_epsilon=not proposal.text,
                     metadata={
                         **proposal.metadata,
                         "proposalDigest": proposal.digest,
+                        "factorWeight": factor_weight,
                     },
                 )
             )
             continue
         current = arcs[matching_index]
         merged = {utility.channel: utility for utility in current.utilities}
-        for utility in proposal.utilities:
+        for utility in bound_utilities:
             existing = merged.get(utility.channel)
             if existing is not None and existing.digest != utility.digest:
                 raise ValueError(
@@ -681,6 +724,7 @@ def _merge_proposals(
             utilities=tuple(merged.values()),
             pronunciation_key=current.pronunciation_key or proposal.pronunciation_key,
             source_candidate_ids=source_ids,
+            source_audio_sha256=proposal.source_audio_sha256,
             metadata=metadata,
         )
     return replace(span, arcs=tuple(arcs))
@@ -706,11 +750,15 @@ def _transition_utilities(
     rows: list[TransitionUtility] = []
     for left_span, right_span in zip(spans, spans[1:], strict=False):
         for left in left_span.arcs:
+            if left.origin != "first-pass":
+                continue
             left_ids = set(left.source_candidate_ids)
             if not left_ids:
                 continue
             left_mass = sum(posterior[candidate_id] for candidate_id in left_ids)
             for right in right_span.arcs:
+                if right.origin != "first-pass":
+                    continue
                 right_ids = set(right.source_candidate_ids)
                 if not right_ids:
                     continue
@@ -831,6 +879,8 @@ def build_semantic_deliberation_lattice(
     config = config or SemanticDeliberationConfig()
     if not candidates:
         raise ValueError("semantic deliberation requires at least one candidate")
+    if not _is_sha256(source_audio_sha256):
+        raise ValueError("source_audio_sha256 must be a SHA-256 value")
     candidates_by_id = {candidate.candidate_id: candidate for candidate in candidates}
     if len(candidates_by_id) != len(candidates):
         raise ValueError("candidate IDs must be unique")
@@ -840,9 +890,10 @@ def build_semantic_deliberation_lattice(
         raise ValueError("pivot_candidate_id is absent from candidates") from exc
     candidate_ids = tuple(candidate.candidate_id for candidate in candidates)
     normalized_posterior = _normalize_distribution(candidate_ids, posterior)
-    acoustic_distribution = _candidate_acoustic_distribution(
+    distributions = _candidate_relative_distributions(
         candidates,
-        temperature=config.acoustic_temperature,
+        acoustic_temperature=config.acoustic_temperature,
+        stream_temperature=config.stream_temperature,
     )
     plans = _span_plans(
         candidates,
@@ -862,6 +913,10 @@ def build_semantic_deliberation_lattice(
     }
     spans: list[DeliberationSpan] = []
     proposal_digests: list[str] = []
+    expected_span_ids = {f"{document_id}:span:{plan.index:04d}" for plan in plans}
+    unknown_proposal_spans = set(proposals or {}) - expected_span_ids
+    if unknown_proposal_spans:
+        raise ValueError(f"proposals reference unknown spans: {sorted(unknown_proposal_spans)}")
     for plan in plans:
         span_id = f"{document_id}:span:{plan.index:04d}"
         texts = plan.text_map
@@ -872,8 +927,9 @@ def build_semantic_deliberation_lattice(
             texts,
             candidates_by_id,
             normalized_posterior,
-            acoustic_distribution,
+            distributions,
             retained_candidate_id=pivot_candidate_id,
+            source_audio_sha256=source_audio_sha256,
             semantic_kinds=plan.semantic_kinds,
             semantic_criticality=plan.semantic_criticality,
             ambiguity=plan.posterior_ambiguity,
@@ -906,7 +962,13 @@ def build_semantic_deliberation_lattice(
         )
         span_proposals = tuple((proposals or {}).get(span_id, ()))
         proposal_digests.extend(proposal.digest for proposal in span_proposals)
-        spans.append(_merge_proposals(span, span_proposals))
+        spans.append(
+            _merge_proposals(
+                span,
+                span_proposals,
+                source_audio_sha256=source_audio_sha256,
+            )
+        )
 
     projections = tuple(
         ProjectedCandidate(
@@ -934,7 +996,7 @@ def build_semantic_deliberation_lattice(
                 arc_ids=tuple(arc_ids),
                 text_sha256=projection.source_text_sha256,
                 posterior=normalized_posterior[projection.candidate_id],
-                metadata={"projection": "exact-surface-v1"},
+                metadata={"projection": "exact-surface-v2"},
             )
         )
     lattice = DeliberationLattice(
@@ -945,11 +1007,12 @@ def build_semantic_deliberation_lattice(
         source_paths=tuple(source_paths),
         metadata={
             "pivotCandidateId": pivot_candidate_id,
-            "projection": "exact-surface-v1",
+            "projection": "exact-surface-v2",
             "configDigest": config.digest,
             "candidatePosteriorDigest": sha256_json(normalized_posterior),
             "proposalDigests": tuple(sorted(proposal_digests)),
             "localFactorWeightSum": sum(factor_weights.values()),
+            "evidenceChannels": tuple(sorted(distributions)),
         },
     )
     return SemanticDeliberationBuild(

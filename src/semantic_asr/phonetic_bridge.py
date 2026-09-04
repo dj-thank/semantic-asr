@@ -12,6 +12,7 @@ import math
 from dataclasses import dataclass
 
 from .contracts import sha256_json
+from .deliberation_evidence import _is_sha256
 from .multilevel_lattice import (
     BoundedUtility,
     LatticeArc,
@@ -119,6 +120,7 @@ class PhoneticTextProposal:
     combined_utility: float
     phone_score: CTCPronunciationScore | None
     mora_score: CTCPronunciationScore | None
+    source_audio_sha256: str
     lexicon_digest: str
 
     def __post_init__(self) -> None:
@@ -128,13 +130,23 @@ class PhoneticTextProposal:
             raise ValueError("phonetic proposal requires phone or mora evidence")
         if not -1.0 <= self.combined_utility <= 1.0:
             raise ValueError("combined_utility must be in [-1, 1]")
-        if len(self.pronunciation_key) != 64 or len(self.lexicon_digest) != 64:
-            raise ValueError("phonetic proposal digests must be SHA-256 values")
+        if not _is_sha256(self.pronunciation_key):
+            raise ValueError("pronunciation_key must be a SHA-256 value")
+        if not _is_sha256(self.source_audio_sha256):
+            raise ValueError("source_audio_sha256 must be a SHA-256 value")
+        if not _is_sha256(self.lexicon_digest):
+            raise ValueError("lexicon_digest must be a SHA-256 value")
         channels = {utility.channel for utility in self.utilities}
         if self.phone_score is not None and "phone" not in channels:
             raise ValueError("phone score requires a calibrated phone utility")
         if self.mora_score is not None and "mora" not in channels:
             raise ValueError("mora score requires a calibrated mora utility")
+        for score in (self.phone_score, self.mora_score):
+            if score is None:
+                continue
+            source_audio = score.evidence.metadata.get("sourceAudioSha256")
+            if source_audio != self.source_audio_sha256:
+                raise ValueError("phonetic score is bound to different source audio")
 
     def as_lattice_arc(
         self,
@@ -154,6 +166,7 @@ class PhoneticTextProposal:
             observed_eligible=observed_eligible,
             pronunciation_key=self.pronunciation_key,
             source_candidate_ids=source_candidate_ids,
+            source_audio_sha256=self.source_audio_sha256,
             metadata={
                 "entryId": self.entry_id,
                 "lexiconDigest": self.lexicon_digest,
@@ -208,6 +221,11 @@ def propose_text_from_pronunciation(
         and phone_posterior.source_audio_sha256 != mora_posterior.source_audio_sha256
     ):
         raise ValueError("phone and mora posteriorgrams must come from the same audio")
+    source_audio_sha256 = (
+        phone_posterior.source_audio_sha256
+        if phone_posterior is not None
+        else mora_posterior.source_audio_sha256  # type: ignore[union-attr]
+    )
 
     proposals: list[PhoneticTextProposal] = []
     for entry in lexicon.entries:
@@ -257,6 +275,7 @@ def propose_text_from_pronunciation(
                 combined_utility=combined,
                 phone_score=phone_score,
                 mora_score=mora_score,
+                source_audio_sha256=source_audio_sha256,
                 lexicon_digest=lexicon.digest,
             )
         )

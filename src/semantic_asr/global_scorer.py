@@ -1,4 +1,4 @@
-"""Complete-path context scorer contracts for ASR deliberation."""
+"""Complete-path context-scorer contracts for ASR deliberation."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from .deliberation_lattice import DocumentContext, LatticeArc, path_digest
 
 @dataclass(frozen=True, slots=True)
 class GlobalPathScore:
-    """Bounded rank preference from a model that reads the complete path and context."""
+    """Bounded rank preference from a model that reads a complete path and context."""
 
     value: float
     source: str
@@ -31,6 +31,21 @@ class GlobalPathScore:
         for digest in (self.profile_digest, self.path_digest, self.context_digest):
             if not _is_sha256(digest):
                 raise ValueError("global path score digests must be SHA-256 values")
+        object.__setattr__(self, "value", value)
+
+    @property
+    def digest(self) -> str:
+        return hashlib.sha256(
+            canonical_json(
+                {
+                    "value": self.value,
+                    "source": self.source,
+                    "profileDigest": self.profile_digest,
+                    "pathDigest": self.path_digest,
+                    "contextDigest": self.context_digest,
+                }
+            ).encode("utf-8")
+        ).hexdigest()
 
 
 class GlobalSequenceScorer(Protocol):
@@ -42,6 +57,17 @@ class GlobalSequenceScorer(Protocol):
         *,
         context: DocumentContext,
     ) -> GlobalPathScore: ...
+
+
+class GlobalBatchSequenceScorer(GlobalSequenceScorer, Protocol):
+    """Optional batched form used to avoid one model invocation per complete path."""
+
+    def score_many(
+        self,
+        paths: Sequence[Sequence[LatticeArc]],
+        *,
+        context: DocumentContext,
+    ) -> tuple[GlobalPathScore, ...]: ...
 
 
 class CallableGlobalSequenceScorer:
@@ -74,6 +100,14 @@ class CallableGlobalSequenceScorer:
             path_digest=path_digest(path),
             context_digest=context.digest,
         )
+
+    def score_many(
+        self,
+        paths: Sequence[Sequence[LatticeArc]],
+        *,
+        context: DocumentContext,
+    ) -> tuple[GlobalPathScore, ...]:
+        return tuple(self.score(path, context=context) for path in paths)
 
 
 def frozen_profile_digest(name: str, revision: str, payload: Mapping[str, object]) -> str:
