@@ -1,0 +1,72 @@
+name: Tune Semantic ASR on real Japanese audio — pilot
+
+on:
+  push:
+    branches:
+      - codex/japanese-audio-tuning-20260904
+    paths:
+      - scripts/tune_japanese_audio_real.py
+      - .github/workflows/ja-audio-tuning-pilot.yml
+
+permissions:
+  contents: read
+
+jobs:
+  tune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Cache pinned model snapshots
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: semantic-asr-ja-real-v1-${{ runner.os }}-fw-0a363e9-ctc-f5fe070
+      - name: Install CPU inference stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.6.0'
+          python -m pip install -e '.[asr]'
+          python -m pip install 'transformers==4.56.2' 'datasets==3.6.0' soundfile scipy 'pyopenjtalk==0.4.1'
+      - name: Run pinned real-audio pilot
+        env:
+          HF_HUB_DOWNLOAD_TIMEOUT: "300"
+          OMP_NUM_THREADS: "4"
+          MKL_NUM_THREADS: "4"
+        run: |
+          python scripts/tune_japanese_audio_real.py \
+            --train 12 \
+            --calibration 8 \
+            --test 8 \
+            --beam-size 6 \
+            --hypotheses 6 \
+            --max-duration 12 \
+            --cpu-threads 4 \
+            --bootstrap 1000 \
+            --output /tmp/ja-real-pilot-report.json
+      - name: Validate aggregate-only report
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('/tmp/ja-real-pilot-report.json').read_text())
+          assert report['schema'] == 'semantic-asr-ja-real-tuning-v1'
+          assert report['dataset']['rawDataPersisted'] is False
+          assert report['featureContract']['referenceBlindExtraction'] is True
+          encoded = json.dumps(report, ensure_ascii=False)
+          assert 'reference' not in encoded.lower()
+          assert 'hypothesis' not in encoded.lower()
+          print(json.dumps(report['metrics'], ensure_ascii=False, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semantic-asr-ja-real-pilot-report
+          path: /tmp/ja-real-pilot-report.json
+          if-no-files-found: error
+          retention-days: 7
