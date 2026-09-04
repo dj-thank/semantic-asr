@@ -1,0 +1,37 @@
+name: Probe pinned Kotoba Whisper revision
+
+on:
+  push:
+    branches:
+      - codex/japanese-audio-tuning-20260904
+    paths:
+      - .github/workflows/ja-kotoba-model-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Resolve immutable revision and inspect files
+        run: |
+          python -m pip install --quiet 'huggingface-hub==0.36.2'
+          python - <<'PY'
+          import json
+          from huggingface_hub import HfApi
+
+          repo = 'kotoba-tech/kotoba-whisper-v2.0-faster'
+          info = HfApi().model_info(repo, files_metadata=True)
+          print('KOTOBA_MODEL=' + json.dumps({
+              'repo': repo,
+              'revision': info.sha,
+              'library': info.library_name,
+              'pipelineTag': info.pipeline_tag,
+              'siblings': sorted(item.rfilename for item in info.siblings),
+          }, ensure_ascii=False, sort_keys=True))
+          PY
