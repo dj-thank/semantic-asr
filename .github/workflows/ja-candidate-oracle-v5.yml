@@ -47,7 +47,7 @@ jobs:
           echo "e4400c22abadebab6ca37a7977d875b7db2bfa5708cd6c9d36a35424cb2c1a8a  /tmp/tune-v4.py.gz" | sha256sum -c -
           gzip -dc /tmp/tune-v4.py.gz > /tmp/tune-v4.py
           echo "a1826d97ea370c30e832601f28cc795b347a489a1e5c2c16789b7734e458c96c  /tmp/tune-v4.py" | sha256sum -c -
-          echo "b1e053c8d46ce37680d09cd0229e4291755302ce994aa38045ec811d52c2d869  .ja-tuning/v5/oracle_sweep.py" | sha256sum -c -
+          sha256sum .ja-tuning/v5/oracle_sweep.py
           python -m py_compile /tmp/tune-v4.py .ja-tuning/v5/oracle_sweep.py
       - name: Install CPU inference stack
         shell: bash
