@@ -211,9 +211,9 @@ def propose_text_from_pronunciation(
 
     proposals: list[PhoneticTextProposal] = []
     for entry in lexicon.entries:
-        candidate_id = hashlib.sha256(
-            f"{lexicon.digest}:{entry.entry_id}".encode()
-        ).hexdigest()[:24]
+        candidate_id = hashlib.sha256(f"{lexicon.digest}:{entry.entry_id}".encode()).hexdigest()[
+            :24
+        ]
         phone_score: CTCPronunciationScore | None = None
         mora_score: CTCPronunciationScore | None = None
         utilities: list[BoundedUtility] = []
