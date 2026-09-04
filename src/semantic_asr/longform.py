@@ -470,9 +470,15 @@ class SemanticASRTranscriber:
         evidence_enricher: Callable[[CandidateEvidence], CandidateEvidence] | None = None,
         window_ms: int = 28_000,
         overlap_ms: int = 1_200,
+        beam_size: int = 5,
+        hypotheses: int = 5,
+        relisten_beam_size: int = 12,
+        relisten_hypotheses: int = 8,
         surface_policy: SurfacePolicy = "lenient",
     ) -> None:
         self.base_adapter = base_adapter
+        self.runtime_profile_name: str | None = None
+        self.runtime_profile_digest: str | None = None
         self.second_ear = second_ear
         self.forced_aligner = forced_aligner
         self.teacher = teacher
@@ -484,8 +490,20 @@ class SemanticASRTranscriber:
         self.router_state = router_state or RouterState()
         self.router_config = router_config or QuantileBalancedRouterConfig()
         self.evidence_enricher = evidence_enricher
+        if beam_size < 1 or hypotheses < 1:
+            raise ValueError("beam_size and hypotheses must be positive")
+        if hypotheses > beam_size:
+            raise ValueError("hypotheses cannot exceed beam_size")
+        if relisten_beam_size < 1 or relisten_hypotheses < 1:
+            raise ValueError("re-listen beam size and hypotheses must be positive")
+        if relisten_hypotheses > relisten_beam_size:
+            raise ValueError("re-listen hypotheses cannot exceed re-listen beam size")
         self.window_ms = window_ms
         self.overlap_ms = overlap_ms
+        self.beam_size = int(beam_size)
+        self.hypotheses = int(hypotheses)
+        self.relisten_beam_size = int(relisten_beam_size)
+        self.relisten_hypotheses = int(relisten_hypotheses)
         if surface_policy not in {"exact", "lenient"}:
             raise ValueError("surface_policy must be exact or lenient")
         self.surface_policy: SurfacePolicy = surface_policy
@@ -646,8 +664,8 @@ class SemanticASRTranscriber:
         base_request = DecodeRequest(
             audio_path=str(source),
             language=language,
-            beam_size=5,
-            hypotheses=5,
+            beam_size=self.beam_size,
+            hypotheses=self.hypotheses,
             start_ms=window.start_ms,
             end_ms=window.end_ms,
             initial_prompt=initial_prompt,
@@ -729,8 +747,8 @@ class SemanticASRTranscriber:
                 request = DecodeRequest(
                     audio_path=str(source),
                     language=language,
-                    beam_size=12,
-                    hypotheses=8,
+                    beam_size=self.relisten_beam_size,
+                    hypotheses=self.relisten_hypotheses,
                     start_ms=action.start_ms,
                     end_ms=action.end_ms,
                     initial_prompt=initial_prompt,
@@ -946,6 +964,12 @@ class SemanticASRTranscriber:
             evidence_sha256=sha256_json(evidence_payload),
             diagnostics={
                 "windowCount": len(windows),
+                "evidenceBudgetMs": self.evidence_budget.total_cost_ms,
+                "maximumEvidenceActions": self.evidence_budget.max_actions,
+                "beamSize": self.beam_size,
+                "hypotheses": self.hypotheses,
+                "relistenBeamSize": self.relisten_beam_size,
+                "relistenHypotheses": self.relisten_hypotheses,
                 "cacheHitCount": sum(len(segment.cache_hits) for segment in segments),
                 "provisionalWindowCount": sum(
                     segment.observed.decision == "provisional" for segment in segments

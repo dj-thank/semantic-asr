@@ -15,6 +15,7 @@ from semantic_asr.api import (
     transcribe,
     transcribe_segments,
 )
+from semantic_asr.context_catalog import ContextCatalog, ContextEntry
 from semantic_asr.contracts import CandidateEvidence
 
 
@@ -170,3 +171,196 @@ def test_segments_carry_confidence(tmp_path: Path) -> None:
     result = transcribe(audio, adapter=FakeAdapter())
     assert result.segments[0].confidence is not None
     assert 0.0 <= result.segments[0].confidence <= 1.0
+
+
+def test_quality_profile_reaches_the_decode_request(tmp_path: Path) -> None:
+    audio = tmp_path / "quality.wav"
+    _write_wav(audio, 1.0)
+    adapter = FakeAdapter()
+    result = transcribe(audio, profile="cpu-ja-quality-v1", adapter=adapter)
+    assert adapter.requests[0].beam_size == 12
+    assert adapter.requests[0].hypotheses == 12
+    assert result.provenance["beamSize"] == 12
+    assert result.provenance["hypotheses"] == 12
+    assert result.profile.model_revision is not None
+    assert result.provenance["modelRevision"] == result.profile.model_revision
+
+
+def test_warm_transcriber_profile_mismatch_fails_closed(tmp_path: Path) -> None:
+    audio = tmp_path / "mismatch.wav"
+    _write_wav(audio, 1.0)
+    with pytest.raises(ValueError, match="does not match"):
+        transcribe(
+            audio,
+            profile="cpu-ja-quality-v1",
+            transcriber=_warm(FakeAdapter()),
+        )
+
+
+def test_catalog_terms_are_selected_without_leaking_raw_names(tmp_path: Path) -> None:
+    audio = tmp_path / "catalog.wav"
+    _write_wav(audio, 1.0)
+    catalog = ContextCatalog(
+        name="meeting",
+        revision="agenda-v1",
+        entries=(
+            ContextEntry(
+                "person:moriwaki",
+                "森脇翔太",
+                aliases=("森脇さん",),
+                tags=("person",),
+            ),
+        ),
+    )
+    adapter = FakeAdapter()
+    result = transcribe(
+        audio,
+        adapter=adapter,
+        catalog=catalog,
+        context_query="森脇さんとSemantic ASRを確認",
+        context_tags=("person",),
+    )
+    assert adapter.requests[0].hotwords == ("森脇翔太",)
+    receipt = result.provenance["contextCatalog"]
+    assert receipt["enabled"] is True
+    assert receipt["abstained"] is False
+    assert "森脇翔太" not in json.dumps(receipt, ensure_ascii=False)
+    assert result.provenance["catalogHotwordCount"] == 1
+
+
+@pytest.mark.parametrize("shape", [(2, 16_000), (16_000, 2)])
+def test_array_audio_accepts_common_channel_orders(shape) -> None:
+    np = pytest.importorskip("numpy")
+    result = transcribe(np.zeros(shape, dtype=np.float32), adapter=FakeAdapter())
+    assert 900 <= result.duration_ms <= 1_100
+
+
+def test_array_audio_rejects_ambiguous_or_non_finite_shapes() -> None:
+    np = pytest.importorskip("numpy")
+    with pytest.raises(ValueError, match="channel axis"):
+        transcribe(np.zeros((16, 16), dtype=np.float32), adapter=FakeAdapter())
+    bad = np.zeros(16_000, dtype=np.float32)
+    bad[10] = np.nan
+    with pytest.raises(ValueError, match="NaN or infinity"):
+        transcribe(bad, adapter=FakeAdapter())
+
+
+class InvalidSpanAdapter(FakeAdapter):
+    def decode(self, request: DecodeRequest) -> list[CandidateEvidence]:
+        self.requests.append(request)
+        return [
+            CandidateEvidence(
+                "spans",
+                "有効な字幕です",
+                acoustic=0.9,
+                rank=1,
+                hypothesis_count=1,
+                avg_logprob=-0.05,
+                source=self.name,
+                metadata={
+                    "utteranceSpans": [
+                        {"startMs": 800, "endMs": 200, "text": "逆転"},
+                        {"startMs": 100, "endMs": 500, "text": "有効"},
+                        {"startMs": "bad", "endMs": 700, "text": "不正"},
+                    ]
+                },
+            )
+        ]
+
+
+def test_invalid_timestamp_rows_never_create_negative_srt_ranges(tmp_path: Path) -> None:
+    audio = tmp_path / "spans.wav"
+    _write_wav(audio, 1.0)
+    result = transcribe(audio, adapter=InvalidSpanAdapter())
+    assert [utterance.text for utterance in result.utterances] == ["有効"]
+    assert all(row.end_ms > row.start_ms for row in result.utterances)
+
+
+def test_run_cli_accepts_frozen_context_catalog(tmp_path: Path) -> None:
+    from semantic_asr.run_cli import build_parser, run_transcription
+
+    audio = tmp_path / "clip.wav"
+    _write_wav(audio, 1.0)
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "name": "meeting",
+                "revision": "v1",
+                "entries": [
+                    {
+                        "id": "person:moriwaki",
+                        "phrase": "森脇翔太",
+                        "aliases": ["森脇さん"],
+                        "tags": ["person"],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    args = build_parser().parse_args(
+        [
+            str(audio),
+            "--catalog",
+            str(catalog),
+            "--context-query",
+            "森脇さんとの会議",
+            "--context-tag",
+            "person",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--quiet",
+        ]
+    )
+    adapter = FakeAdapter()
+    payload = run_transcription(args, adapter=adapter)
+    assert payload["status"] == "ok"
+    assert adapter.requests[0].hotwords == ("森脇翔太",)
+
+
+def test_effort_profile_controls_runtime_evidence_budget() -> None:
+    from semantic_asr.api import load_transcriber
+
+    light = load_transcriber("cpu-ja-v1", adapter=FakeAdapter())
+    assert light.evidence_budget.total_cost_ms == 0
+    assert light.evidence_budget.max_actions == 0
+    assert light.runtime_profile_digest == runtime_profile("cpu-ja-v1").digest
+
+    quality = load_transcriber("cpu-ja-quality-v1", adapter=FakeAdapter())
+    assert quality.evidence_budget.total_cost_ms == 4_000
+    assert quality.evidence_budget.max_actions == 4
+
+
+def test_warm_transcriber_rejects_same_shape_different_profile(tmp_path: Path) -> None:
+    from semantic_asr.api import load_transcriber
+
+    audio = tmp_path / "profile-binding.wav"
+    _write_wav(audio, 1.0)
+    quality = load_transcriber("cpu-ja-quality-v1", adapter=FakeAdapter())
+    with pytest.raises(ValueError, match="does not match"):
+        transcribe(audio, profile="gpu-ja-v1", transcriber=quality)
+
+
+def test_unbound_warm_transcriber_fails_closed(tmp_path: Path) -> None:
+    from semantic_asr.longform import SemanticASRTranscriber
+
+    audio = tmp_path / "unbound.wav"
+    _write_wav(audio, 1.0)
+    with pytest.raises(ValueError, match="not bound"):
+        transcribe(audio, transcriber=SemanticASRTranscriber(FakeAdapter()))
+
+
+def test_runtime_profile_rejects_invalid_patience_and_effort_bounds() -> None:
+    with pytest.raises(ValueError, match="patience"):
+        RuntimeProfile(name="bad", description="", patience=float("nan"))
+    with pytest.raises(ValueError, match="at most"):
+        RuntimeProfile(
+            name="bad",
+            description="",
+            beam_size=6,
+            hypotheses=6,
+            effort="ultra-light",
+        )

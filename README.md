@@ -236,6 +236,28 @@ result.write("transcripts")      # json / observed.txt / txt / md / srt / vtt
 
 `profile` は不変の名前付き設定です（`cpu-ja-v1`: CPU int8 large-v3-turbo・beam 5・30 秒 window padding・loop guard。`cpu-ja-quality-v1`: beam 12。`gpu-ja-v1`: CUDA float16）。バックエンドのノブは呼び出しに漏らさず、組み合わせが変わるときは新しい profile を足します。Koemo のような既存呼び出し側には `transcribe_segments(audio)` が `[(start, end, text), ...]` を返します。モデルを温めたまま何度も呼ぶ場合は `load_transcriber(profile)` を一度作り、`transcribe(..., transcriber=warm)` に渡してください。
 
+### 固有名詞を安全に補助する（ContextCatalog）
+
+固有名詞や製品名は、音声評価より前に凍結した JSON カタログから検索し、一致した語だけを
+decoder hotword にできます。空クエリ・不一致は `abstained` となり、カタログ全体を無条件に
+注入しません。監査情報にはカタログの digest、query hash、entry ID、phrase hash、score を
+残し、生の phrase や query は残しません。ID 自体が機微なら、不透明な ID を使います。
+
+```python
+from semantic_asr import ContextCatalog, transcribe
+
+catalog = ContextCatalog.from_json("examples/context_catalog.example.json")
+result = transcribe(
+    "meeting.wav",
+    catalog=catalog,
+    context_query="森脇さんとSemantic ASRの進捗確認",
+    context_tags=("person",),
+)
+```
+
+CLI では `--catalog`、`--context-query`、必要なら繰り返し可能な `--context-tag` を使います。
+詳細と評価上の禁止事項は [`docs/CONTEXT_CATALOG.md`](docs/CONTEXT_CATALOG.md) を参照してください。
+
 ## 実音声で動かす（2026-09-02 以降）
 
 公開テストセットから権利注記付き manifest を作り、N-best 候補を生成し、分割・学習・較正・ベンチマークまでを CLI で回します。公開データ extra は `datasets`、`numpy`、`scipy`、`soundfile` を含みます。

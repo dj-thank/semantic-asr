@@ -12,6 +12,13 @@ from .api import (
 )
 from .candidate_pool import aggregate_surface_candidates, merge_candidate_pools
 from .cascade import CascadeConfig, CascadeDecision, run_candidate_cascade
+from .context_catalog import (
+    ContextCatalog,
+    ContextEntry,
+    ContextMatch,
+    ContextSelection,
+    load_context_catalog,
+)
 from .contracts import (
     CandidateEvidence,
     GateDecision,
@@ -36,6 +43,10 @@ __all__ = [
     "AdaptiveKConfig",
     "AdaptiveKDecision",
     "CandidateEvidence",
+    "ContextCatalog",
+    "ContextEntry",
+    "ContextMatch",
+    "ContextSelection",
     "CascadeConfig",
     "CascadeDecision",
     "EvidenceScore",
@@ -51,6 +62,7 @@ __all__ = [
     "aggregate_surface_candidates",
     "fuse_candidates",
     "merge_candidate_pools",
+    "load_context_catalog",
     "mora_sequence",
     "run_candidate_cascade",
     "select_adaptive_k",

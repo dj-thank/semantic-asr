@@ -23,6 +23,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hotwords", default="", help="comma or 、 separated prompt bias terms")
     parser.add_argument("--initial-prompt", default=None)
     parser.add_argument(
+        "--catalog",
+        default=None,
+        help="frozen context catalog JSON; no query match means no catalog bias",
+    )
+    parser.add_argument(
+        "--context-query",
+        default=None,
+        help="caller-owned meeting/topic context used to retrieve catalog phrases",
+    )
+    parser.add_argument("--context-limit", type=int, default=8)
+    parser.add_argument("--context-min-score", type=float, default=0.55)
+    parser.add_argument(
+        "--context-tag",
+        action="append",
+        default=[],
+        help="require a catalog tag; repeat to require multiple tags",
+    )
+    parser.add_argument(
         "--formats", default="all", help="comma list of json,observed,normalized,md,srt,vtt"
     )
     parser.add_argument("--overwrite", action="store_true")
@@ -54,6 +72,11 @@ def run_transcription(
         language=args.language,
         hotwords=hotwords,
         initial_prompt=args.initial_prompt,
+        catalog=args.catalog,
+        context_query=args.context_query,
+        context_limit=args.context_limit,
+        context_min_score=args.context_min_score,
+        context_tags=tuple(args.context_tag),
         on_progress=progress,
         adapter=adapter,
     )
