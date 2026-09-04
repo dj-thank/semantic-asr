@@ -57,9 +57,12 @@ jobs:
           python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.6.0'
           python -m pip install -e '.[asr]'
           python -m pip install 'transformers==4.56.2' 'datasets==3.6.0' soundfile scipy 'pyopenjtalk==0.4.1' 'ruff==0.16.6'
-          python -m ruff format --check /tmp/tune-v3.py
-          python -m ruff check --ignore E501 /tmp/tune-v3.py
-          python -m py_compile /tmp/tune-v3.py
+          (
+            cd /tmp
+            python -m ruff format --check tune-v3.py
+            python -m ruff check --ignore E501 tune-v3.py
+            python -m py_compile tune-v3.py
+          )
       - name: Run repeated tuning and fresh locked evaluations
         env:
           HF_HUB_DOWNLOAD_TIMEOUT: "300"
