@@ -4,6 +4,6 @@
 ```text
 ```
 
-## Full suite
+## Complete suite
 ```text
 ```
