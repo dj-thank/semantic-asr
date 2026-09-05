@@ -2,7 +2,7 @@
 
 ## Focused suite
 ```text
-F.FF.........FFFFF                                                       [100%]
+F.FF.........FFFFF..                                                     [100%]
 =================================== FAILURES ===================================
 ________________ test_reference_is_not_part_of_planning_digest _________________
 
@@ -428,18 +428,19 @@ FAILED tests/test_document_experiment_runner.py::test_all_arms_share_candidates_
 FAILED tests/test_document_experiment_runner.py::test_report_writes_canonical_evidence_with_negative_results - ValueError: first-pass long-form evidence hash mismatch
 FAILED tests/test_document_experiment_runner.py::test_scored_character_budget_fails_closed - ValueError: first-pass long-form evidence hash mismatch
 FAILED tests/test_document_experiment_runner.py::test_candidate_set_digest_binds_planner_output - ValueError: first-pass long-form evidence hash mismatch
-8 failed, 10 passed in 0.92s
+8 failed, 12 passed in 0.67s
 ```
 
 ## Full suite
 ```text
 ..s........sss.......................................................... [ 14%]
-..........................F.FF.FFFFF.................................... [ 28%]
+............................F.FF.FFFFF.................................. [ 28%]
 ........................................................................ [ 42%]
-..............................ssss...................................... [ 57%]
-.......................................................xxx.............. [ 71%]
+................................ssss.................................... [ 56%]
+.........................................................xxx............ [ 71%]
 ........................................................................ [ 85%]
-.....................................................................ss. [100%]
+.......................................................................s [ 99%]
+s.                                                                       [100%]
 =================================== FAILURES ===================================
 ________________ test_reference_is_not_part_of_planning_digest _________________
 
@@ -880,5 +881,5 @@ FAILED tests/test_document_experiment_runner.py::test_all_arms_share_candidates_
 FAILED tests/test_document_experiment_runner.py::test_report_writes_canonical_evidence_with_negative_results - ValueError: first-pass long-form evidence hash mismatch
 FAILED tests/test_document_experiment_runner.py::test_scored_character_budget_fails_closed - ValueError: first-pass long-form evidence hash mismatch
 FAILED tests/test_document_experiment_runner.py::test_candidate_set_digest_binds_planner_output - ValueError: first-pass long-form evidence hash mismatch
-8 failed, 483 passed, 15 skipped, 3 xfailed in 6.24s
+8 failed, 485 passed, 15 skipped, 3 xfailed in 4.74s
 ```

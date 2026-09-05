@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from ..contracts import sha256_json
-from ..deliberation_lattice import DocumentContext
 from ..document_deliberation import DocumentBeamConfig, plan_document_deliberation
 from ..global_deliberation import DeliberationPolicy
 from ..semantic_deliberation import SemanticDeliberationConfig

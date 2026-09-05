@@ -23,6 +23,7 @@ from .ngram_scorer import (
     fit_character_ngram_model,
     fit_ngram_normalization,
 )
+from .planner import FrozenDocumentBeamPlanner
 from .protocol import (
     CriticalReferenceToken,
     DocumentExperimentArm,
@@ -60,6 +61,7 @@ __all__ = [
     "DocumentLanguageScore",
     "FrozenCharacterNgramModel",
     "FrozenDocumentCandidates",
+    "FrozenDocumentBeamPlanner",
     "FrozenExternalContext",
     "FrozenReference",
     "NgramCalibrationSequence",
