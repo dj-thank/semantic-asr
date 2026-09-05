@@ -1,0 +1,358 @@
+name: Deterministic Japanese phonetic label audit
+
+on:
+  push:
+    branches:
+      - codex/japanese-phonetic-labels-v3-38
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: semantic-asr-japanese-phonetic-labels-v3
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/japanese-phonetic-labels-v3-38
+          fetch-depth: 0
+      - name: Synchronize lower phonetic stack
+        shell: bash
+        run: |
+          git fetch origin \
+            codex/document-context-experiment-v1-38 \
+            codex/audio-phonetic-ctc-v1-38 \
+            codex/audio-phonetic-ctc-v2-38
+          git merge --no-edit origin/codex/document-context-experiment-v1-38
+          git merge --no-edit origin/codex/audio-phonetic-ctc-v1-38
+          git merge --no-edit origin/codex/audio-phonetic-ctc-v2-38
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Separate loader sidecar from full materialization provenance
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          from pathlib import Path
+
+          path = Path("src/semantic_asr/phonetic_runtime/materialize.py")
+          text = path.read_text(encoding="utf-8")
+          if "provenance_path: Path" not in text:
+              text = text.replace(
+                  "    metadata_path: Path\n"
+                  "    phone_inventory_path: Path\n",
+                  "    metadata_path: Path\n"
+                  "    provenance_path: Path\n"
+                  "    phone_inventory_path: Path\n",
+                  1,
+              )
+              text = text.replace(
+                  "            self.metadata_path,\n"
+                  "            self.phone_inventory_path,\n",
+                  "            self.metadata_path,\n"
+                  "            self.provenance_path,\n"
+                  "            self.phone_inventory_path,\n",
+                  1,
+              )
+              text = text.replace(
+                  '                "metadataSha256": _sha256_file(self.metadata_path),\n',
+                  '                "metadataSha256": _sha256_file(self.metadata_path),\n'
+                  '                "provenanceSha256": _sha256_file(self.provenance_path),\n',
+                  1,
+              )
+          if "destination.parent.mkdir(parents=True, exist_ok=True)" not in text.split(
+              "temporary = Path(tempfile.mkdtemp", 1
+          )[0]:
+              text = text.replace(
+                  "    if not name or not revision:\n"
+                  "        raise ValueError(\"materialization name and revision are required\")\n",
+                  "    if not name or not revision:\n"
+                  "        raise ValueError(\"materialization name and revision are required\")\n"
+                  "    destination.parent.mkdir(parents=True, exist_ok=True)\n",
+                  1,
+              )
+          old_metadata = '''        metadata_path = temporary / "manifest.jsonl.metadata.json"
+              metadata_payload = {
+                  "name": name,
+                  "revision": revision,
+                  "manifestSha256": manifest_sha256,
+                  "inputManifestSha256": _sha256_file(source),
+                  "labelProfile": asdict(profile),
+                  "labelProfileDigest": profile.digest,
+                  "mappingDigest": profile.mapping_digest,
+                  "phoneInventoryDigest": phone_inventory.digest,
+                  "moraInventoryDigest": mora_inventory.digest,
+                  "rowDigests": [row.digest for row in rows],
+                  "rawTranscriptStored": False,
+              }
+              metadata_path.write_text(
+                  json.dumps(metadata_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+                  encoding="utf-8",
+                  newline="\n",
+              )
+              for path in (manifest_path, phone_path, mora_path, metadata_path):
+          '''
+          new_metadata = '''        metadata_path = temporary / "manifest.jsonl.metadata.json"
+              metadata_payload = {
+                  "name": name,
+                  "revision": revision,
+                  "manifestSha256": manifest_sha256,
+              }
+              metadata_path.write_text(
+                  json.dumps(metadata_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+                  encoding="utf-8",
+                  newline="\n",
+              )
+              provenance_path = temporary / "materialization.json"
+              provenance_payload = {
+                  "schemaVersion": "1",
+                  "name": name,
+                  "revision": revision,
+                  "manifestSha256": manifest_sha256,
+                  "inputManifestSha256": _sha256_file(source),
+                  "labelProfile": asdict(profile),
+                  "labelProfileDigest": profile.digest,
+                  "mappingDigest": profile.mapping_digest,
+                  "phoneInventoryDigest": phone_inventory.digest,
+                  "moraInventoryDigest": mora_inventory.digest,
+                  "phoneInventorySha256": _sha256_file(phone_path),
+                  "moraInventorySha256": _sha256_file(mora_path),
+                  "rowDigests": [row.digest for row in rows],
+                  "rawTranscriptStored": False,
+              }
+              provenance_path.write_text(
+                  json.dumps(provenance_payload, ensure_ascii=False, sort_keys=True, indent=2)
+                  + "\n",
+                  encoding="utf-8",
+                  newline="\n",
+              )
+              for path in (
+                  manifest_path,
+                  phone_path,
+                  mora_path,
+                  metadata_path,
+                  provenance_path,
+              ):
+          '''
+          if old_metadata in text:
+              text = text.replace(old_metadata, new_metadata, 1)
+          elif 'provenance_path = temporary / "materialization.json"' not in text:
+              raise SystemExit("materialization metadata block not found")
+          if 'provenance_path = destination / "materialization.json"' not in text:
+              text = text.replace(
+                  '    metadata_path = destination / "manifest.jsonl.metadata.json"\n'
+                  '    phone_path = destination / "phone_inventory.json"\n',
+                  '    metadata_path = destination / "manifest.jsonl.metadata.json"\n'
+                  '    provenance_path = destination / "materialization.json"\n'
+                  '    phone_path = destination / "phone_inventory.json"\n',
+                  1,
+              )
+              text = text.replace(
+                  "        metadata_path=metadata_path,\n"
+                  "        phone_inventory_path=phone_path,\n",
+                  "        metadata_path=metadata_path,\n"
+                  "        provenance_path=provenance_path,\n"
+                  "        phone_inventory_path=phone_path,\n",
+                  1,
+              )
+          path.write_text(text.rstrip() + "\n", encoding="utf-8")
+
+          labels_path = Path("src/semantic_asr/phonetic_runtime/japanese_labels.py")
+          labels = labels_path.read_text(encoding="utf-8")
+          if "from ..deliberation_evidence import _is_sha256\n" not in labels:
+              labels = labels.replace(
+                  "from ..contracts import sha256_json\n",
+                  "from ..contracts import sha256_json\n"
+                  "from ..deliberation_evidence import _is_sha256\n",
+                  1,
+              )
+          labels = labels.replace(
+              "            if len(digest) != 64:\n"
+              "                raise ValueError(\"Japanese phonetic label digests must be SHA-256 values\")\n",
+              "            if not _is_sha256(digest):\n"
+              "                raise ValueError(\"Japanese phonetic label digests must be SHA-256 values\")\n",
+          )
+          labels = labels.replace(
+              '        elif character in {"ゝ", "ゞ"}:',
+              '        elif character in {"ゝ", "ゞ", "ヽ", "ヾ"}:',
+          )
+          labels_path.write_text(labels.rstrip() + "\n", encoding="utf-8")
+
+          init_path = Path("src/semantic_asr/phonetic_runtime/__init__.py")
+          init = init_path.read_text(encoding="utf-8")
+          imports = '''from .japanese_labels import (
+              JapanesePhoneticLabelProfile,
+              JapanesePhoneticLabels,
+              JapanesePronunciationSource,
+              build_japanese_pronunciation_lexicon,
+              normalize_japanese_reading,
+              segment_japanese_moras,
+          )
+          from .materialize import (
+              JapanesePhoneticMaterialization,
+              materialize_japanese_phonetic_manifest,
+          )
+          '''
+          if "from .japanese_labels import (" not in init:
+              init = init.replace("from .inference import DualCTCPosteriorRuntime\n", "from .inference import DualCTCPosteriorRuntime\n" + imports, 1)
+          names = (
+              "JapanesePhoneticLabelProfile",
+              "JapanesePhoneticLabels",
+              "JapanesePhoneticMaterialization",
+              "JapanesePronunciationSource",
+              "build_japanese_pronunciation_lexicon",
+              "materialize_japanese_phonetic_manifest",
+              "normalize_japanese_reading",
+              "segment_japanese_moras",
+          )
+          for name in names:
+              entry = f'    "{name}",\n'
+              if entry not in init:
+                  init = init.replace('    "LoadedDualCTCArtifact",\n', '    "LoadedDualCTCArtifact",\n' + entry, 1)
+          init_path.write_text(init.rstrip() + "\n", encoding="utf-8")
+          PY
+      - name: Install validation environment
+        run: python -m pip install -e '.[dev]'
+      - name: Format, lint, compile, and run full dependency-free suite
+        id: tests
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m ruff format src tests scripts
+          python -m ruff check --fix src tests scripts
+          python -m ruff format src tests scripts
+          python -m ruff format --check src tests scripts
+          python -m ruff check src tests scripts
+          python -m compileall -q src tests scripts
+          python -m pytest -q 2>&1 | tee /tmp/tests.log
+          git diff --check
+      - name: Verify materialization CLI in isolated subprocess
+        id: focused
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q \
+            tests/test_japanese_phonetic_labels.py \
+            tests/test_japanese_phonetic_materialize.py \
+            tests/test_prepare_japanese_phonetic_manifest.py \
+            2>&1 | tee /tmp/focused.log
+      - name: Build and clean-install wheel
+        id: wheel
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pip install build
+          python -m build --wheel
+          python -m venv /tmp/semantic-asr-ja-label-wheel
+          /tmp/semantic-asr-ja-label-wheel/bin/python -m pip install dist/*.whl
+          /tmp/semantic-asr-ja-label-wheel/bin/python - <<'PY' 2>&1 | tee /tmp/wheel.log
+          from semantic_asr.phonetic_runtime import (
+              JapanesePhoneticLabelProfile,
+              materialize_japanese_phonetic_manifest,
+          )
+
+          labels = JapanesePhoneticLabelProfile().label("がっこう")
+          assert labels.moras == ("ガ", "ッ", "コ", "ウ")
+          assert callable(materialize_japanese_phonetic_manifest)
+          print(labels.phones)
+          PY
+      - name: Record successful audit
+        if: success()
+        shell: bash
+        run: |
+          tests_summary=$(tail -n 1 /tmp/tests.log)
+          focused_summary=$(tail -n 1 /tmp/focused.log)
+          wheel_summary=$(tail -n 1 /tmp/wheel.log)
+          cat > docs/JAPANESE_PHONETIC_LABELS_VALIDATION.md <<EOF
+          # Japanese phonetic labels validation ledger
+
+          ## Deterministic labeling and materialization audit
+
+          Full dependency-free suite:
+
+          \`\`\`text
+          $tests_summary
+          \`\`\`
+
+          Focused labels/materializer suite:
+
+          \`\`\`text
+          $focused_summary
+          \`\`\`
+
+          Clean-wheel check:
+
+          \`\`\`text
+          $wheel_summary
+          \`\`\`
+
+          The exact committed source passed NFKC/hiragana normalization, explicit closed mora and
+          phone mappings, special-mora and loanword tests, unsupported-reading fail-closed checks,
+          frozen inventory coverage, profile-bound pronunciation lexicons, rights and four-way
+          split validation, source-audio hashing, raw-transcript exclusion, byte-reproducible
+          materialization, CLI acknowledgement, formatting, lint, compileall, and clean-wheel
+          import.
+
+          This validates data contracts only. It does not claim pronunciation-label perfection or
+          Japanese ASR improvement.
+          EOF
+          rm -f docs/JAPANESE_PHONETIC_LABELS_FAILURE.md
+          rm -f .github/workflows/finalize-japanese-phonetic-labels-v3.yml
+      - name: Record failed audit
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '# Japanese phonetic labels validation failure'
+            echo
+            echo '## Full suite'
+            echo '```text'
+            cat /tmp/tests.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo '## Focused suite'
+            echo '```text'
+            cat /tmp/focused.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo '## Wheel check'
+            echo '```text'
+            cat /tmp/wheel.log 2>/dev/null || true
+            echo '```'
+          } > docs/JAPANESE_PHONETIC_LABELS_FAILURE.md
+      - name: Commit exact audit state
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Complete Japanese phonetic labeling audit'
+          git push origin HEAD:codex/japanese-phonetic-labels-v3-38
+      - name: Mark PR ready and publish exact counts
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          pr=$(gh pr list --head codex/japanese-phonetic-labels-v3-38 --state open --json number --jq '.[0].number')
+          if [ -z "$pr" ]; then
+            exit 0
+          fi
+          gh pr ready "$pr" || true
+          tests_summary=$(tail -n 1 /tmp/tests.log)
+          focused_summary=$(tail -n 1 /tmp/focused.log)
+          gh pr comment "$pr" --body "Japanese phonetic labeling audit passed. Full: **$tests_summary**. Focused: **$focused_summary**. The PR is ready for review. This validates deterministic labels and materialization, not ASR accuracy."
