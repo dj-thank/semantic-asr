@@ -86,6 +86,9 @@ def _trace(
         for resolution in local.resolutions
         if resolution.selected_arc_id != resolution.retained_arc_id
     )
+    exact_source_candidate_ids = path_source_candidate_ids(option.path.arcs)
+    if exact_source_candidate_ids != option.exact_source_candidate_ids:
+        raise ValueError("window option exact source support changed before application")
     return SegmentDeliberationTrace(
         attempted=True,
         applied=applied,
@@ -106,7 +109,7 @@ def _trace(
         selected_text_sha256=sha256_json({"text": option.text}),
         changed_span_ids=changed_spans,
         proposal_digests=window.build.proposal_digests,
-        exact_source_candidate_ids=option.exact_source_candidate_ids,
+        exact_source_candidate_ids=exact_source_candidate_ids,
         recombined=option.recombined,
     )
 
