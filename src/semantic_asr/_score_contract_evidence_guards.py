@@ -51,7 +51,7 @@ def _raw(
         elif semantics == contract.ScoreSemantics.AVERAGE_LOG_LIKELIHOOD:
             if metadata_rows.get("frameCount") is not None:
                 normalization = contract.ScoreNormalization.MEAN_FRAME
-            elif metadata_rows.get("lengthNormalizationAlpha") not in {None, 1, 1.0}:
+            elif metadata_rows.get("lengthNormalizationAlpha") not in {None, 1}:
                 normalization = contract.ScoreNormalization.TOKEN_POWER
             elif any(
                 metadata_rows.get(key) is not None for key in ("tokenCount", "candidateTokenCount")

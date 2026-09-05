@@ -14,9 +14,9 @@ from ._score_contract_calibration_guards import (
 )
 from ._score_contract_evidence_guards import _kind, _raw, _score_from_dict
 from ._score_contract_primitives import (
+    _NORMALIZATION_ALIASES,
     FrozenDict,
     ScoreKind,
-    _NORMALIZATION_ALIASES,
     _freeze_json,
     _thaw_json,
 )
