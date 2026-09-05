@@ -1,0 +1,39 @@
+name: Research experiment
+description: Falsifiable, bounded experiment with real-data and weight evidence
+title: "[Research] "
+body:
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis, primary sources and falsification
+      description: Link versioned sources and distinguish prior work from our proposed contribution.
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Data roles, rights and leakage prevention
+      description: Record train/dev/calibration/test/exposed manifests, group lineage and publication permissions.
+    validations:
+      required: true
+  - type: textarea
+    id: protocol
+    attributes:
+      label: Baselines, metrics, seeds, budget and stopping
+      description: Freeze the decision procedure before test inspection; specify all trial and compute limits.
+    validations:
+      required: true
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: Required execution and training evidence
+      description: Real training requires tensor updates, checkpoint, fresh-process reload and independent evaluation, not only code.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Completion versus promotion
+      description: Define negative-result reporting, failed/partial states and separate deployment gates.
+    validations:
+      required: true
