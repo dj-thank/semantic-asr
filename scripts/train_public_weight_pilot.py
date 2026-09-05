@@ -167,7 +167,7 @@ def prepare(out, exclusions, check_time):
     rights.require("fleurs", "derive_features")
     hub = HfApi()
     info = hub.dataset_info(DATASET, revision=DATA_REV)
-    if info.card_data.get("license") != "cc-by-4.0":
+    if info.card_data.get("license") not in ("cc-by-4.0", ["cc-by-4.0"]):
         raise PermissionError("pinned dataset license mismatch")
     for name, revision in ((PHONE, PHONE_REV), (LM, LM_REV)):
         if hub.model_info(name, revision=revision).card_data.get("license") != "apache-2.0":
