@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from _document_experiment_fixture import AUDIO, RIGHTS, SPLIT, first_pass
 
 from semantic_asr.document_experiment.protocol import (
     CriticalReferenceToken,
@@ -12,8 +13,6 @@ from semantic_asr.document_experiment.protocol import (
     FrozenReference,
 )
 from semantic_asr.multilevel_lattice import DocumentContext
-
-from _document_experiment_fixture import AUDIO, RIGHTS, SPLIT, first_pass
 
 
 def reference() -> FrozenReference:

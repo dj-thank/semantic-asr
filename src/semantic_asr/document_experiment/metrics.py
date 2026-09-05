@@ -142,9 +142,7 @@ def window_revision_metrics(
     reference_windows: Sequence[str],
 ) -> WindowRevisionMetrics:
     selected_windows = tuple(option.text for option in selected_path.options)
-    if not (
-        len(first_pass_windows) == len(selected_windows) == len(reference_windows)
-    ):
+    if not (len(first_pass_windows) == len(selected_windows) == len(reference_windows)):
         raise ValueError("first-pass, selected, and reference window counts must match")
     changed = 0
     improved = 0
@@ -271,22 +269,16 @@ def aggregate_arm_metrics(
         strict_edits=sum(row.text.strict_edits for row in rows),
         lenient_reference_characters=sum(row.text.lenient_reference_characters for row in rows),
         lenient_edits=sum(row.text.lenient_edits for row in rows),
-        accepted_reference_characters=sum(
-            row.text.reference_characters for row in accepted
-        ),
+        accepted_reference_characters=sum(row.text.reference_characters for row in accepted),
         accepted_strict_edits=sum(row.text.strict_edits for row in accepted),
         critical_token_errors=sum(row.text.critical_token_errors for row in rows),
         changed_windows=sum(row.windows.changed_windows for row in rows),
         total_windows=sum(row.windows.window_count for row in rows),
         improved_windows=sum(row.windows.improved_windows for row in rows),
         worsened_windows=sum(row.windows.worsened_windows for row in rows),
-        false_correction_windows=sum(
-            row.windows.false_correction_windows for row in rows
-        ),
+        false_correction_windows=sum(row.windows.false_correction_windows for row in rows),
         corrected_characters=sum(row.windows.corrected_characters for row in rows),
-        introduced_error_characters=sum(
-            row.windows.introduced_error_characters for row in rows
-        ),
+        introduced_error_characters=sum(row.windows.introduced_error_characters for row in rows),
         total_latency_ms=sum(row.latency_ms for row in rows),
         maximum_case_latency_ms=max(row.latency_ms for row in rows),
         maximum_python_peak_bytes=max(row.python_peak_bytes for row in rows),

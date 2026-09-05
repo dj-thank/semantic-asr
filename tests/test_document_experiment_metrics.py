@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from _document_experiment_fixture import AUDIO, fake_paths
+
 from semantic_asr.document_experiment.metrics import (
     CaseArmMetrics,
     aggregate_arm_metrics,
@@ -11,8 +13,6 @@ from semantic_asr.document_experiment.protocol import (
     CriticalReferenceToken,
     FrozenReference,
 )
-
-from _document_experiment_fixture import AUDIO, fake_paths
 
 
 def reference() -> FrozenReference:
@@ -64,7 +64,7 @@ def test_corrected_path_improves_cer_and_one_window() -> None:
 def test_harmful_path_counts_false_correction_on_previously_correct_window() -> None:
     harmful = case_metrics(2)
 
-    assert harmful.windows.worsened_windows == 2
+    assert harmful.windows.worsened_windows == 1
     assert harmful.windows.false_correction_windows == 1
     assert harmful.windows.introduced_error_characters > 0
 

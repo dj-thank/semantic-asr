@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from _document_experiment_fixture import fake_paths
 
 from semantic_asr.document_experiment.ngram_scorer import (
     BidirectionalCharacterNgramScorer,
@@ -10,8 +11,6 @@ from semantic_asr.document_experiment.ngram_scorer import (
     fit_ngram_normalization,
 )
 from semantic_asr.document_experiment.protocol import DocumentExperimentArm
-
-from _document_experiment_fixture import fake_paths
 
 TRAIN = "1" * 64
 CALIBRATION = "2" * 64
@@ -80,9 +79,7 @@ def test_bidirectional_ngram_prefers_trained_contextual_sequence() -> None:
         maximum_characters=10_000,
     )
 
-    assert corrected_score.raw_average_log_likelihood > (
-        retained_score.raw_average_log_likelihood
-    )
+    assert corrected_score.raw_average_log_likelihood > (retained_score.raw_average_log_likelihood)
     assert corrected_score.value > retained_score.value
     assert corrected_score.scorer_calls == 2
     assert corrected_score.profile_digest == model.profile_digest

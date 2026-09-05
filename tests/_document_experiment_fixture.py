@@ -202,7 +202,5 @@ def fake_plan():
     )
     return SimpleNamespace(
         decision=decision,
-        digest=sha256_json(
-            {"paths": [retained.digest, corrected.digest, harmful.digest]}
-        ),
+        digest=sha256_json({"paths": [retained.digest, corrected.digest, harmful.digest]}),
     )

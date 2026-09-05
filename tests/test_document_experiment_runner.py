@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from _document_experiment_fixture import AUDIO, RIGHTS, SPLIT, fake_plan, first_pass
 
 from semantic_asr.contracts import sha256_json
 from semantic_asr.document_experiment.ngram_scorer import DocumentLanguageScore
@@ -19,8 +20,6 @@ from semantic_asr.document_experiment.runner import (
     prepare_document_experiment,
     run_document_context_experiment,
 )
-
-from _document_experiment_fixture import AUDIO, RIGHTS, SPLIT, fake_plan, first_pass
 
 
 class ToyScorer:
@@ -43,9 +42,7 @@ class ToyScorer:
             value=value,
             raw_average_log_likelihood=value,
             forward_average_log_likelihood=value,
-            backward_average_log_likelihood=(
-                value if arm.direction == "bidirectional" else None
-            ),
+            backward_average_log_likelihood=(value if arm.direction == "bidirectional" else None),
             source="toy-scorer",
             profile_digest=self.profile_digest,
             path_digest=path.digest,
@@ -164,9 +161,9 @@ def test_all_arms_share_candidates_and_context_arm_improves_fixture() -> None:
     assert "またマージ" in baseline.selected_text
     assert "まだマージ" in ordered.selected_text
     assert ordered.metrics.text.strict_edits < baseline.metrics.text.strict_edits
-    assert {
-        row.candidate_set_digest for row in report.case_results if row.case_id == "case-1"
-    } == {baseline.candidate_set_digest}
+    assert {row.candidate_set_digest for row in report.case_results if row.case_id == "case-1"} == {
+        baseline.candidate_set_digest
+    }
     assert report.paired_intervals[0].point_delta < 0.0
 
 

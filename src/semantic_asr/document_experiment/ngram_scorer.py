@@ -39,9 +39,7 @@ def _deterministic_order(size: int, *, seed: str, case_id: str) -> tuple[int, ..
     return tuple(
         sorted(
             range(size),
-            key=lambda index: sha256_json(
-                {"seed": seed, "caseId": case_id, "windowIndex": index}
-            ),
+            key=lambda index: sha256_json({"seed": seed, "caseId": case_id, "windowIndex": index}),
         )
     )
 

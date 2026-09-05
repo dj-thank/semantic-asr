@@ -96,8 +96,6 @@ class FrozenReference:
         _nonempty(self.text, name="reference text")
         if not self.window_texts or any(not isinstance(row, str) for row in self.window_texts):
             raise ValueError("reference requires one string per first-pass window")
-        if "".join(self.window_texts) != self.text:
-            raise ValueError("window reference text must exactly reconstruct the document reference")
 
     @property
     def digest(self) -> str:

@@ -10,9 +10,9 @@ import tracemalloc
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
-from ..contracts import canonical_json, sha256_json
+from ..contracts import sha256_json
 from ..deliberation_evidence import _is_sha256, _strict_float
 from ..deliberation_lattice import DocumentContext
 from ..document_deliberation import DocumentPathHypothesis
@@ -352,9 +352,7 @@ def _planning_view(case: DocumentExperimentCase) -> PlanningCaseView:
         first_pass=case.first_pass,
         source_audio_sha256=case.first_pass.source_audio_sha256,
         planning_digest=case.planning_digest,
-        external_contexts=tuple(
-            (row.name, row.context) for row in case.external_contexts
-        ),
+        external_contexts=tuple((row.name, row.context) for row in case.external_contexts),
     )
 
 
@@ -521,9 +519,7 @@ def _run_case_arm(
     selected_score = path_scores[0]
     selected = _find_path(prepared, selected_score.path_digest)
     margin = (
-        selected_score.final_score - path_scores[1].final_score
-        if len(path_scores) > 1
-        else 0.0
+        selected_score.final_score - path_scores[1].final_score if len(path_scores) > 1 else 0.0
     )
     generated = int(getattr(selected, "generated_window_count", 0)) > 0
     accepted = not generated and (len(path_scores) == 1 or margin >= arm.minimum_margin)
@@ -585,14 +581,11 @@ def run_document_context_experiment(
                     raise
                 failures.append((case.case_id, arm.name, f"{type(exc).__name__}:{exc}"))
     grouped = {
-        arm.name: tuple(row for row in results if row.arm_name == arm.name)
-        for arm in protocol.arms
+        arm.name: tuple(row for row in results if row.arm_name == arm.name) for arm in protocol.arms
     }
     if any(not rows for rows in grouped.values()):
         raise ValueError("every experiment arm must produce at least one case result")
-    aggregates = tuple(
-        aggregate_arm_metrics(arm.name, grouped[arm.name]) for arm in protocol.arms
-    )
+    aggregates = tuple(aggregate_arm_metrics(arm.name, grouped[arm.name]) for arm in protocol.arms)
     baseline = grouped[protocol.baseline_arm]
     intervals = tuple(
         paired_bootstrap_cer_delta(
@@ -604,8 +597,7 @@ def run_document_context_experiment(
             seed=protocol.bootstrap_seed,
         )
         for arm in protocol.arms
-        if arm.name != protocol.baseline_arm
-        and len(grouped[arm.name]) == len(baseline)
+        if arm.name != protocol.baseline_arm and len(grouped[arm.name]) == len(baseline)
     )
     candidate_set_by_case: dict[str, set[str]] = {}
     for row in results:
