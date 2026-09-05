@@ -1,0 +1,375 @@
+{
+  "schema": "semantic-asr-release-plan-v1",
+  "snapshot_date": "2026-09-05",
+  "repository": "dj-thank/semantic-asr",
+  "epic": 23,
+  "research_parent": 21,
+  "audit_commit": "c051e3971a4e43c22ae34e86d738f2853465023e",
+  "audit_tree": "8519187387e3dd0c20dcb7900b00c38086df4fbf",
+  "scope": "planning and audit; no new trained weights or production fixes",
+  "dependency_semantics": "complete acceptance prerequisites; preparatory work may start earlier",
+  "state_semantics": "snapshot only; read current GitHub issue before work",
+  "tasks": [
+    {
+      "issue": 19,
+      "priority": "P0",
+      "role": "contracts",
+      "depends_on": [],
+      "source_paths": [
+        "src/semantic_asr/adapters.py",
+        "tests/test_runtime_reliability.py"
+      ],
+      "new_test_paths": [],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/19"
+    },
+    {
+      "issue": 24,
+      "priority": "P0",
+      "role": "runtime",
+      "depends_on": [],
+      "source_paths": [
+        "src/semantic_asr/longform.py",
+        "src/semantic_asr/planner.py"
+      ],
+      "new_test_paths": [
+        "tests/test_evidence_budget_contract.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/24"
+    },
+    {
+      "issue": 25,
+      "priority": "P0",
+      "role": "contracts",
+      "depends_on": [],
+      "source_paths": [
+        "src/semantic_asr/score_semantics.py",
+        "src/semantic_asr/score_types.py"
+      ],
+      "new_test_paths": [
+        "tests/test_score_contract_migration.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/25"
+    },
+    {
+      "issue": 26,
+      "priority": "P0",
+      "role": "data-steward",
+      "depends_on": [],
+      "source_paths": [
+        "src/semantic_asr/rights.py",
+        "src/semantic_asr/experiment.py"
+      ],
+      "new_test_paths": [
+        "tests/test_dataset_lineage_contract.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/26"
+    },
+    {
+      "issue": 27,
+      "priority": "P1",
+      "role": "refactor",
+      "depends_on": [
+        25
+      ],
+      "source_paths": [
+        "src/semantic_asr/longform.py",
+        "scripts/apply_pr_review_fixes_v3.py"
+      ],
+      "new_test_paths": [
+        "tests/test_architecture_boundaries.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/27"
+    },
+    {
+      "issue": 28,
+      "priority": "P0",
+      "role": "build-ci",
+      "depends_on": [],
+      "source_paths": [
+        "pyproject.toml",
+        ".github/workflows/ci.yml"
+      ],
+      "new_test_paths": [
+        "tests/test_optional_imports.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/28"
+    },
+    {
+      "issue": 29,
+      "priority": "P0",
+      "role": "evaluation",
+      "depends_on": [
+        26
+      ],
+      "source_paths": [
+        "src/semantic_asr/evaluation.py",
+        "src/semantic_asr/deployment_gate.py"
+      ],
+      "new_test_paths": [
+        "tests/test_evaluation_contract_v3.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/29"
+    },
+    {
+      "issue": 30,
+      "priority": "P0",
+      "role": "research-runner",
+      "depends_on": [
+        26,
+        28,
+        29,
+        34
+      ],
+      "source_paths": [
+        "src/semantic_asr/experiment_runner.py",
+        "scripts/replay_phonetic_decisions.py"
+      ],
+      "new_test_paths": [
+        "tests/test_research_cycle_contract.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/30"
+    },
+    {
+      "issue": 31,
+      "priority": "P1",
+      "role": "contracts",
+      "depends_on": [
+        25
+      ],
+      "source_paths": [
+        "src/semantic_asr/contracts.py",
+        "src/semantic_asr/cache.py"
+      ],
+      "new_test_paths": [
+        "tests/test_evidence_schema_migration.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/31"
+    },
+    {
+      "issue": 32,
+      "priority": "P1",
+      "role": "refactor",
+      "depends_on": [
+        19,
+        25,
+        27,
+        28
+      ],
+      "source_paths": [
+        "src/semantic_asr/adapters.py",
+        "src/semantic_asr/cli_root.py"
+      ],
+      "new_test_paths": [
+        "tests/test_adapter_contract_matrix.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/32"
+    },
+    {
+      "issue": 33,
+      "priority": "P1",
+      "role": "phonology",
+      "depends_on": [
+        25,
+        26
+      ],
+      "source_paths": [
+        "src/semantic_asr/mora_phonology.py",
+        "src/semantic_asr/phonetic_evidence.py"
+      ],
+      "new_test_paths": [
+        "tests/test_pronunciation_alternatives.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/33"
+    },
+    {
+      "issue": 34,
+      "priority": "P1",
+      "role": "acoustic-runtime",
+      "depends_on": [
+        25,
+        28,
+        31
+      ],
+      "source_paths": [
+        "src/semantic_asr/phonetic_evidence.py",
+        "src/semantic_asr/phonetic_refinement.py"
+      ],
+      "new_test_paths": [
+        "tests/test_phone_runtime_integration.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/34"
+    },
+    {
+      "issue": 35,
+      "priority": "P1",
+      "role": "training",
+      "depends_on": [
+        26,
+        28,
+        29
+      ],
+      "source_paths": [
+        "src/semantic_asr/training.py",
+        "src/semantic_asr/model_io.py"
+      ],
+      "new_test_paths": [
+        "tests/test_training_resume_contract.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/35"
+    },
+    {
+      "issue": 36,
+      "priority": "P1",
+      "role": "acoustic-training",
+      "depends_on": [
+        26,
+        28,
+        29,
+        33,
+        34,
+        35
+      ],
+      "source_paths": [
+        "src/semantic_asr/training.py"
+      ],
+      "new_test_paths": [
+        "tests/test_acoustic_checkpoint_integration.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/36",
+      "required_weight_evidence": [
+        "optimizer_updates",
+        "changed_trainable_tensors",
+        "unchanged_frozen_tensors",
+        "checkpoint_sha256",
+        "fresh_process_reload",
+        "separate_evaluation"
+      ]
+    },
+    {
+      "issue": 37,
+      "priority": "P1",
+      "role": "llm-training",
+      "depends_on": [
+        25,
+        26,
+        28,
+        29,
+        34,
+        35
+      ],
+      "source_paths": [
+        "src/semantic_asr/sequence_scorers.py",
+        "src/semantic_asr/ranker_dataset.py"
+      ],
+      "new_test_paths": [
+        "tests/test_lora_ranker_contract.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/37",
+      "required_weight_evidence": [
+        "optimizer_updates",
+        "changed_trainable_tensors",
+        "unchanged_frozen_tensors",
+        "checkpoint_sha256",
+        "fresh_process_reload",
+        "separate_evaluation"
+      ]
+    },
+    {
+      "issue": 38,
+      "priority": "P1",
+      "role": "context-evaluation",
+      "depends_on": [
+        24,
+        26,
+        29,
+        31,
+        34
+      ],
+      "source_paths": [
+        "src/semantic_asr/longform_deliberation.py",
+        "src/semantic_asr/context_catalog.py"
+      ],
+      "new_test_paths": [
+        "tests/test_document_context_contract.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/38"
+    },
+    {
+      "issue": 39,
+      "priority": "P2",
+      "role": "performance",
+      "depends_on": [
+        24,
+        28,
+        29,
+        32,
+        34
+      ],
+      "source_paths": [
+        "src/semantic_asr/advanced_adapters.py",
+        "src/semantic_asr/adaptive.py"
+      ],
+      "new_test_paths": [
+        "tests/test_runtime_resource_bounds.py"
+      ],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/39"
+    },
+    {
+      "issue": 40,
+      "priority": "P1",
+      "role": "publication",
+      "depends_on": [],
+      "source_paths": [
+        "README.md",
+        "CONTRIBUTING.md",
+        "CITATION.cff"
+      ],
+      "new_test_paths": [],
+      "state": "planned",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/40",
+      "promotion_requires": [
+        19,
+        24,
+        25,
+        26,
+        28,
+        29,
+        30,
+        31
+      ]
+    }
+  ],
+  "parallel_start": [
+    19,
+    24,
+    25,
+    26,
+    28
+  ],
+  "preparatory_start": {
+    "27": "inventory only; contract migration waits for #25",
+    "40": "templates and records only; release gates remain open"
+  },
+  "known_open_defects": [
+    19,
+    24,
+    25
+  ]
+}
