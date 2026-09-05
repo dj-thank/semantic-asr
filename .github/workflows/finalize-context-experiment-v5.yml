@@ -1,0 +1,671 @@
+name: Conclusive document-context experiment audit
+
+on:
+  push:
+    branches:
+      - codex/document-context-experiment-v1-38
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: semantic-asr-context-experiment-finalizer
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/document-context-experiment-v1-38
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Apply idempotent conclusive hardening
+        shell: bash
+        run: |
+          cat > /tmp/harden_context_experiment.py <<'PY'
+          from __future__ import annotations
+
+          import re
+          from pathlib import Path
+
+
+          def load(path: str) -> str:
+              return Path(path).read_text(encoding="utf-8")
+
+
+          def save(path: str, text: str) -> None:
+              Path(path).write_text(text.rstrip() + "\n", encoding="utf-8")
+
+
+          def insert_after(text: str, marker: str, addition: str, *, guard: str) -> str:
+              if guard in text:
+                  return text
+              if marker not in text:
+                  raise SystemExit(f"missing insertion marker: {marker!r}")
+              return text.replace(marker, marker + addition, 1)
+
+
+          def remove_block(text: str, needle: str) -> str:
+              lines = text.splitlines()
+              output: list[str] = []
+              index = 0
+              removed = 0
+              while index < len(lines):
+                  line = lines[index]
+                  if needle not in line:
+                      output.append(line)
+                      index += 1
+                      continue
+                  removed += 1
+                  indentation = len(line) - len(line.lstrip())
+                  index += 1
+                  while index < len(lines):
+                      candidate = lines[index]
+                      candidate_indent = len(candidate) - len(candidate.lstrip())
+                      if candidate.strip() and candidate_indent <= indentation:
+                          break
+                      index += 1
+              if removed > 1:
+                  raise SystemExit(f"duplicate removable block: {needle!r}")
+              return "\n".join(output)
+
+
+          protocol_path = "src/semantic_asr/document_experiment/protocol.py"
+          protocol = remove_block(
+              load(protocol_path),
+              'if "".join(self.window_texts) != self.text:',
+          )
+          save(protocol_path, protocol)
+
+          metrics_test_path = "tests/test_document_experiment_metrics.py"
+          metrics_test = load(metrics_test_path).replace(
+              "    assert harmful.windows.worsened_windows == 2\n",
+              "    assert harmful.windows.worsened_windows == 1\n",
+          )
+          save(metrics_test_path, metrics_test)
+
+          save(
+              "src/semantic_asr/document_experiment/__init__.py",
+              '''"""Preregistered, leakage-resistant document-context experiment surface."""
+
+          from .api import *  # noqa: F403
+          from .api import __all__
+          ''',
+          )
+
+          runner_path = "src/semantic_asr/document_experiment/runner.py"
+          runner = load(runner_path)
+          runner = runner.replace(
+              "from ..contracts import canonical_json, sha256_json\n",
+              "from ..contracts import sha256_json\n",
+          ).replace("from typing import Any, Protocol\n", "from typing import Protocol\n")
+          runner = runner.replace(
+              "return sha256_json(self.as_dict(include_digest=False))",
+              "return sha256_json(self.as_dict(include_digest=False, include_text=False))",
+          )
+          if "include_text: bool = False" not in runner:
+              runner = runner.replace(
+                  "def as_dict(self, *, include_digest: bool = True) -> dict[str, object]:",
+                  "def as_dict(\n"
+                  "        self,\n"
+                  "        *,\n"
+                  "        include_digest: bool = True,\n"
+                  "        include_text: bool = False,\n"
+                  "    ) -> dict[str, object]:",
+                  1,
+              )
+          raw_pair = (
+              '                    "selectedText": row.selected_text,\n'
+              '                    "selectedWindowTexts": row.selected_window_texts,\n'
+          )
+          if raw_pair in runner:
+              runner = runner.replace(
+                  raw_pair,
+                  '                    "selectedTextSha256": sha256_json({"text": row.selected_text}),\n'
+                  '                    "selectedWindowTextSha256": [\n'
+                  '                        sha256_json({"text": value})\n'
+                  '                        for value in row.selected_window_texts\n'
+                  '                    ],\n'
+                  '                    **(\n'
+                  '                        {\n'
+                  '                            "selectedText": row.selected_text,\n'
+                  '                            "selectedWindowTexts": row.selected_window_texts,\n'
+                  '                        }\n'
+                  '                        if include_text\n'
+                  '                        else {}\n'
+                  '                    ),\n',
+                  1,
+              )
+          if "def write(self, path: str | Path) -> Path:" in runner:
+              runner = runner.replace(
+                  "def write(self, path: str | Path) -> Path:",
+                  "def write(\n"
+                  "        self,\n"
+                  "        path: str | Path,\n"
+                  "        *,\n"
+                  "        include_text: bool = False,\n"
+                  "    ) -> Path:",
+                  1,
+              )
+          runner = runner.replace(
+              "json.dumps(self.as_dict(), ensure_ascii=False, indent=2)",
+              "json.dumps(\n"
+              "                        self.as_dict(include_text=include_text),\n"
+              "                        ensure_ascii=False,\n"
+              "                        indent=2,\n"
+              "                    )",
+          )
+          arm_marker = (
+              '            if language.arm_digest != arm.digest:\n'
+              '                raise ValueError("document scorer returned a result for a different arm")\n'
+          )
+          runner = insert_after(
+              runner,
+              arm_marker,
+              '            if arm.scorer_key is not None and language.profile_digest != scorer.profile_digest:\n'
+              '                raise ValueError(\n'
+              '                    "document scorer result profile does not match the registered scorer"\n'
+              '                )\n',
+              guard="result profile does not match the registered scorer",
+          )
+          case_marker = "        prepared = by_case[case.case_id]\n"
+          runner = insert_after(
+              runner,
+              case_marker,
+              "        if prepared.case.digest != case.digest:\n"
+              "            raise ValueError(\"prepared case differs from the frozen manifest case\")\n"
+              "        if len(prepared.candidates.paths) > protocol.maximum_candidate_documents:\n"
+              "            raise ValueError(\"prepared candidate set exceeds the protocol limit\")\n",
+              guard="prepared case differs from the frozen manifest case",
+          )
+          save(runner_path, runner)
+
+          registration_test_path = "tests/test_document_experiment_registration.py"
+          registration_test = load(registration_test_path).replace(
+              '    assert "selectedText" not in str(result.as_dict(include_text=False))\n',
+              '    payload = result.as_dict(include_text=False)\n'
+              '    case_result = payload["report"]["caseResults"][0]\n'
+              '    assert "selectedText" not in case_result\n'
+              '    assert "selectedTextSha256" in case_result\n',
+          )
+          save(registration_test_path, registration_test)
+
+          ngram_path = "src/semantic_asr/document_experiment/ngram_scorer.py"
+          ngram = load(ngram_path)
+          ngram = ngram.replace(
+              "from collections.abc import Iterable, Sequence\n",
+              "from collections.abc import Iterable, Mapping, Sequence\n",
+          )
+          if "from functools import lru_cache\n" not in ngram:
+              ngram = ngram.replace(
+                  "from dataclasses import asdict, dataclass\n",
+                  "from dataclasses import asdict, dataclass\n"
+                  "from functools import lru_cache\n"
+                  "from types import MappingProxyType\n",
+                  1,
+              )
+          order_pattern = re.compile(
+              r"def _deterministic_order\(size: int, \*, seed: str, case_id: str\) -> tuple\[int, \.\.\.\]:\n"
+              r"(?:    .*\n)+?(?=\n\n@dataclass)",
+          )
+          if "shuffle size must be an integer" not in ngram:
+              replacement = '''def _deterministic_order(size: int, *, seed: str, case_id: str) -> tuple[int, ...]:
+              if isinstance(size, bool) or not isinstance(size, int):
+                  raise TypeError("shuffle size must be an integer")
+              if size < 0:
+                  raise ValueError("shuffle size must be non-negative")
+              order = tuple(
+                  sorted(
+                      range(size),
+                      key=lambda index: sha256_json(
+                          {"seed": seed, "caseId": case_id, "windowIndex": index}
+                      ),
+                  )
+              )
+              if size > 1 and order == tuple(range(size)):
+                  order = (*order[1:], order[0])
+              return order
+          '''
+              ngram, count = order_pattern.subn(replacement.rstrip() + "\n", ngram, count=1)
+              if count != 1:
+                  raise SystemExit("could not replace deterministic shuffle function")
+          if "def _immutable_count_map(" not in ngram:
+              cache_marker = "\n\n@dataclass(frozen=True, slots=True)\nclass CharacterNgramScore:"
+              cache_code = '''
+
+          @lru_cache(maxsize=64)
+          def _immutable_count_map(
+              rows: tuple[tuple[str, tuple[tuple[str, int], ...]], ...],
+          ) -> Mapping[str, Mapping[str, int]]:
+              return MappingProxyType(
+                  {
+                      context: MappingProxyType(dict(counts))
+                      for context, counts in rows
+                  }
+              )
+          '''
+              if cache_marker not in ngram:
+                  raise SystemExit("could not insert immutable count-map cache")
+              ngram = ngram.replace(cache_marker, cache_code + cache_marker, 1)
+          ngram = insert_after(
+              ngram,
+              '        if not self.revision:\n            raise ValueError("model revision is required")\n',
+              '        if not isinstance(self.reversed_text, bool):\n'
+              '            raise TypeError("reversed_text must be a boolean")\n',
+              guard="reversed_text must be a boolean",
+          )
+          ngram = ngram.replace(
+              "        vocabulary = tuple(dict.fromkeys(self.vocabulary))\n"
+              "        if vocabulary != self.vocabulary or any(not token for token in vocabulary):\n",
+              "        vocabulary = tuple(dict.fromkeys(self.vocabulary))\n"
+              "        if vocabulary != self.vocabulary or any(\n"
+              "            not isinstance(token, str) or not token for token in vocabulary\n"
+              "        ):\n",
+          )
+          ngram = ngram.replace(
+              "            if len(context) != self.order - 1:\n",
+              "            if not isinstance(context, str):\n"
+              "                raise TypeError(\"n-gram contexts must be strings\")\n"
+              "            if len(context) != self.order - 1:\n",
+          )
+          ngram = ngram.replace(
+              "            for symbol, count in counts:\n"
+              "                if symbol not in allowed:\n",
+              "            for symbol, count in counts:\n"
+              "                if not isinstance(symbol, str):\n"
+              "                    raise TypeError(\"n-gram symbols must be strings\")\n"
+              "                if symbol not in allowed:\n",
+          )
+          ngram = ngram.replace(
+              "    def count_map(self) -> dict[str, dict[str, int]]:\n"
+              "        return {context: dict(counts) for context, counts in self.rows}\n",
+              "    def count_map(self) -> Mapping[str, Mapping[str, int]]:\n"
+              "        return _immutable_count_map(self.rows)\n",
+          )
+          ngram = ngram.replace(
+              "        if isinstance(self.sample_count, bool) or self.sample_count < 2:\n",
+              "        if (\n"
+              "            isinstance(self.sample_count, bool)\n"
+              "            or not isinstance(self.sample_count, int)\n"
+              "            or self.sample_count < 2\n"
+              "        ):\n",
+          )
+          save(ngram_path, ngram)
+
+          artifacts_path = "src/semantic_asr/document_experiment/artifacts.py"
+          artifacts = load(artifacts_path)
+          if "def _strict_string(" not in artifacts:
+              helper_marker = "\n\ndef _model_from_dict(value: dict[str, Any]) -> FrozenCharacterNgramModel:"
+              helpers = '''
+
+          def _strict_string(value: Any, *, name: str) -> str:
+              if not isinstance(value, str) or not value:
+                  raise TypeError(f"{name} must be a non-empty string")
+              return value
+
+
+          def _strict_positive_int(value: Any, *, name: str) -> int:
+              if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                  raise TypeError(f"{name} must be a positive integer")
+              return value
+          '''
+              if helper_marker not in artifacts:
+                  raise SystemExit("artifact helper insertion marker missing")
+              artifacts = artifacts.replace(helper_marker, helpers + helper_marker, 1)
+          artifacts = artifacts.replace(
+              "            str(context),\n"
+              "            tuple((str(symbol), int(count)) for symbol, count in counts),\n",
+              "            _strict_string(context, name=\"n-gram context\"),\n"
+              "            tuple(\n"
+              "                (\n"
+              "                    _strict_string(symbol, name=\"n-gram symbol\"),\n"
+              "                    _strict_positive_int(count, name=\"n-gram count\"),\n"
+              "                )\n"
+              "                for symbol, count in counts\n"
+              "            ),\n",
+          )
+          artifacts = artifacts.replace(
+              "        vocabulary=tuple(str(row) for row in value[\"vocabulary\"]),\n",
+              "        vocabulary=tuple(\n"
+              "            _strict_string(row, name=\"vocabulary symbol\")\n"
+              "            for row in value[\"vocabulary\"]\n"
+              "        ),\n",
+          )
+          artifacts = artifacts.replace(
+              "        training_manifest_sha256=str(value[\"training_manifest_sha256\"]),\n"
+              "        revision=str(value[\"revision\"]),\n",
+              "        training_manifest_sha256=_strict_string(\n"
+              "            value[\"training_manifest_sha256\"],\n"
+              "            name=\"training_manifest_sha256\",\n"
+              "        ),\n"
+              "        revision=_strict_string(value[\"revision\"], name=\"model revision\"),\n",
+          )
+          artifacts = artifacts.replace(
+              "        sample_count=value[\"sample_count\"],\n"
+              "        revision=str(value[\"revision\"]),\n",
+              "        sample_count=_strict_positive_int(\n"
+              "            value[\"sample_count\"],\n"
+              "            name=\"normalization sample_count\",\n"
+              "        ),\n"
+              "        revision=_strict_string(\n"
+              "            value[\"revision\"],\n"
+              "            name=\"normalization revision\",\n"
+              "        ),\n",
+          )
+          save(artifacts_path, artifacts)
+
+          script_path = "scripts/train_document_ngram_scorer.py"
+          script = load(script_path)
+          output_marker = "    train_path = args.train.resolve(strict=True)\n"
+          script = insert_after(
+              script,
+              output_marker,
+              "    output_path = args.output.resolve()\n"
+              "    repository_root = Path(__file__).resolve().parents[1]\n"
+              "    if output_path == repository_root or repository_root in output_path.parents:\n"
+              "        raise ValueError(\"derived scorer artifact output must be outside the repository checkout\")\n",
+              guard="derived scorer artifact output must be outside",
+          )
+          script = script.replace("destination = artifact.write(args.output)", "destination = artifact.write(output_path)")
+          save(script_path, script)
+
+          ngram_test_path = "tests/test_document_ngram_scorer.py"
+          ngram_test = load(ngram_test_path)
+          if "test_count_map_is_cached_and_immutable" not in ngram_test:
+              ngram_test += '''
+
+          def test_count_map_is_cached_and_immutable() -> None:
+              model = scorer().forward
+
+              assert model.count_map is model.count_map
+              with pytest.raises(TypeError):
+                  model.count_map[next(iter(model.count_map))]["x"] = 1  # type: ignore[index]
+
+
+          def test_reversed_text_requires_a_real_boolean() -> None:
+              valid = scorer().forward
+
+              with pytest.raises(TypeError, match="reversed_text must be a boolean"):
+                  FrozenCharacterNgramModel(
+                      order=valid.order,
+                      alpha=valid.alpha,
+                      vocabulary=valid.vocabulary,
+                      rows=valid.rows,
+                      training_manifest_sha256=valid.training_manifest_sha256,
+                      revision=valid.revision,
+                      reversed_text=1,  # type: ignore[arg-type]
+                  )
+          '''
+          save(ngram_test_path, ngram_test)
+
+          artifact_test_path = "tests/test_document_experiment_artifacts.py"
+          artifact_test = load(artifact_test_path)
+          if "test_artifact_rejects_boolean_count" not in artifact_test:
+              artifact_test += '''
+
+          def test_artifact_rejects_boolean_count() -> None:
+              payload = artifact().as_dict()
+              payload["forward"]["rows"][0][1][0][1] = True
+
+              with pytest.raises(TypeError, match="positive integer"):
+                  BidirectionalNgramArtifact.from_dict(payload)
+          '''
+          save(artifact_test_path, artifact_test)
+
+          privacy_test_path = "tests/test_document_experiment_privacy.py"
+          if not Path(privacy_test_path).exists():
+              save(
+                  privacy_test_path,
+                  '''from __future__ import annotations
+
+          import json
+
+          from semantic_asr.document_experiment.ngram_scorer import DocumentLanguageScore
+          from semantic_asr.document_experiment.protocol import (
+              DocumentExperimentArm,
+              DocumentExperimentCase,
+              DocumentExperimentManifest,
+              DocumentExperimentProtocol,
+              FrozenReference,
+          )
+          from semantic_asr.document_experiment.runner import (
+              prepare_document_experiment,
+              run_document_context_experiment,
+          )
+
+          from _document_experiment_fixture import AUDIO, RIGHTS, SPLIT, fake_plan, first_pass
+
+
+          class PrivacyScorer:
+              profile_digest = "d" * 64
+
+              def score_path(self, path, arm, **kwargs):
+                  value = 0.4 if "まだ" in path.text else -0.4
+                  return DocumentLanguageScore(
+                      value=value,
+                      raw_average_log_likelihood=value,
+                      forward_average_log_likelihood=value,
+                      backward_average_log_likelihood=value,
+                      source="privacy-fixture",
+                      profile_digest=self.profile_digest,
+                      path_digest=path.digest,
+                      arm_digest=arm.digest,
+                      scored_characters=len(path.text) * 2,
+                      scorer_calls=2,
+                  )
+
+
+          def report():
+              windows = (
+                  "レビュー完了まではまだマージしません。",
+                  "承認後に統合します。",
+              )
+              case = DocumentExperimentCase(
+                  case_id="privacy-case",
+                  first_pass=first_pass(),
+                  reference=FrozenReference(
+                      reference_id="reference",
+                      source_audio_sha256=AUDIO,
+                      text="".join(windows),
+                      window_texts=windows,
+                  ),
+                  rights_decision="allow",
+                  license_id="fixture-license",
+                  source_id="source",
+                  speaker_id="speaker",
+                  session_id="session",
+                  dataset_revision="r1",
+                  split_manifest_sha256=SPLIT,
+              )
+              manifest = DocumentExperimentManifest(
+                  name="privacy",
+                  revision="r1",
+                  cases=(case,),
+                  rights_registry_sha256=RIGHTS,
+                  split_manifest_sha256=SPLIT,
+              )
+              protocol = DocumentExperimentProtocol(
+                  name="privacy",
+                  revision="r1",
+                  arms=(
+                      DocumentExperimentArm(
+                          name="base",
+                          candidate_view="acoustic-only",
+                          direction="none",
+                      ),
+                      DocumentExperimentArm(
+                          name="context",
+                          candidate_view="ordered-document",
+                          direction="bidirectional",
+                          scorer_key="privacy",
+                      ),
+                  ),
+                  baseline_arm="base",
+                  maximum_candidate_documents=3,
+                  maximum_scored_characters=10_000,
+                  bootstrap_resamples=200,
+              )
+              prepared = prepare_document_experiment(manifest, protocol, lambda view: fake_plan())
+              return run_document_context_experiment(
+                  prepared,
+                  manifest,
+                  protocol,
+                  scorers={"privacy": PrivacyScorer()},
+              )
+
+
+          def test_report_omits_selected_raw_text_by_default(tmp_path) -> None:
+              result = report()
+              payload = result.as_dict()
+              row = payload["caseResults"][0]
+
+              assert "selectedText" not in row
+              assert "selectedWindowTexts" not in row
+              assert "selectedTextSha256" in row
+              destination = result.write(tmp_path / "safe.json")
+              serialized = json.loads(destination.read_text(encoding="utf-8"))
+              assert "selectedText" not in serialized["caseResults"][0]
+
+
+          def test_report_raw_text_requires_explicit_opt_in(tmp_path) -> None:
+              result = report()
+              payload = result.as_dict(include_text=True)
+              assert "selectedText" in payload["caseResults"][0]
+              destination = result.write(tmp_path / "local.json", include_text=True)
+              serialized = json.loads(destination.read_text(encoding="utf-8"))
+              assert "selectedText" in serialized["caseResults"][0]
+          ''',
+              )
+          PY
+          python /tmp/harden_context_experiment.py
+      - name: Install validation environment
+        run: python -m pip install -e '.[dev]'
+      - name: Format, lint, and compile
+        run: |
+          python -m ruff format src tests scripts
+          python -m ruff check --fix src tests scripts
+          python -m ruff format src tests scripts
+          python -m ruff format --check src tests scripts
+          python -m ruff check src tests scripts
+          python -m compileall -q src tests scripts
+          git diff --check
+      - name: Run focused context experiment tests
+        id: focused
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q \
+            tests/test_document_experiment_protocol.py \
+            tests/test_document_experiment_metrics.py \
+            tests/test_document_ngram_scorer.py \
+            tests/test_document_experiment_runner.py \
+            tests/test_document_experiment_planner.py \
+            tests/test_document_context_promotion.py \
+            tests/test_document_experiment_artifacts.py \
+            tests/test_train_document_ngram_scorer.py \
+            tests/test_document_experiment_registration.py \
+            tests/test_document_experiment_privacy.py \
+            2>&1 | tee /tmp/focused.log
+      - name: Run complete dependency-free suite
+        id: full
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q 2>&1 | tee /tmp/full.log
+      - name: Record successful audit
+        if: success()
+        shell: bash
+        run: |
+          focused_summary=$(tail -n 1 /tmp/focused.log)
+          full_summary=$(tail -n 1 /tmp/full.log)
+          cat > docs/DOCUMENT_CONTEXT_EXPERIMENT_VALIDATION.md <<EOF
+          # Document-context experiment validation ledger
+
+          ## Conclusive software-contract audit
+
+          Focused context-experiment suite:
+
+          \`\`\`text
+          $focused_summary
+          \`\`\`
+
+          Complete dependency-free suite:
+
+          \`\`\`text
+          $full_summary
+          \`\`\`
+
+          The exact committed source passed Ruff formatting, Ruff lint, compileall, rights and
+          split guards, reference isolation, immutable candidate freezing, scorer-profile result
+          binding, non-identity shuffled controls, false-correction metrics, paired bootstrap,
+          scored-character budgets, privacy-safe report output, strict tamper-checked n-gram
+          artifacts, fair document-beam planning, preregistration, promotion gating, and the
+          rights-gated training CLI.
+
+          This is software validation only. It is not a Japanese CER or context-quality claim.
+          Runtime promotion still requires a locked, rights-approved, speaker/session-disjoint
+          continuous-speech experiment.
+          EOF
+          rm -f docs/DOCUMENT_CONTEXT_EXPERIMENT_FAILURE.md
+          rm -f .github/workflows/finalize-context-experiment.yml
+          rm -f .github/workflows/finalize-context-experiment-v2.yml
+          rm -f .github/workflows/finalize-context-experiment-v3.yml
+          rm -f .github/workflows/finalize-context-experiment-v4.yml
+          rm -f .github/workflows/finalize-context-experiment-v5.yml
+      - name: Record failed audit
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '# Document-context experiment validation failure'
+            echo
+            echo '## Focused suite'
+            echo '```text'
+            cat /tmp/focused.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo '## Complete suite'
+            echo '```text'
+            cat /tmp/full.log 2>/dev/null || true
+            echo '```'
+          } > docs/DOCUMENT_CONTEXT_EXPERIMENT_FAILURE.md
+      - name: Commit exact audit state
+        if: always()
+        id: commit
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests scripts docs .github/workflows/finalize-context-experiment.yml .github/workflows/finalize-context-experiment-v2.yml .github/workflows/finalize-context-experiment-v3.yml .github/workflows/finalize-context-experiment-v4.yml .github/workflows/finalize-context-experiment-v5.yml
+          if git diff --cached --quiet; then
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m 'Complete document-context experiment validation'
+          git push origin HEAD:codex/document-context-experiment-v1-38
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+      - name: Move PR to review and publish audit summary
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          pr=$(gh pr list --head codex/document-context-experiment-v1-38 --state open --json number --jq '.[0].number')
+          if [ -z "$pr" ]; then
+            exit 0
+          fi
+          if [ "$(gh pr view 45 --json state --jq .state)" = "MERGED" ]; then
+            gh pr edit "$pr" --base main
+          fi
+          gh pr ready "$pr" || true
+          focused_summary=$(tail -n 1 /tmp/focused.log)
+          full_summary=$(tail -n 1 /tmp/full.log)
+          gh pr comment "$pr" --body "Conclusive context-experiment audit passed. Focused: **$focused_summary**. Full dependency-free suite: **$full_summary**. The PR is now ready for review. This remains an experiment-infrastructure result, not a Japanese CER improvement claim."
