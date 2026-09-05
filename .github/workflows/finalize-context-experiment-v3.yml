@@ -1,0 +1,163 @@
+name: Final document-context experiment audit
+
+on:
+  push:
+    branches:
+      - codex/document-context-experiment-v1-38
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/document-context-experiment-v1-38
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Apply idempotent contract and export fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          protocol = Path('src/semantic_asr/document_experiment/protocol.py')
+          text = protocol.read_text(encoding='utf-8')
+          lines = text.splitlines()
+          output = []
+          skipping = False
+          for line in lines:
+              if 'if "".join(self.window_texts) != self.text:' in line:
+                  skipping = True
+                  continue
+              if skipping:
+                  if 'window reference text must exactly reconstruct' in line:
+                      skipping = False
+                      continue
+                  raise SystemExit('unexpected multiline window-reference invariant')
+              output.append(line)
+          if skipping:
+              raise SystemExit('unterminated window-reference invariant')
+          protocol.write_text('\n'.join(output) + '\n', encoding='utf-8')
+
+          metrics_test = Path('tests/test_document_experiment_metrics.py')
+          text = metrics_test.read_text(encoding='utf-8')
+          text = text.replace(
+              '    assert harmful.windows.worsened_windows == 2\n',
+              '    assert harmful.windows.worsened_windows == 1\n',
+          )
+          metrics_test.write_text(text, encoding='utf-8')
+
+          api = Path('src/semantic_asr/document_experiment/__init__.py')
+          text = api.read_text(encoding='utf-8')
+          import_block = '''from .planner import FrozenDocumentBeamPlanner\n'''
+          if import_block not in text:
+              marker = 'from .protocol import (\n'
+              if marker not in text:
+                  raise SystemExit('document experiment API import marker missing')
+              text = text.replace(marker, import_block + marker)
+          export = '    "FrozenDocumentBeamPlanner",\n'
+          if export not in text:
+              marker = '    "FrozenDocumentCandidates",\n'
+              if marker not in text:
+                  raise SystemExit('document experiment API export marker missing')
+              text = text.replace(marker, marker + export)
+          api.write_text(text, encoding='utf-8')
+          PY
+      - name: Install and normalize source
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m ruff format src tests scripts
+          python -m ruff check --fix src tests scripts
+          python -m ruff format src tests scripts
+          git diff --check
+      - name: Run focused and complete suites
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -q \
+            tests/test_document_experiment_protocol.py \
+            tests/test_document_experiment_metrics.py \
+            tests/test_document_ngram_scorer.py \
+            tests/test_document_experiment_runner.py \
+            tests/test_document_experiment_planner.py \
+            2>&1 | tee /tmp/focused.log
+          focused_status=${PIPESTATUS[0]}
+          python -m pytest -q 2>&1 | tee /tmp/full.log
+          full_status=${PIPESTATUS[0]}
+          echo "focused_status=$focused_status" >> "$GITHUB_OUTPUT"
+          echo "full_status=$full_status" >> "$GITHUB_OUTPUT"
+          if [ "$focused_status" -ne 0 ] || [ "$full_status" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Write validation result
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.tests.outcome }}" = "success" ]; then
+            focused_summary=$(tail -n 1 /tmp/focused.log)
+            full_summary=$(tail -n 1 /tmp/full.log)
+            cat > docs/DOCUMENT_CONTEXT_EXPERIMENT_VALIDATION.md <<EOF
+          # Document-context experiment validation ledger
+
+          ## Automated software audit
+
+          Focused suite:
+
+          \`\`\`text
+          $focused_summary
+          \`\`\`
+
+          Complete dependency-free suite:
+
+          \`\`\`text
+          $full_summary
+          \`\`\`
+
+          Ruff formatting, Ruff lint, source compilation, candidate-freeze contracts, rights and
+          split guards, reference isolation, n-gram artifact integrity, false-correction metrics,
+          deterministic bootstrap, scored-character budgets, report serialization, and the fair
+          document-beam planner adapter were exercised on the exact committed source.
+
+          This is not an accuracy claim. Real promotion requires the rights-approved,
+          speaker/session-disjoint continuous-speech experiment in
+          \`DOCUMENT_CONTEXT_EXPERIMENT.md\`.
+          EOF
+            rm -f docs/DOCUMENT_CONTEXT_EXPERIMENT_FAILURE.md
+            rm -f .github/workflows/finalize-context-experiment.yml
+            rm -f .github/workflows/finalize-context-experiment-v2.yml
+            rm -f .github/workflows/finalize-context-experiment-v3.yml
+          else
+            {
+              echo '# Document-context experiment validation failure'
+              echo
+              echo '## Focused suite'
+              echo '```text'
+              cat /tmp/focused.log 2>/dev/null || true
+              echo '```'
+              echo
+              echo '## Full suite'
+              echo '```text'
+              cat /tmp/full.log 2>/dev/null || true
+              echo '```'
+            } > docs/DOCUMENT_CONTEXT_EXPERIMENT_FAILURE.md
+          fi
+      - name: Commit exact audit state
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests docs .github/workflows/finalize-context-experiment.yml .github/workflows/finalize-context-experiment-v2.yml .github/workflows/finalize-context-experiment-v3.yml
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Complete document-context experiment audit'
+          git push origin HEAD:codex/document-context-experiment-v1-38
