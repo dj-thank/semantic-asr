@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from _phonetic_experiment_fixture import manifest, protocol, utility_artifact
+
 from semantic_asr.phonetic_experiment.planner import FrozenPhoneticCandidatePlanner
 from semantic_asr.phonetic_experiment.selection import select_phonetic_arm
-
-from _phonetic_experiment_fixture import manifest, protocol, utility_artifact
 
 
 def test_candidate_pool_digest_excludes_generation_latency(tmp_path) -> None:
