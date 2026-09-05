@@ -40,10 +40,14 @@ def _hidden_states(output: Any) -> Tensor:
     return hidden
 
 
-def _validate_ctc_targets(labels: Tensor, *, blank_id: int, name: str) -> None:
+def _validate_ctc_targets(labels: Tensor, *, blank_id: int, name: str, vocab_size: int) -> None:
     if labels.ndim != 2:
         raise ValueError(f"{name} labels must be [batch, target]")
+    if labels.dtype not in (torch.int32, torch.int64):
+        raise TypeError(f"{name} labels must have integer dtype")
     valid = labels.ne(-100)
+    if torch.any(valid & ((labels < 0) | (labels >= vocab_size))):
+        raise ValueError(f"{name} target ID is outside vocabulary")
     if torch.any(labels.masked_select(valid).eq(blank_id)):
         raise ValueError(f"{name} labels must not contain the CTC blank ID")
     for row in range(labels.shape[0]):
@@ -60,20 +64,40 @@ def _ctc_loss(
     blank_id: int,
     name: str,
 ) -> Tensor:
-    _validate_ctc_targets(labels, blank_id=blank_id, name=name)
+    if logits.ndim != 3 or not torch.isfinite(logits).all():
+        raise ValueError(f"{name} logits must be finite [batch, frames, vocabulary]")
+    if isinstance(blank_id, bool) or not isinstance(blank_id, int):
+        raise TypeError("CTC blank ID must be an integer")
+    if not 0 <= blank_id < logits.shape[-1]:
+        raise ValueError("CTC blank ID is outside vocabulary")
+    if input_lengths.dtype not in (torch.int32, torch.int64):
+        raise TypeError("CTC input lengths must have integer dtype")
+    if labels.ndim != 2:
+        raise ValueError(f"{name} labels must be [batch, target]")
+    if input_lengths.shape != (logits.shape[0],) or labels.shape[0] != logits.shape[0]:
+        raise ValueError("CTC batch and length shapes must match")
+    if torch.any(input_lengths <= 0) or torch.any(input_lengths > logits.shape[1]):
+        raise ValueError("CTC input lengths exceed frame bounds")
+    _validate_ctc_targets(labels, blank_id=blank_id, name=name, vocab_size=logits.shape[-1])
     valid = labels.ne(-100)
     target_lengths = valid.sum(dim=1).to(dtype=torch.long)
     if torch.any(target_lengths > input_lengths):
         raise ValueError(f"{name} target length exceeds encoder length")
+    repetitions = (labels[:, 1:].eq(labels[:, :-1]) & valid[:, 1:] & valid[:, :-1]).sum(dim=1)
+    if torch.any(target_lengths + repetitions > input_lengths):
+        raise ValueError(f"{name} repeated targets need extra blank frames for CTC alignment")
     targets = labels.masked_select(valid).to(dtype=torch.long)
-    return F.ctc_loss(
+    loss = F.ctc_loss(
         logits.log_softmax(dim=-1).transpose(0, 1),
         targets,
         input_lengths.to(dtype=torch.long),
         target_lengths,
         blank=blank_id,
-        zero_infinity=True,
+        zero_infinity=False,
     )
+    if not torch.isfinite(loss):
+        raise ValueError(f"{name} CTC loss is non-finite; do not silently zero failed examples")
+    return loss
 
 
 def _frame_cross_entropy(

@@ -93,7 +93,7 @@ jobs:
       - name: Require CPU PyTorch and run real backward tests
         run: |
           python -c "import torch; print(torch.__version__); assert torch.empty(0).device.type == 'cpu'"
-          python -m pytest -q tests/test_training_optional.py tests/test_acoustic_verifier_optional.py
+          python -m pytest -q tests/test_training_optional.py tests/test_acoustic_verifier_optional.py tests/test_mora_training_regressions.py
       - name: Verify tracked source stayed unchanged
         run: git diff --exit-code
 
