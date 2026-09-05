@@ -120,6 +120,7 @@ def local_policy() -> DeliberationPolicy:
         channel_weights=(
             ("first_pass", 0.8),
             ("asr_acoustic", 1.0),
+            ("phone", 0.8),
             ("mora_shadow", 0.1),
             ("transition", 0.1),
         ),
@@ -397,9 +398,12 @@ def phone_utility(value: float = 0.9) -> BoundedUtility:
 
 def generated_provider(**kwargs):
     build = kwargs["build"]
-    target = next(
+    targets = [
         span for span in build.lattice.spans if bool(span.metadata["isContradiction"])
-    )
+    ]
+    if not targets:
+        return {}
+    target = targets[0]
     return {
         target.span_id: (
             VerifiedSpanProposal(
