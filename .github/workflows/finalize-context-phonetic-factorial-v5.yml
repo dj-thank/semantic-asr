@@ -1,0 +1,234 @@
+name: Context and phonetic factorial audit
+
+on:
+  push:
+    branches:
+      - codex/context-phonetic-factorial-v5-38
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: semantic-asr-context-phonetic-factorial-v5
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/context-phonetic-factorial-v5-38
+          fetch-depth: 0
+      - name: Synchronize the complete lower stack
+        shell: bash
+        run: |
+          git fetch origin \
+            codex/document-context-experiment-v1-38 \
+            codex/audio-phonetic-ctc-v1-38 \
+            codex/audio-phonetic-ctc-v2-38 \
+            codex/japanese-phonetic-labels-v3-38 \
+            codex/phonetic-proposal-ablation-v4-38 \
+            codex/context-phonetic-stack-audit-38
+          git merge --no-edit origin/codex/document-context-experiment-v1-38
+          git merge --no-edit origin/codex/audio-phonetic-ctc-v1-38
+          git merge --no-edit origin/codex/audio-phonetic-ctc-v2-38
+          git merge --no-edit origin/codex/japanese-phonetic-labels-v3-38
+          git merge --no-edit origin/codex/phonetic-proposal-ablation-v4-38
+          git merge --no-edit origin/codex/context-phonetic-stack-audit-38
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Reapply idempotent lower-layer migrations when present
+        shell: bash
+        run: |
+          if [ -f scripts/finalize_phonetic_ctc_v2.py ]; then
+            python scripts/finalize_phonetic_ctc_v2.py
+          fi
+          if [ -f scripts/finalize_phonetic_ablation_v4.py ]; then
+            python scripts/finalize_phonetic_ablation_v4.py
+          fi
+          python scripts/finalize_context_phonetic_factorial_v5.py
+      - name: Install dependency-free validation environment
+        run: python -m pip install -e '.[dev]'
+      - name: Format, lint, compile, and run the full dependency-free suite
+        id: base
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m ruff format src tests scripts
+          python -m ruff check --fix src tests scripts
+          python -m ruff format src tests scripts
+          python -m ruff format --check src tests scripts
+          python -m ruff check src tests scripts
+          python -m compileall -q src tests scripts
+          python -m pytest -q 2>&1 | tee /tmp/base.log
+          semantic-asr demo --output runs/factorial-audit-demo.json
+          semantic-asr research-smoke --output runs/factorial-audit-smoke.json
+          git diff --check
+      - name: Run the focused factorial experiment suite
+        id: focused
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q \
+            tests/test_context_phonetic_protocol.py \
+            tests/test_context_phonetic_context_scorer.py \
+            tests/test_context_phonetic_planner.py \
+            tests/test_context_phonetic_identity.py \
+            tests/test_context_phonetic_runner.py \
+            tests/test_context_phonetic_promotion.py \
+            tests/test_context_phonetic_registration.py \
+            tests/test_context_phonetic_public_api.py \
+            2>&1 | tee /tmp/focused.log
+      - name: Install CPU PyTorch and NumPy
+        run: |
+          python -m pip install 'torch>=2.4' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'numpy>=1.26'
+      - name: Run the complete suite with optional CPU paths enabled
+        id: optional
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q 2>&1 | tee /tmp/optional.log
+      - name: Build and clean-install the wheel
+        id: wheel
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pip install build
+          python -m build --wheel
+          python -m venv /tmp/semantic-asr-factorial-wheel
+          /tmp/semantic-asr-factorial-wheel/bin/python -m pip install dist/*.whl
+          /tmp/semantic-asr-factorial-wheel/bin/python - <<'PY' 2>&1 | tee /tmp/wheel.log
+          import semantic_asr.context_phonetic_experiment as factorial
+          import semantic_asr.document_experiment as document
+          import semantic_asr.phonetic_experiment as phonetic
+          import semantic_asr.phonetic_runtime as runtime
+
+          required = {
+              "ContextPhoneticExperimentRegistration",
+              "ContextPhoneticPromotionPolicy",
+              "ContextPhoneticProtocol",
+              "GlobalSequenceCandidateContextAdapter",
+              "prepare_context_phonetic_experiment",
+              "run_registered_context_phonetic_experiment",
+          }
+          assert required.issubset(set(factorial.__all__))
+          assert document.__all__
+          assert phonetic.__all__
+          assert runtime.__all__
+          print(sorted(required))
+          PY
+          /tmp/semantic-asr-factorial-wheel/bin/semantic-asr demo --output /tmp/factorial-wheel-demo.json
+          /tmp/semantic-asr-factorial-wheel/bin/semantic-asr research-smoke --output /tmp/factorial-wheel-smoke.json
+      - name: Record successful audit and remove one-shot files
+        if: success()
+        shell: bash
+        run: |
+          base_summary=$(tail -n 1 /tmp/base.log)
+          focused_summary=$(tail -n 1 /tmp/focused.log)
+          optional_summary=$(tail -n 1 /tmp/optional.log)
+          wheel_summary=$(tail -n 1 /tmp/wheel.log)
+          cat > docs/CONTEXT_PHONETIC_FACTORIAL_VALIDATION.md <<EOF
+          # Context × phonetic factorial validation ledger
+
+          ## Frozen-pool interaction audit
+
+          Full dependency-free suite:
+
+          \`\`\`text
+          $base_summary
+          \`\`\`
+
+          Focused factorial suite:
+
+          \`\`\`text
+          $focused_summary
+          \`\`\`
+
+          Complete suite with CPU PyTorch and NumPy:
+
+          \`\`\`text
+          $optional_summary
+          \`\`\`
+
+          Clean-wheel check:
+
+          \`\`\`text
+          $wheel_summary
+          \`\`\`
+
+          The exact committed source passed one-pool reuse across all context × phonetic arms,
+          deterministic speaker/session/source/context-group derangement, candidate/context/scorer
+          binding, outside-first-pass recovery, ordered-vs-shuffled controls, conditional false
+          corrections, grouped paired bootstrap, difference-in-differences interaction, provisional
+          fallback, wall-clock/evidence identity separation, preregistered thresholds, privacy-safe
+          reports, formatting, lint, compileall, optional CPU model paths, and clean-wheel import.
+
+          The synthetic fixture contains both successful recovery and acoustic/context failure
+          cases. This validates the experiment machinery, not Japanese model accuracy.
+          EOF
+          rm -f docs/CONTEXT_PHONETIC_FACTORIAL_FAILURE.md
+          rm -f .github/workflows/finalize-context-phonetic-factorial-v5.yml
+          rm -f scripts/finalize_context_phonetic_factorial_v5.py
+          rm -f scripts/finalize_phonetic_ctc_v2.py
+          rm -f scripts/finalize_phonetic_ablation_v4.py
+      - name: Record failed audit
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '# Context × phonetic factorial validation failure'
+            echo
+            echo '## Full dependency-free suite'
+            echo '```text'
+            cat /tmp/base.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo '## Focused factorial suite'
+            echo '```text'
+            cat /tmp/focused.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo '## Complete CPU suite'
+            echo '```text'
+            cat /tmp/optional.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo '## Clean-wheel check'
+            echo '```text'
+            cat /tmp/wheel.log 2>/dev/null || true
+            echo '```'
+          } > docs/CONTEXT_PHONETIC_FACTORIAL_FAILURE.md
+      - name: Commit exact audit state
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Complete context and phonetic factorial audit'
+          git push origin HEAD:codex/context-phonetic-factorial-v5-38
+      - name: Mark PR ready only after success
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          pr=$(gh pr list --head codex/context-phonetic-factorial-v5-38 --state open --json number --jq '.[0].number')
+          if [ -z "$pr" ]; then
+            exit 0
+          fi
+          gh pr ready "$pr" || true
+          base_summary=$(tail -n 1 /tmp/base.log)
+          focused_summary=$(tail -n 1 /tmp/focused.log)
+          optional_summary=$(tail -n 1 /tmp/optional.log)
+          gh pr comment "$pr" --body "Context × phonetic factorial audit passed. Base: **$base_summary**. Focused: **$focused_summary**. Full CPU: **$optional_summary**. The PR is ready for review. This validates experiment contracts, not Japanese accuracy."
