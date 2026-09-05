@@ -263,9 +263,14 @@ class DocumentContextExperimentReport:
 
     @property
     def digest(self) -> str:
-        return sha256_json(self.as_dict(include_digest=False))
+        return sha256_json(self.as_dict(include_digest=False, include_text=False))
 
-    def as_dict(self, *, include_digest: bool = True) -> dict[str, object]:
+    def as_dict(
+        self,
+        *,
+        include_digest: bool = True,
+        include_text: bool = False,
+    ) -> dict[str, object]:
         payload: dict[str, object] = {
             "schemaVersion": self.schema_version,
             "protocolDigest": self.protocol_digest,
@@ -278,8 +283,18 @@ class DocumentContextExperimentReport:
                     "candidateSetDigest": row.candidate_set_digest,
                     "selectedPathDigest": row.selected_path_digest,
                     "retainedPathDigest": row.retained_path_digest,
-                    "selectedText": row.selected_text,
-                    "selectedWindowTexts": row.selected_window_texts,
+                    "selectedTextSha256": sha256_json({"text": row.selected_text}),
+                    "selectedWindowTextSha256": [
+                        sha256_json({"text": value}) for value in row.selected_window_texts
+                    ],
+                    **(
+                        {
+                            "selectedText": row.selected_text,
+                            "selectedWindowTexts": row.selected_window_texts,
+                        }
+                        if include_text
+                        else {}
+                    ),
                     "accepted": row.accepted,
                     "margin": row.margin,
                     "pathScores": [
@@ -324,7 +339,12 @@ class DocumentContextExperimentReport:
             payload["reportDigest"] = self.digest
         return payload
 
-    def write(self, path: str | Path) -> Path:
+    def write(
+        self,
+        path: str | Path,
+        *,
+        include_text: bool = False,
+    ) -> Path:
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         handle, temporary_name = tempfile.mkstemp(
@@ -334,7 +354,13 @@ class DocumentContextExperimentReport:
         )
         try:
             with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
-                stream.write(json.dumps(self.as_dict(), ensure_ascii=False, indent=2))
+                stream.write(
+                    json.dumps(
+                        self.as_dict(include_text=include_text),
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
                 stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -474,6 +500,10 @@ def _path_scores(
                 )
             if language.arm_digest != arm.digest:
                 raise ValueError("document scorer returned a result for a different arm")
+            if arm.scorer_key is not None and language.profile_digest != scorer.profile_digest:
+                raise ValueError(
+                    "document scorer result profile does not match the registered scorer"
+                )
             scored_characters += language.scored_characters
             scorer_calls += language.scorer_calls
             rows.append(

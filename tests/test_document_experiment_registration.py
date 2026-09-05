@@ -127,7 +127,10 @@ def test_registered_run_binds_protocol_manifest_and_model_profile() -> None:
     assert result.registration.digest == registration.digest
     assert result.scorer_registry.digest == registry.digest
     assert result.digest
-    assert "selectedText" not in str(result.as_dict(include_text=False))
+    payload = result.as_dict(include_text=False)
+    case_result = payload["report"]["caseResults"][0]
+    assert "selectedText" not in case_result
+    assert "selectedTextSha256" in case_result
 
 
 def test_registry_rejects_runtime_model_replacement() -> None:

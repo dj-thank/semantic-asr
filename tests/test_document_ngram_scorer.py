@@ -137,3 +137,26 @@ def test_ngram_artifact_rejects_duplicate_context_rows() -> None:
             training_manifest_sha256=valid.training_manifest_sha256,
             revision=valid.revision,
         )
+
+
+def test_shuffled_control_is_not_identity_for_multi_window_document() -> None:
+    model = scorer()
+    retained, _corrected, _harmful = fake_paths()
+    shuffled = arm(view="shuffled-document")
+    ordered = arm(view="ordered-document")
+
+    shuffled_score = model.score_path(
+        retained,
+        shuffled,
+        case_id="identity-prone-case",
+        maximum_characters=10_000,
+    )
+    ordered_score = model.score_path(
+        retained,
+        ordered,
+        case_id="identity-prone-case",
+        maximum_characters=10_000,
+    )
+
+    assert shuffled_score.arm_digest != ordered_score.arm_digest
+    assert shuffled_score.raw_average_log_likelihood != ordered_score.raw_average_log_likelihood

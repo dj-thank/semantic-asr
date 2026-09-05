@@ -10,8 +10,10 @@ from __future__ import annotations
 import math
 import unicodedata
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
+from functools import lru_cache
+from types import MappingProxyType
 
 from ..contracts import sha256_json
 from ..deliberation_evidence import _is_sha256, _strict_float
@@ -42,6 +44,13 @@ def _deterministic_order(size: int, *, seed: str, case_id: str) -> tuple[int, ..
             key=lambda index: sha256_json({"seed": seed, "caseId": case_id, "windowIndex": index}),
         )
     )
+
+
+@lru_cache(maxsize=64)
+def _immutable_count_map(
+    rows: tuple[tuple[str, tuple[tuple[str, int], ...]], ...],
+) -> Mapping[str, Mapping[str, int]]:
+    return MappingProxyType({context: MappingProxyType(dict(counts)) for context, counts in rows})
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +95,8 @@ class FrozenCharacterNgramModel:
             raise ValueError("training_manifest_sha256 must be a SHA-256 value")
         if not self.revision:
             raise ValueError("model revision is required")
+        if not isinstance(self.reversed_text, bool):
+            raise TypeError("reversed_text must be a boolean")
         vocabulary = tuple(dict.fromkeys(self.vocabulary))
         if vocabulary != self.vocabulary or any(not token for token in vocabulary):
             raise ValueError("vocabulary must contain unique non-empty symbols")
@@ -116,8 +127,8 @@ class FrozenCharacterNgramModel:
         return sha256_json(asdict(self))
 
     @property
-    def count_map(self) -> dict[str, dict[str, int]]:
-        return {context: dict(counts) for context, counts in self.rows}
+    def count_map(self) -> Mapping[str, Mapping[str, int]]:
+        return _immutable_count_map(self.rows)
 
     def _symbol(self, value: str) -> str:
         return value if value in self.vocabulary else _UNK
