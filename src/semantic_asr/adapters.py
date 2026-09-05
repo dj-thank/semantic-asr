@@ -49,7 +49,6 @@ class FasterWhisperAdapter(_legacy.FasterWhisperAdapter):
 
     def decode(self, request: DecodeRequest) -> list[CandidateEvidence]:
         try:
-            import numpy as np
             from faster_whisper.audio import decode_audio
             from faster_whisper.tokenizer import Tokenizer
         except ImportError as exc:  # pragma: no cover - optional runtime
@@ -66,6 +65,11 @@ class FasterWhisperAdapter(_legacy.FasterWhisperAdapter):
             raise ValueError("decode request contains no audio")
         if duration_seconds > 30.0:
             raise ValueError("decode request exceeds one Whisper window")
+
+        try:
+            import numpy as np
+        except ImportError as exc:  # pragma: no cover - optional runtime
+            raise RuntimeError("NumPy is required for faster-whisper feature extraction") from exc
 
         language, language_probability, language_policy = self._language(waveform, request.language)
         score_domain = self._score_domain(request, language=language)
