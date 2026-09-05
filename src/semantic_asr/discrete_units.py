@@ -1,0 +1,820 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from collections import Counter
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from numbers import Integral
+from pathlib import Path
+from statistics import fmean, pstdev
+from types import MappingProxyType
+from typing import Any, Self
+
+from .contracts import canonical_json, sha256_json
+from .score_types import EvidenceScore, ScoreSemantics
+
+DISCRETE_SURPRISAL_PAPER_REVISION = "arXiv:2606.19910v2"
+_BOS = -1
+_EOS = -2
+_HEX = frozenset("0123456789abcdef")
+
+
+def validate_sha256(
+    value: str | None,
+    *,
+    name: str,
+    optional: bool = False,
+) -> str | None:
+    if value is None:
+        if optional:
+            return None
+        raise ValueError(f"{name} is required")
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string")
+    normalized = value.strip().lower()
+    if len(normalized) != 64 or any(character not in _HEX for character in normalized):
+        raise ValueError(f"{name} must be a 64-character hexadecimal SHA-256 digest")
+    return normalized
+
+
+def _integer(value: object, *, name: str, minimum: int | None = None) -> int:
+    if isinstance(value, bool) or not isinstance(value, Integral):
+        raise TypeError(f"{name} must be an integer")
+    normalized = int(value)
+    if minimum is not None and normalized < minimum:
+        raise ValueError(f"{name} must be at least {minimum}")
+    return normalized
+
+
+def _strict_float(value: object, *, name: str) -> float:
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be a real number")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{name} must be a real number") from exc
+
+
+def _non_empty_text(value: object, *, name: str, lowercase: bool = False) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{name} is required")
+    return normalized.lower() if lowercase else normalized
+
+
+def _population_std(values: Sequence[float]) -> float:
+    return pstdev(values) if len(values) > 1 else 0.0
+
+
+def _decode_serialized_count_tables(
+    raw_tables: object,
+    *,
+    name: str,
+) -> tuple[dict[tuple[Any, ...], Any], ...]:
+    if isinstance(raw_tables, (str, bytes)) or not isinstance(raw_tables, Sequence):
+        raise TypeError(f"{name} must be a sequence of count tables")
+    decoded_tables: list[dict[tuple[Any, ...], Any]] = []
+    for raw_table in raw_tables:
+        if isinstance(raw_table, (str, bytes)) or not isinstance(raw_table, Sequence):
+            raise TypeError(f"each {name} table must be a sequence")
+        decoded: dict[tuple[Any, ...], Any] = {}
+        for item in raw_table:
+            if isinstance(item, (str, bytes)) or not isinstance(item, Sequence) or len(item) != 2:
+                raise ValueError(f"each {name} entry must contain one key and one count")
+            raw_key, count = item
+            if isinstance(raw_key, (str, bytes)) or not isinstance(raw_key, Sequence):
+                raise TypeError(f"each {name} key must be a token sequence")
+            key = tuple(raw_key)
+            try:
+                duplicate = key in decoded
+            except TypeError as exc:
+                raise TypeError(f"each {name} key must contain hashable tokens") from exc
+            if duplicate:
+                raise ValueError(f"{name} contains duplicate serialized keys")
+            decoded[key] = count
+        decoded_tables.append(decoded)
+    return tuple(decoded_tables)
+
+
+def ensure_same_unit_space(
+    left: DiscreteUnitSpace,
+    right: DiscreteUnitSpace,
+    *,
+    name: str,
+) -> None:
+    if left.digest != right.digest:
+        raise ValueError(f"{name} uses a different discrete-unit space")
+
+
+@dataclass(frozen=True, slots=True)
+class DiscreteUnitSpace:
+    """Immutable identity for one SSL layer and one fitted acoustic codebook."""
+
+    encoder: str
+    encoder_revision: str
+    layer: int
+    codebook_size: int
+    codebook_sha256: str
+    sample_rate_hz: int = 16_000
+    language: str = "ja"
+    schema_version: str = "discrete-unit-space-v1"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "encoder", _non_empty_text(self.encoder, name="encoder"))
+        object.__setattr__(
+            self,
+            "encoder_revision",
+            _non_empty_text(self.encoder_revision, name="encoder_revision"),
+        )
+        object.__setattr__(self, "layer", _integer(self.layer, name="layer", minimum=0))
+        object.__setattr__(
+            self,
+            "codebook_size",
+            _integer(self.codebook_size, name="codebook_size", minimum=2),
+        )
+        object.__setattr__(
+            self,
+            "codebook_sha256",
+            validate_sha256(self.codebook_sha256, name="codebook_sha256"),
+        )
+        object.__setattr__(
+            self,
+            "sample_rate_hz",
+            _integer(self.sample_rate_hz, name="sample_rate_hz", minimum=1),
+        )
+        object.__setattr__(
+            self,
+            "language",
+            _non_empty_text(self.language, name="language", lowercase=True),
+        )
+        schema_version = _non_empty_text(self.schema_version, name="schema_version")
+        if schema_version != "discrete-unit-space-v1":
+            raise ValueError("unsupported discrete-unit space schema")
+        object.__setattr__(self, "schema_version", schema_version)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schemaVersion": self.schema_version,
+            "encoder": self.encoder,
+            "encoderRevision": self.encoder_revision,
+            "layer": self.layer,
+            "codebookSize": self.codebook_size,
+            "codebookSha256": self.codebook_sha256.lower(),
+            "sampleRateHz": self.sample_rate_hz,
+            "language": self.language,
+        }
+
+    @classmethod
+    def from_dict(cls, row: Mapping[str, Any]) -> Self:
+        if row.get("schemaVersion") != "discrete-unit-space-v1":
+            raise ValueError("unsupported discrete-unit space schema")
+        return cls(
+            encoder=row["encoder"],
+            encoder_revision=row["encoderRevision"],
+            layer=row["layer"],
+            codebook_size=row["codebookSize"],
+            codebook_sha256=row["codebookSha256"],
+            sample_rate_hz=row.get("sampleRateHz", 16_000),
+            language=row.get("language", "ja"),
+            schema_version=row.get("schemaVersion", "discrete-unit-space-v1"),
+        )
+
+    @property
+    def digest(self) -> str:
+        return sha256_json(self.as_dict())
+
+
+@dataclass(frozen=True, slots=True)
+class DiscreteUnitSequence:
+    """Frame-rate units generated by exactly one :class:`DiscreteUnitSpace`."""
+
+    units: tuple[int, ...]
+    space: DiscreteUnitSpace
+    frame_hop_ms: float = 20.0
+    source_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.units:
+            raise ValueError("a discrete-unit sequence must not be empty")
+        normalized: list[int] = []
+        for unit in self.units:
+            if isinstance(unit, bool) or not isinstance(unit, Integral):
+                raise TypeError("discrete units must be integer token IDs")
+            value = int(unit)
+            if not 0 <= value < self.space.codebook_size:
+                raise ValueError("discrete unit is outside the codebook")
+            normalized.append(value)
+        object.__setattr__(self, "units", tuple(normalized))
+        frame_hop_ms = _strict_float(self.frame_hop_ms, name="frame_hop_ms")
+        if not math.isfinite(frame_hop_ms) or frame_hop_ms <= 0:
+            raise ValueError("frame_hop_ms must be finite and positive")
+        object.__setattr__(self, "frame_hop_ms", frame_hop_ms)
+        object.__setattr__(
+            self,
+            "source_sha256",
+            validate_sha256(self.source_sha256, name="source_sha256", optional=True),
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "unitSpace": self.space.as_dict(),
+            "units": self.units,
+            "frameHopMs": self.frame_hop_ms,
+            "sourceSha256": self.source_sha256,
+        }
+
+    @classmethod
+    def from_dict(cls, row: Mapping[str, Any]) -> Self:
+        return cls(
+            units=tuple(row["units"]),
+            space=DiscreteUnitSpace.from_dict(dict(row["unitSpace"])),
+            frame_hop_ms=row.get("frameHopMs", 20.0),
+            source_sha256=row.get("sourceSha256"),
+        )
+
+    @property
+    def digest(self) -> str:
+        return sha256_json(
+            {
+                "spaceDigest": self.space.digest,
+                "units": self.units,
+                "frameHopMs": self.frame_hop_ms,
+                "sourceSha256": self.source_sha256,
+            }
+        )
+
+    def collapse(self) -> CollapsedUnitSequence:
+        collapsed: list[int] = []
+        frame_to_collapsed: list[int] = []
+        run_lengths: list[int] = []
+        for unit in self.units:
+            if not collapsed or unit != collapsed[-1]:
+                collapsed.append(unit)
+                run_lengths.append(1)
+            else:
+                run_lengths[-1] += 1
+            frame_to_collapsed.append(len(collapsed) - 1)
+        return CollapsedUnitSequence(
+            units=tuple(collapsed),
+            frame_to_collapsed=tuple(frame_to_collapsed),
+            run_lengths=tuple(run_lengths),
+            space=self.space,
+            source_sequence_digest=self.digest,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CollapsedUnitSequence:
+    units: tuple[int, ...]
+    frame_to_collapsed: tuple[int, ...]
+    run_lengths: tuple[int, ...]
+    space: DiscreteUnitSpace
+    source_sequence_digest: str
+
+    def __post_init__(self) -> None:
+        if not self.units or len(self.units) != len(self.run_lengths):
+            raise ValueError("collapsed units and run_lengths must have equal non-zero length")
+
+        normalized_units: list[int] = []
+        for unit in self.units:
+            if isinstance(unit, bool) or not isinstance(unit, Integral):
+                raise TypeError("collapsed units must be integer token IDs")
+            value = int(unit)
+            if not 0 <= value < self.space.codebook_size:
+                raise ValueError("collapsed unit is outside the codebook")
+            normalized_units.append(value)
+        if any(
+            left == right
+            for left, right in zip(normalized_units, normalized_units[1:], strict=False)
+        ):
+            raise ValueError("collapsed units must not contain consecutive duplicates")
+
+        normalized_runs: list[int] = []
+        for length in self.run_lengths:
+            if isinstance(length, bool) or not isinstance(length, Integral):
+                raise TypeError("collapsed run lengths must be integers")
+            value = int(length)
+            if value < 1:
+                raise ValueError("collapsed run lengths must be positive")
+            normalized_runs.append(value)
+
+        normalized_projection: list[int] = []
+        for index in self.frame_to_collapsed:
+            if isinstance(index, bool) or not isinstance(index, Integral):
+                raise TypeError("frame_to_collapsed values must be integer indexes")
+            normalized_projection.append(int(index))
+
+        object.__setattr__(self, "units", tuple(normalized_units))
+        object.__setattr__(self, "run_lengths", tuple(normalized_runs))
+        object.__setattr__(self, "frame_to_collapsed", tuple(normalized_projection))
+        if not normalized_projection or sum(normalized_runs) != len(normalized_projection):
+            raise ValueError("run_lengths must reconstruct the raw frame count")
+        expected_projection = tuple(
+            collapsed_index
+            for collapsed_index, run_length in enumerate(normalized_runs)
+            for _ in range(run_length)
+        )
+        if tuple(normalized_projection) != expected_projection:
+            raise ValueError("frame_to_collapsed must exactly follow run_lengths")
+        object.__setattr__(
+            self,
+            "source_sequence_digest",
+            validate_sha256(self.source_sequence_digest, name="source_sequence_digest"),
+        )
+
+    @property
+    def raw_length(self) -> int:
+        return len(self.frame_to_collapsed)
+
+    @property
+    def digest(self) -> str:
+        return sha256_json(
+            {
+                "spaceDigest": self.space.digest,
+                "units": self.units,
+                "frameToCollapsed": self.frame_to_collapsed,
+                "runLengths": self.run_lengths,
+                "sourceSequenceDigest": self.source_sequence_digest,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DiscreteTokenLanguageModel:
+    """Dependency-free backoff n-gram model over acoustic unit IDs.
+
+    The model is deliberately separate from text n-gram models: its vocabulary and
+    provenance are bound to the frozen acoustic codebook rather than characters,
+    morae or subwords.
+    """
+
+    space: DiscreteUnitSpace
+    order: int
+    add_k: float
+    counts: tuple[Mapping[tuple[int, ...], int], ...]
+    context_totals: tuple[Mapping[tuple[int, ...], int], ...]
+    training_sequence_count: int
+    training_token_count: int
+    training_digest: str
+    schema_version: str = "discrete-token-lm-v1"
+
+    def __post_init__(self) -> None:
+        order = _integer(self.order, name="order", minimum=1)
+        if len(self.counts) != order or len(self.context_totals) != order:
+            raise ValueError("count and context-total tables must match n-gram order")
+        add_k = _strict_float(self.add_k, name="add_k")
+        if not math.isfinite(add_k) or add_k <= 0:
+            raise ValueError("add_k must be finite and positive")
+        training_sequence_count = _integer(
+            self.training_sequence_count,
+            name="training_sequence_count",
+            minimum=1,
+        )
+        training_token_count = _integer(
+            self.training_token_count,
+            name="training_token_count",
+            minimum=1,
+        )
+        training_digest = validate_sha256(self.training_digest, name="training_digest")
+        schema_version = _non_empty_text(self.schema_version, name="schema_version")
+        if schema_version != "discrete-token-lm-v1":
+            raise ValueError("unsupported discrete token LM schema")
+
+        frozen_counts: list[Mapping[tuple[int, ...], int]] = []
+        frozen_totals: list[Mapping[tuple[int, ...], int]] = []
+        valid_units = set(range(self.space.codebook_size))
+        expected_positions = training_token_count + training_sequence_count
+        for order_index, (raw_counts, raw_totals) in enumerate(
+            zip(self.counts, self.context_totals, strict=True),
+            1,
+        ):
+            normalized_counts: dict[tuple[int, ...], int] = {}
+            for raw_gram, raw_count in raw_counts.items():
+                gram = tuple(_integer(token, name="n-gram token") for token in tuple(raw_gram))
+                count = _integer(raw_count, name="n-gram count", minimum=1)
+                if len(gram) != order_index:
+                    raise ValueError("n-gram key length does not match its table order")
+                if gram[-1] == _BOS or any(token == _EOS for token in gram[:-1]):
+                    raise ValueError("n-gram boundary tokens are in an invalid position")
+                if any(token not in valid_units | {_BOS, _EOS} for token in gram):
+                    raise ValueError("n-gram token is outside the discrete-unit vocabulary")
+                normalized_counts[gram] = count
+
+            normalized_totals: dict[tuple[int, ...], int] = {}
+            for raw_context, raw_count in raw_totals.items():
+                context = tuple(
+                    _integer(token, name="n-gram context token") for token in tuple(raw_context)
+                )
+                count = _integer(raw_count, name="context count", minimum=1)
+                if len(context) != order_index - 1:
+                    raise ValueError("context key length does not match its table order")
+                if _EOS in context:
+                    raise ValueError("EOS cannot appear inside an n-gram context")
+                if any(token not in valid_units | {_BOS} for token in context):
+                    raise ValueError("context token is outside the discrete-unit vocabulary")
+                normalized_totals[context] = count
+
+            rebuilt_totals: Counter[tuple[int, ...]] = Counter()
+            for gram, count in normalized_counts.items():
+                rebuilt_totals[gram[:-1]] += count
+            if dict(rebuilt_totals) != normalized_totals:
+                raise ValueError("n-gram counts and context totals are inconsistent")
+            if sum(normalized_counts.values()) != expected_positions:
+                raise ValueError("n-gram counts do not match declared training token totals")
+            frozen_counts.append(MappingProxyType(normalized_counts))
+            frozen_totals.append(MappingProxyType(normalized_totals))
+
+        object.__setattr__(self, "order", order)
+        object.__setattr__(self, "add_k", add_k)
+        object.__setattr__(self, "training_sequence_count", training_sequence_count)
+        object.__setattr__(self, "training_token_count", training_token_count)
+        object.__setattr__(self, "training_digest", training_digest)
+        object.__setattr__(self, "schema_version", schema_version)
+        object.__setattr__(self, "counts", tuple(frozen_counts))
+        object.__setattr__(self, "context_totals", tuple(frozen_totals))
+
+    @classmethod
+    def fit(
+        cls,
+        sequences: Sequence[DiscreteUnitSequence],
+        *,
+        order: int = 3,
+        add_k: float = 0.1,
+    ) -> Self:
+        order = _integer(order, name="order", minimum=1)
+        add_k = _strict_float(add_k, name="add_k")
+        if not math.isfinite(add_k) or add_k <= 0:
+            raise ValueError("add_k must be finite and positive")
+        if not sequences:
+            raise ValueError("native token sequences are required")
+        space = sequences[0].space
+        count_tables = [Counter[tuple[int, ...]]() for _ in range(order)]
+        context_tables = [Counter[tuple[int, ...]]() for _ in range(order)]
+        total_tokens = 0
+        sequence_digests: list[str] = []
+        for sequence in sequences:
+            ensure_same_unit_space(space, sequence.space, name="native sequence")
+            sequence_digests.append(sequence.digest)
+            total_tokens += len(sequence.units)
+            padded = (_BOS,) * (order - 1) + sequence.units + (_EOS,)
+            for position in range(order - 1, len(padded)):
+                for current_order in range(1, order + 1):
+                    start = position - current_order + 1
+                    gram = padded[start : position + 1]
+                    if len(gram) != current_order:
+                        continue
+                    context = gram[:-1]
+                    count_tables[current_order - 1][gram] += 1
+                    context_tables[current_order - 1][context] += 1
+        training_digest = sha256_json(
+            {
+                "spaceDigest": space.digest,
+                "sequenceDigests": sequence_digests,
+                "order": order,
+                "addK": add_k,
+            }
+        )
+        return cls(
+            space=space,
+            order=order,
+            add_k=float(add_k),
+            counts=tuple(dict(table) for table in count_tables),
+            context_totals=tuple(dict(table) for table in context_tables),
+            training_sequence_count=len(sequences),
+            training_token_count=total_tokens,
+            training_digest=training_digest,
+        )
+
+    def _conditional_probability(self, history: Sequence[int], target: int) -> float:
+        vocabulary_size = self.space.codebook_size + 1  # acoustic units plus EOS
+        maximum_order = min(self.order, len(history) + 1)
+        for current_order in range(maximum_order, 0, -1):
+            context = tuple(history[-(current_order - 1) :]) if current_order > 1 else ()
+            gram = (*context, target)
+            count = self.counts[current_order - 1].get(gram, 0)
+            total = self.context_totals[current_order - 1].get(context, 0)
+            if total > 0 or current_order == 1:
+                return (count + self.add_k) / (total + self.add_k * vocabulary_size)
+        raise AssertionError("unigram backoff is unreachable")
+
+    def token_surprisals(self, sequence: DiscreteUnitSequence) -> tuple[float, ...]:
+        ensure_same_unit_space(self.space, sequence.space, name="scored sequence")
+        history: list[int] = [_BOS] * (self.order - 1)
+        values: list[float] = []
+        for unit in sequence.units:
+            probability = self._conditional_probability(history, unit)
+            values.append(-math.log2(max(probability, 1e-300)))
+            history.append(unit)
+        return tuple(values)
+
+    def fit_spike_threshold(
+        self,
+        native_sequences: Sequence[DiscreteUnitSequence],
+        *,
+        quantile: float = 0.90,
+    ) -> SurprisalThreshold:
+        quantile = _strict_float(quantile, name="quantile")
+        if not 0 < quantile <= 1 or not math.isfinite(quantile):
+            raise ValueError("quantile must be finite and in (0, 1]")
+        if not native_sequences:
+            raise ValueError("native calibration sequences are required")
+        values: list[float] = []
+        digests: list[str] = []
+        for sequence in native_sequences:
+            ensure_same_unit_space(self.space, sequence.space, name="threshold sequence")
+            values.extend(self.token_surprisals(sequence))
+            digests.append(sequence.digest)
+        if not values:
+            raise ValueError("native calibration sequences contain no units")
+        ordered = sorted(values)
+        index = max(0, math.ceil(quantile * len(ordered)) - 1)
+        return SurprisalThreshold(
+            value_bits=ordered[index],
+            quantile=quantile,
+            sample_count=len(ordered),
+            source_digest=sha256_json(digests),
+            token_lm_digest=self.digest,
+            unit_space_digest=self.space.digest,
+        )
+
+    def profile(
+        self,
+        sequence: DiscreteUnitSequence,
+        *,
+        threshold: SurprisalThreshold,
+    ) -> SurprisalProfile:
+        ensure_same_unit_space(self.space, sequence.space, name="profile sequence")
+        if threshold.token_lm_digest != self.digest:
+            raise ValueError("surprisal threshold was fitted with a different token LM")
+        if threshold.unit_space_digest != self.space.digest:
+            raise ValueError("surprisal threshold uses a different discrete-unit space")
+        values = self.token_surprisals(sequence)
+        spikes = sum(value > threshold.value_bits for value in values)
+        return SurprisalProfile(
+            token_surprisal_bits=values,
+            mean_bits=fmean(values),
+            std_bits=_population_std(values),
+            spike_rate=spikes / len(values),
+            duration_units=len(values),
+            threshold_bits=threshold.value_bits,
+            sequence_digest=sequence.digest,
+            token_lm_digest=self.digest,
+            threshold_digest=threshold.digest,
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schemaVersion": self.schema_version,
+            "unitSpace": self.space.as_dict(),
+            "order": self.order,
+            "addK": self.add_k,
+            "trainingSequenceCount": self.training_sequence_count,
+            "trainingTokenCount": self.training_token_count,
+            "trainingDigest": self.training_digest,
+            "counts": [
+                [[list(gram), count] for gram, count in sorted(table.items())]
+                for table in self.counts
+            ],
+            "contextTotals": [
+                [[list(context), count] for context, count in sorted(table.items())]
+                for table in self.context_totals
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, row: Mapping[str, Any]) -> Self:
+        if row.get("schemaVersion") != "discrete-token-lm-v1":
+            raise ValueError("unsupported discrete token LM schema")
+        counts = _decode_serialized_count_tables(row["counts"], name="n-gram counts")
+        context_totals = _decode_serialized_count_tables(
+            row["contextTotals"],
+            name="context totals",
+        )
+        return cls(
+            space=DiscreteUnitSpace.from_dict(dict(row["unitSpace"])),
+            order=row["order"],
+            add_k=row["addK"],
+            counts=counts,
+            context_totals=context_totals,
+            training_sequence_count=row["trainingSequenceCount"],
+            training_token_count=row["trainingTokenCount"],
+            training_digest=row["trainingDigest"],
+            schema_version=row["schemaVersion"],
+        )
+
+    def save(self, path: str | Path) -> None:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"artifact": self.as_dict(), "artifactSha256": self.digest}
+        target.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def load(cls, path: str | Path) -> Self:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or not isinstance(payload.get("artifact"), dict):
+            raise ValueError("discrete token LM artifact has an invalid envelope")
+        model = cls.from_dict(payload["artifact"])
+        expected = validate_sha256(
+            payload.get("artifactSha256"),
+            name="artifactSha256",
+        )
+        if model.digest != expected:
+            raise ValueError("discrete token LM artifact digest mismatch")
+        return model
+
+    @property
+    def digest(self) -> str:
+        return hashlib.sha256(canonical_json(self.as_dict()).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class SurprisalThreshold:
+    value_bits: float
+    quantile: float
+    sample_count: int
+    source_digest: str
+    token_lm_digest: str
+    unit_space_digest: str
+    method: str = "nearest-rank-v1"
+
+    def __post_init__(self) -> None:
+        value_bits = _strict_float(self.value_bits, name="value_bits")
+        quantile = _strict_float(self.quantile, name="quantile")
+        if not math.isfinite(value_bits) or value_bits < 0:
+            raise ValueError("surprisal threshold must be finite and non-negative")
+        if not math.isfinite(quantile) or not 0 < quantile <= 1:
+            raise ValueError("threshold quantile must be in (0, 1]")
+        object.__setattr__(self, "value_bits", value_bits)
+        object.__setattr__(self, "quantile", quantile)
+        object.__setattr__(
+            self,
+            "sample_count",
+            _integer(self.sample_count, name="sample_count", minimum=1),
+        )
+        for name in ("source_digest", "token_lm_digest", "unit_space_digest"):
+            object.__setattr__(
+                self,
+                name,
+                validate_sha256(getattr(self, name), name=name),
+            )
+        object.__setattr__(self, "method", _non_empty_text(self.method, name="method"))
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schemaVersion": "surprisal-threshold-v1",
+            "valueBits": self.value_bits,
+            "quantile": self.quantile,
+            "sampleCount": self.sample_count,
+            "sourceDigest": self.source_digest,
+            "tokenLmDigest": self.token_lm_digest,
+            "unitSpaceDigest": self.unit_space_digest,
+            "method": self.method,
+        }
+
+    @classmethod
+    def from_dict(cls, row: Mapping[str, Any]) -> Self:
+        if row.get("schemaVersion") != "surprisal-threshold-v1":
+            raise ValueError("unsupported surprisal threshold schema")
+        return cls(
+            value_bits=row["valueBits"],
+            quantile=row["quantile"],
+            sample_count=row["sampleCount"],
+            source_digest=row["sourceDigest"],
+            token_lm_digest=row["tokenLmDigest"],
+            unit_space_digest=row["unitSpaceDigest"],
+            method=row["method"],
+        )
+
+    def save(self, path: str | Path) -> None:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"artifact": self.as_dict(), "artifactSha256": self.digest}
+        target.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def load(cls, path: str | Path) -> Self:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or not isinstance(payload.get("artifact"), dict):
+            raise ValueError("surprisal threshold artifact has an invalid envelope")
+        threshold = cls.from_dict(payload["artifact"])
+        expected = validate_sha256(
+            payload.get("artifactSha256"),
+            name="artifactSha256",
+        )
+        if threshold.digest != expected:
+            raise ValueError("surprisal threshold artifact digest mismatch")
+        return threshold
+
+    @property
+    def digest(self) -> str:
+        return sha256_json(self.as_dict())
+
+
+@dataclass(frozen=True, slots=True)
+class SurprisalProfile:
+    token_surprisal_bits: tuple[float, ...]
+    mean_bits: float
+    std_bits: float
+    spike_rate: float
+    duration_units: int
+    threshold_bits: float
+    sequence_digest: str
+    token_lm_digest: str
+    threshold_digest: str
+
+    def __post_init__(self) -> None:
+        values = tuple(
+            _strict_float(value, name="token_surprisal_bits value")
+            for value in self.token_surprisal_bits
+        )
+        duration_units = _integer(
+            self.duration_units,
+            name="duration_units",
+            minimum=1,
+        )
+        mean_bits = _strict_float(self.mean_bits, name="mean_bits")
+        std_bits = _strict_float(self.std_bits, name="std_bits")
+        spike_rate = _strict_float(self.spike_rate, name="spike_rate")
+        threshold_bits = _strict_float(self.threshold_bits, name="threshold_bits")
+        if len(values) != duration_units:
+            raise ValueError("surprisal values must match positive duration_units")
+        if any(not math.isfinite(value) or value < 0 for value in values):
+            raise ValueError("token surprisal values must be finite and non-negative")
+        if not all(
+            math.isfinite(value) for value in (mean_bits, std_bits, spike_rate, threshold_bits)
+        ):
+            raise ValueError("surprisal profile values must be finite")
+        if std_bits < 0 or not 0 <= spike_rate <= 1 or threshold_bits < 0:
+            raise ValueError("invalid surprisal profile range")
+        if not math.isclose(mean_bits, fmean(values), rel_tol=1e-9, abs_tol=1e-9):
+            raise ValueError("surprisal mean_bits must match token_surprisal_bits")
+        if not math.isclose(
+            std_bits,
+            _population_std(values),
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        ):
+            raise ValueError("surprisal std_bits must match token_surprisal_bits")
+        expected_spike_rate = sum(value > threshold_bits for value in values) / len(values)
+        if not math.isclose(
+            spike_rate,
+            expected_spike_rate,
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                "surprisal spike_rate must match token_surprisal_bits and threshold_bits"
+            )
+        object.__setattr__(self, "token_surprisal_bits", values)
+        object.__setattr__(self, "duration_units", duration_units)
+        object.__setattr__(self, "mean_bits", mean_bits)
+        object.__setattr__(self, "std_bits", std_bits)
+        object.__setattr__(self, "spike_rate", spike_rate)
+        object.__setattr__(self, "threshold_bits", threshold_bits)
+        for name in ("sequence_digest", "token_lm_digest", "threshold_digest"):
+            object.__setattr__(
+                self,
+                name,
+                validate_sha256(getattr(self, name), name=name),
+            )
+
+    def routing_features(self) -> dict[str, float]:
+        """Return candidate-independent features for a held-out routing model."""
+
+        return {
+            "discrete_surprisal_std_bits": self.std_bits,
+            "discrete_spike_rate": self.spike_rate,
+            "discrete_duration_units": float(self.duration_units),
+        }
+
+    def as_uncertainty_evidence(self) -> EvidenceScore:
+        """Return candidate-independent anomaly evidence, never a candidate posterior."""
+
+        return EvidenceScore.raw(
+            self.std_bits,
+            semantics=ScoreSemantics.UNCALIBRATED_SCORE,
+            scorer="discrete-token-surprisal-std",
+            revision=DISCRETE_SURPRISAL_PAPER_REVISION,
+            runtime="python-stdlib",
+            configuration_digest=self.threshold_digest,
+            input_evidence_digest=self.sequence_digest,
+            metadata={
+                "candidateIndependent": True,
+                "higherMeans": "more-local-phonotactic-variability",
+                "meanBits": self.mean_bits,
+                "spikeRate": self.spike_rate,
+                "durationUnits": self.duration_units,
+                "thresholdBits": self.threshold_bits,
+                "tokenLmDigest": self.token_lm_digest,
+            },
+        )

@@ -2,6 +2,13 @@
 
 ## Unreleased — 2026-09-02
 
+- Hardened discrete-unit evidence after independent local validation: Text2DUnit outputs are now bound to the exact candidate-text SHA-256, candidate scores must match their attached DTW features and share provenance, surprisal spike rates are recomputed, duplicate/unknown-schema LM artifacts fail closed, and boolean numeric configuration is rejected.
+- Added research-only discrete-unit pronunciation evidence inspired by arXiv:2606.19910v2: frozen unit-space identity, native token surprisal for candidate-independent routing, same-codebook centroid DTW for zero-shot candidate ranking, optional transcript-guided features, bounded computation, and tamper-checked artifacts. No Japanese CER improvement or default enablement is claimed.
+- Made path-normalized centroid DTW invariant to canonical/observed orientation on equal-cost ties by selecting the globally shortest minimum-cost path before applying the deterministic direction tie-break; the optimization rule is now bound into `DTWConfig.digest`.
+- Bound facade effort profiles to the executed evidence budget and reject warm transcribers from a different profile.
+- Fixed runtime profile propagation: `cpu-ja-quality-v1` and `gpu-ja-v1` now send their declared beam/hypothesis counts to the base decoder instead of silently running the hard-coded 5/5 request; effective decode settings and immutable model revision are recorded in provenance.
+- Added a frozen, dependency-free `ContextCatalog` with deterministic lexical/reading retrieval, explicit no-bias abstention, catalog/query/cache binding, privacy-safe receipts, Python and CLI integration, and a distractor-aware promotion protocol.
+- Hardened array input and timestamp export: common channel-first/channel-last audio is downmixed deterministically, ambiguous/non-finite arrays fail closed, malformed timestamp spans are discarded, and overlap stitching cannot emit non-positive SRT ranges.
 - Fixed the direct CTranslate2 generate path: log-mel features are now padded to one 30 s Whisper window before `encode()`, matching `faster_whisper.transcribe`. Unpadded short clips looped on every beam; on 20 ReazonSpeech test clips the utterance-mean CER fell from 5.70 to 0.30 (large-v3-turbo int8, CPU).
 - Added `LoopGuardConfig`: duration-aware token budget, per-path compression-ratio / repeated n-gram / character-budget / log-probability degeneracy evidence, staged sampling fallback in separate score domains, and timestamp-enabled prompts by default (`--without-timestamps` restores the old prompt).
 - Added optional sampled-candidate enrichment (`--extra-samples`) for sample-based Semantic MBR.

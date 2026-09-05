@@ -123,8 +123,7 @@ def train_demo_reranker() -> tuple[object, object, FeatureSchema]:
 def main() -> int:
     pool = build_pool()
     text_candidates = [
-        TextCandidate(candidate.candidate_id, candidate.text)
-        for candidate in pool.candidates
+        TextCandidate(candidate.candidate_id, candidate.text) for candidate in pool.candidates
     ]
     ngram_model = CountNGramLanguageModel.fit(
         (

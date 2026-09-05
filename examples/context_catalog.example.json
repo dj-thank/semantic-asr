@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "name": "project-meeting",
+  "revision": "agenda-2026-09-04",
+  "entries": [
+    {
+      "id": "person:moriwaki",
+      "phrase": "森脇翔太",
+      "aliases": ["森脇さん"],
+      "reading": "モリワキショウタ",
+      "tags": ["person", "project-a"],
+      "priority": 2.0
+    },
+    {
+      "id": "product:semantic-asr",
+      "phrase": "Semantic ASR",
+      "aliases": ["セマンティックASR"],
+      "tags": ["product"]
+    }
+  ]
+}

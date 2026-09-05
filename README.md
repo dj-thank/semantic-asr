@@ -52,6 +52,7 @@ v0.2で追加した主な機構:
 - [`docs/RERANKER_TRAINING.md`](docs/RERANKER_TRAINING.md)
 - [`docs/KOEMO_INTEGRATION.md`](docs/KOEMO_INTEGRATION.md)
 - [`docs/BENCHMARK_PROTOCOL.md`](docs/BENCHMARK_PROTOCOL.md)
+- [`docs/DISCRETE_UNIT_EVIDENCE.md`](docs/DISCRETE_UNIT_EVIDENCE.md)
 
 ## 設計原則
 
@@ -144,6 +145,12 @@ candidate mora query
 
 これはQwen3.8のsparse selection、Kimi K3のAttention Residuals/高疎MoE、GLM-5.3のmHCをASR証拠処理へ翻訳した研究設計です。各モデルの内部kernelやweightsを複製したという主張ではありません。
 
+### Discrete-unit pronunciation evidence（research-only）
+
+音声を固定SSL encoder／固定codebookの離散unit列へ変換し、native token LMのsurprisalを再検証ルーティングへ、同じcodebookでText2DUnitが予測した標準unit列とのcentroid DTWを候補別の音響証拠へ使う実験kernelを追加しました。audio-only surprisalは同一発話の全候補で共通なので候補rankingには加えません。zero-shot scoreは`-normalized_centroid_DTW`だけです。日本語CER改善は未計測で、既定では無効です。
+
+詳細な同一codebook条件、artifact固定、計算量guard、評価matrixは[`docs/DISCRETE_UNIT_EVIDENCE.md`](docs/DISCRETE_UNIT_EVIDENCE.md)を参照してください。
+
 ### Grammar Honeytrap
 
 言語モデルが自然だと判断しても、音響・モーラ・独立ASRの支持が弱ければペナルティを与えます。言語priorを音響証拠として扱いません。
@@ -235,6 +242,28 @@ result.write("transcripts")      # json / observed.txt / txt / md / srt / vtt
 ```
 
 `profile` は不変の名前付き設定です（`cpu-ja-v1`: CPU int8 large-v3-turbo・beam 5・30 秒 window padding・loop guard。`cpu-ja-quality-v1`: beam 12。`gpu-ja-v1`: CUDA float16）。バックエンドのノブは呼び出しに漏らさず、組み合わせが変わるときは新しい profile を足します。Koemo のような既存呼び出し側には `transcribe_segments(audio)` が `[(start, end, text), ...]` を返します。モデルを温めたまま何度も呼ぶ場合は `load_transcriber(profile)` を一度作り、`transcribe(..., transcriber=warm)` に渡してください。
+
+### 固有名詞を安全に補助する（ContextCatalog）
+
+固有名詞や製品名は、音声評価より前に凍結した JSON カタログから検索し、一致した語だけを
+decoder hotword にできます。空クエリ・不一致は `abstained` となり、カタログ全体を無条件に
+注入しません。監査情報にはカタログの digest、query hash、entry ID、phrase hash、score を
+残し、生の phrase や query は残しません。ID 自体が機微なら、不透明な ID を使います。
+
+```python
+from semantic_asr import ContextCatalog, transcribe
+
+catalog = ContextCatalog.from_json("examples/context_catalog.example.json")
+result = transcribe(
+    "meeting.wav",
+    catalog=catalog,
+    context_query="森脇さんとSemantic ASRの進捗確認",
+    context_tags=("person",),
+)
+```
+
+CLI では `--catalog`、`--context-query`、必要なら繰り返し可能な `--context-tag` を使います。
+詳細と評価上の禁止事項は [`docs/CONTEXT_CATALOG.md`](docs/CONTEXT_CATALOG.md) を参照してください。
 
 ## 実音声で動かす（2026-09-02 以降）
 

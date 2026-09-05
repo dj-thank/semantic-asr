@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import subprocess
 import wave
@@ -17,6 +18,7 @@ from .adapters import (
     decode_request_identity,
     score_domain_digest,
 )
+from .audio import require_integer
 from .cache import CacheKey, EvidenceCache, TeacherCacheEntry
 from .candidate_pool import (
     SurfacePolicy,
@@ -31,7 +33,7 @@ from .evidence_router import (
     route_evidence_actions,
 )
 from .fusion import FusionConfig, evidence_summary, fuse_candidates
-from .japanese import deterministic_normalize, join_japanese_fragments
+from .japanese import deterministic_normalize, join_timed_fragments
 from .planner import EvidenceAction, EvidenceBudget, plan_evidence
 from .semantic_lattice import (
     SemanticLattice,
@@ -67,6 +69,13 @@ class Window:
     start_ms: int
     end_ms: int
 
+    def __post_init__(self) -> None:
+        require_integer(self.index, name="window index")
+        require_integer(self.start_ms, name="window start_ms")
+        require_integer(self.end_ms, name="window end_ms", minimum=1)
+        if self.end_ms <= self.start_ms:
+            raise ValueError("window end_ms must be greater than start_ms")
+
 
 @dataclass(frozen=True, slots=True)
 class LongformSegment:
@@ -89,8 +98,95 @@ class LongformResult:
     evidence_sha256: str
     diagnostics: dict[str, Any]
 
+    evidence_schema: str = "semantic-asr-longform-evidence-v2"
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        source_name: str,
+        source_audio_sha256: str,
+        duration_ms: int,
+        segments: Sequence[LongformSegment],
+        diagnostics: dict[str, Any],
+    ) -> LongformResult:
+        rows = tuple(segments)
+        result = cls(
+            source_name=source_name,
+            source_audio_sha256=source_audio_sha256,
+            duration_ms=duration_ms,
+            observed_text=join_segment_text(rows),
+            normalized_text=join_segment_text(rows, normalized=True),
+            segments=rows,
+            evidence_sha256="",
+            diagnostics=dict(diagnostics),
+        )
+        result = replace(result, evidence_sha256=sha256_json(result.evidence_payload()))
+        result.verify()
+        return result
+
+    def evidence_payload(self) -> dict[str, Any]:
+        return {
+            "schema": self.evidence_schema,
+            "sourceAudioSha256": self.source_audio_sha256,
+            "durationMs": self.duration_ms,
+            "observedText": self.observed_text,
+            "normalizedText": self.normalized_text,
+            "segments": [
+                {
+                    "window": asdict(segment.window),
+                    "observedEvidenceSha256": segment.observed.evidence_sha256,
+                    "normalization": asdict(segment.normalized),
+                }
+                for segment in self.segments
+            ],
+        }
+
+    def verify(self) -> None:
+        if self.evidence_schema != "semantic-asr-longform-evidence-v2":
+            raise ValueError("unsupported long-form evidence schema")
+        require_integer(self.duration_ms, name="duration_ms", minimum=1)
+        if not self.segments:
+            raise ValueError("long-form evidence requires segments")
+        if len(self.source_audio_sha256) != 64 or any(
+            c not in "0123456789abcdef" for c in self.source_audio_sha256
+        ):
+            raise ValueError("source audio identity must be a SHA-256 digest")
+        previous_start = -1
+        for index, segment in enumerate(self.segments):
+            window = segment.window
+            if (
+                window.index != index
+                or window.start_ms <= previous_start
+                or window.end_ms > self.duration_ms
+            ):
+                raise ValueError("long-form window sequence does not match the recording")
+            previous_start = window.start_ms
+            segment.observed.verify()
+            if segment.observed.source_audio_sha256 != self.source_audio_sha256:
+                raise ValueError("segment evidence belongs to a different source recording")
+            segment.normalized.verify(segment.observed)
+        if self.observed_text != join_segment_text(self.segments):
+            raise ValueError("long-form observed text does not match its segments")
+        if self.normalized_text != join_segment_text(self.segments, normalized=True):
+            raise ValueError("long-form normalized text does not match its segments")
+        if sha256_json(self.evidence_payload()) != self.evidence_sha256:
+            raise ValueError("first-pass long-form evidence hash mismatch")
+
     def as_dict(self) -> dict[str, Any]:
+        self.verify()
         return asdict(self)
+
+
+def join_segment_text(segments: Iterable[Any], *, normalized: bool = False) -> str:
+    return join_timed_fragments(
+        (
+            segment.window.start_ms,
+            segment.window.end_ms,
+            segment.normalized.text if normalized else segment.observed.text,
+        )
+        for segment in segments
+    )
 
 
 def sha256_file(path: str | Path) -> str:
@@ -121,12 +217,14 @@ def probe_duration_ms(path: str | Path) -> int:
             timeout=30,
         )
         duration = float(completed.stdout.strip())
-        if duration > 0:
+        if math.isfinite(duration) and duration > 0:
             return max(1, round(duration * 1000))
     except (FileNotFoundError, subprocess.SubprocessError, ValueError):
         pass
     if source.suffix.lower() == ".wav":
         with wave.open(str(source), "rb") as stream:
+            if stream.getnframes() == 0:
+                raise ValueError("audio recording is empty")
             return max(1, round(stream.getnframes() / stream.getframerate() * 1000))
     raise RuntimeError("ffprobe is required to determine non-WAV duration")
 
@@ -137,8 +235,9 @@ def plan_windows(
     window_ms: int = 28_000,
     overlap_ms: int = 1_200,
 ) -> list[Window]:
-    if duration_ms <= 0:
-        raise ValueError("duration_ms must be positive")
+    require_integer(duration_ms, name="duration_ms", minimum=1)
+    require_integer(window_ms, name="window_ms", minimum=1)
+    require_integer(overlap_ms, name="overlap_ms")
     if window_ms <= 0 or overlap_ms < 0 or overlap_ms >= window_ms:
         raise ValueError("invalid window/overlap configuration")
     output: list[Window] = []
@@ -470,9 +569,15 @@ class SemanticASRTranscriber:
         evidence_enricher: Callable[[CandidateEvidence], CandidateEvidence] | None = None,
         window_ms: int = 28_000,
         overlap_ms: int = 1_200,
+        beam_size: int = 5,
+        hypotheses: int = 5,
+        relisten_beam_size: int = 12,
+        relisten_hypotheses: int = 8,
         surface_policy: SurfacePolicy = "lenient",
     ) -> None:
         self.base_adapter = base_adapter
+        self.runtime_profile_name: str | None = None
+        self.runtime_profile_digest: str | None = None
         self.second_ear = second_ear
         self.forced_aligner = forced_aligner
         self.teacher = teacher
@@ -484,8 +589,28 @@ class SemanticASRTranscriber:
         self.router_state = router_state or RouterState()
         self.router_config = router_config or QuantileBalancedRouterConfig()
         self.evidence_enricher = evidence_enricher
+        plan_windows(1, window_ms=window_ms, overlap_ms=overlap_ms)
+        if window_ms > 30_000:
+            raise ValueError("Whisper windows cannot exceed 30 s")
+        for name, value in (
+            ("beam_size", beam_size),
+            ("hypotheses", hypotheses),
+            ("relisten_beam_size", relisten_beam_size),
+            ("relisten_hypotheses", relisten_hypotheses),
+        ):
+            require_integer(value, name=name, minimum=1)
+        if hypotheses > beam_size:
+            raise ValueError("hypotheses cannot exceed beam_size")
+        if relisten_beam_size < 1 or relisten_hypotheses < 1:
+            raise ValueError("re-listen beam size and hypotheses must be positive")
+        if relisten_hypotheses > relisten_beam_size:
+            raise ValueError("re-listen hypotheses cannot exceed re-listen beam size")
         self.window_ms = window_ms
         self.overlap_ms = overlap_ms
+        self.beam_size = int(beam_size)
+        self.hypotheses = int(hypotheses)
+        self.relisten_beam_size = int(relisten_beam_size)
+        self.relisten_hypotheses = int(relisten_hypotheses)
         if surface_policy not in {"exact", "lenient"}:
             raise ValueError("surface_policy must be exact or lenient")
         self.surface_policy: SurfacePolicy = surface_policy
@@ -646,8 +771,8 @@ class SemanticASRTranscriber:
         base_request = DecodeRequest(
             audio_path=str(source),
             language=language,
-            beam_size=5,
-            hypotheses=5,
+            beam_size=self.beam_size,
+            hypotheses=self.hypotheses,
             start_ms=window.start_ms,
             end_ms=window.end_ms,
             initial_prompt=initial_prompt,
@@ -729,8 +854,8 @@ class SemanticASRTranscriber:
                 request = DecodeRequest(
                     audio_path=str(source),
                     language=language,
-                    beam_size=12,
-                    hypotheses=8,
+                    beam_size=self.relisten_beam_size,
+                    hypotheses=self.relisten_hypotheses,
                     start_ms=action.start_ms,
                     end_ms=action.end_ms,
                     initial_prompt=initial_prompt,
@@ -911,7 +1036,7 @@ class SemanticASRTranscriber:
         if not source.is_file():
             raise FileNotFoundError(source)
         audio_sha256 = sha256_file(source)
-        duration = int(duration_ms or probe_duration_ms(source))
+        duration = probe_duration_ms(source) if duration_ms is None else duration_ms
         windows = plan_windows(duration, window_ms=self.window_ms, overlap_ms=self.overlap_ms)
         normalized_language = None if language in {None, "", "auto"} else language
         hotword_tuple = tuple(dict.fromkeys(str(value) for value in hotwords if str(value)))
@@ -927,25 +1052,19 @@ class SemanticASRTranscriber:
             )
             for window in windows
         )
-        observed_text = join_japanese_fragments(segment.observed.text for segment in segments)
-        normalized_text = join_japanese_fragments(segment.normalized.text for segment in segments)
-        evidence_payload = {
-            "audioSha256": audio_sha256,
-            "durationMs": duration,
-            "observedText": observed_text,
-            "normalizedText": normalized_text,
-            "segmentEvidence": [segment.observed.evidence_sha256 for segment in segments],
-        }
-        return LongformResult(
+        return LongformResult.create(
             source_name=source.name,
             source_audio_sha256=audio_sha256,
             duration_ms=duration,
-            observed_text=observed_text,
-            normalized_text=normalized_text,
             segments=segments,
-            evidence_sha256=sha256_json(evidence_payload),
             diagnostics={
                 "windowCount": len(windows),
+                "evidenceBudgetMs": self.evidence_budget.total_cost_ms,
+                "maximumEvidenceActions": self.evidence_budget.max_actions,
+                "beamSize": self.beam_size,
+                "hypotheses": self.hypotheses,
+                "relistenBeamSize": self.relisten_beam_size,
+                "relistenHypotheses": self.relisten_hypotheses,
                 "cacheHitCount": sum(len(segment.cache_hits) for segment in segments),
                 "provisionalWindowCount": sum(
                     segment.observed.decision == "provisional" for segment in segments
