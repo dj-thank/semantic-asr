@@ -4,7 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [codex/real-weight-pilot-20260905]
-    paths: [.github/workflows/real-weight-pilot.yml]
+    paths:
+      - .github/workflows/real-weight-pilot.yml
+      - scripts/train_public_weight_pilot.py
 
 permissions:
   contents: read
