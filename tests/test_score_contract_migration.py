@@ -141,9 +141,7 @@ def test_probability_requires_a_frozen_registered_profile() -> None:
             )
         )
 
-    assert probability.require_probability(registry(row), source_score=source) == pytest.approx(
-        0.8
-    )
+    assert probability.require_probability(registry(row), source_score=source) == pytest.approx(0.8)
 
     forged_value = EvidenceScore(
         0.7,
@@ -350,9 +348,9 @@ def test_platt_calibrator_can_issue_a_registry_validated_probability() -> None:
     probability = calibrator.probability(source, profile=frozen_profile)
     frozen_registry = registry(frozen_profile)
 
-    assert frozen_registry.require_probability(
-        probability, source_score=source
-    ) == pytest.approx(probability.value)
+    assert frozen_registry.require_probability(probability, source_score=source) == pytest.approx(
+        probability.value
+    )
     assert probability.provenance.calibration_digest == calibrator.digest
 
 

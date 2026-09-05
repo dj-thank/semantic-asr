@@ -7,8 +7,8 @@ the canonical module; this file no longer defines a competing numeric type.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Mapping
 
 from .score_contract import (
     CalibrationProfileRegistry,

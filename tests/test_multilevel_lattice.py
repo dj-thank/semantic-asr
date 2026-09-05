@@ -267,7 +267,7 @@ def test_homophone_selection_is_marked_context_resolved_orthography() -> None:
         lattice,
         policy=policy(),
         context=DocumentContext(right_context="を変更して再ビルドします。"),
-        sequence_scorer=scorer(),
+        sequence_scorer=scorer,
     )
 
     assert decision.selected.text == "仕様"

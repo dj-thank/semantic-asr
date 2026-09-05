@@ -203,8 +203,7 @@ class PlattCalibrator:
 
         mean = sum(example.weight * example.score for example in examples) / total_weight
         variance = (
-            sum(example.weight * (example.score - mean) ** 2 for example in examples)
-            / total_weight
+            sum(example.weight * (example.score - mean) ** 2 for example in examples) / total_weight
         )
         scale = max(math.sqrt(variance), 1e-6)
 

@@ -200,16 +200,12 @@ class UtilityCalibrationProfile:
                     semantics = mapping[raw_kind]
                 except KeyError as exc:
                     raise ValueError(f"unsupported legacy score kind: {raw_kind!r}") from exc
-                normalization = ScoreNormalization(
-                    score_normalization or ScoreNormalization.NONE
-                )
+                normalization = ScoreNormalization(score_normalization or ScoreNormalization.NONE)
         else:
             if score_semantics is None:
                 raise TypeError("score_semantics is required")
             semantics = ScoreSemantics(score_semantics)
-            normalization = ScoreNormalization(
-                score_normalization or ScoreNormalization.NONE
-            )
+            normalization = ScoreNormalization(score_normalization or ScoreNormalization.NONE)
         center_value = _strict_float(center, name="calibration center")
         scale_value = _strict_float(scale, name="calibration scale")
         if scale_value <= 0:
