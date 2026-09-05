@@ -16,6 +16,7 @@ from semantic_asr.multilevel_lattice import (
     frozen_profile_digest,
     path_digest,
 )
+from semantic_asr.score_contract import ScoreNormalization
 from semantic_asr.score_semantics import EvidenceScore, ScoreKind
 
 PROFILE = "1" * 64
@@ -266,7 +267,7 @@ def test_homophone_selection_is_marked_context_resolved_orthography() -> None:
         lattice,
         policy=policy(),
         context=DocumentContext(right_context="を変更して再ビルドします。"),
-        sequence_scorer=scorer,
+        sequence_scorer=scorer(),
     )
 
     assert decision.selected.text == "仕様"
@@ -319,6 +320,7 @@ def test_utility_calibration_preserves_score_semantics() -> None:
                 value=-0.5,
                 kind=ScoreKind.LOG_LIKELIHOOD,
                 source="another-source",
+                normalization=ScoreNormalization.MEAN_FRAME,
             )
         )
 
