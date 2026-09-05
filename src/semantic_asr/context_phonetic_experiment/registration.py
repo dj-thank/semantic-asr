@@ -134,9 +134,7 @@ def run_registered_context_phonetic_experiment(
         "manifest_digest": registration.manifest_digest,
         "manifest_planning_digest": registration.manifest_planning_digest,
         "protocol_digest": registration.protocol_digest,
-        "phonetic_planner_profile_digest": (
-            registration.phonetic_planner_profile_digest
-        ),
+        "phonetic_planner_profile_digest": (registration.phonetic_planner_profile_digest),
         "context_scorer_source": registration.context_scorer_source,
         "context_scorer_profile_digest": registration.context_scorer_profile_digest,
         "promotion_policy_digest": registration.promotion_policy_digest,
@@ -144,8 +142,7 @@ def run_registered_context_phonetic_experiment(
     mismatches = tuple(name for name in expected if expected[name] != observed[name])
     if mismatches:
         raise ValueError(
-            "registered context-phonetic experiment identity mismatch: "
-            + ", ".join(mismatches)
+            "registered context-phonetic experiment identity mismatch: " + ", ".join(mismatches)
         )
     report = run_context_phonetic_experiment(
         manifest,

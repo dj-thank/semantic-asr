@@ -24,7 +24,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifact-dir", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--split", choices=("train", "calibration", "test"), default="test")
+    parser.add_argument(
+        "--split", choices=("train", "validation", "calibration", "test"), default="test"
+    )
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(

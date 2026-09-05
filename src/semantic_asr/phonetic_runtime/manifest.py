@@ -12,7 +12,7 @@ from ..contracts import sha256_json
 from ..deliberation_evidence import _is_sha256
 from .contracts import PhoneticInventory
 
-SplitName = Literal["train", "calibration", "test"]
+SplitName = Literal["train", "validation", "calibration", "test"]
 
 
 def _sha256_file(path: Path) -> str:
@@ -65,7 +65,7 @@ class PhoneticManifestRow:
                 raise ValueError(f"{name} is required")
         if self.rights_decision != "allow":
             raise ValueError("phonetic manifest rows require rights_decision='allow'")
-        if self.split not in {"train", "calibration", "test"}:
+        if self.split not in {"train", "validation", "calibration", "test"}:
             raise ValueError("phonetic manifest split is invalid")
         if not _is_sha256(self.source_audio_sha256):
             raise ValueError("source_audio_sha256 must be a SHA-256 value")
@@ -144,20 +144,39 @@ def phone_inventory_sample_rate(manifest: PhoneticSplitManifest) -> int:
     return next(iter(values))
 
 
-def validate_split_isolation(manifest: PhoneticSplitManifest) -> None:
-    rows_by_split = {split: manifest.rows_for(split) for split in ("train", "calibration", "test")}
-    if not rows_by_split["train"] or not rows_by_split["calibration"]:
-        raise ValueError("phonetic manifest requires non-empty train and calibration splits")
+def validate_split_isolation(
+    manifest: PhoneticSplitManifest,
+    *,
+    required_splits: tuple[SplitName, ...] = ("train", "validation", "calibration"),
+) -> None:
+    split_names: tuple[SplitName, ...] = (
+        "train",
+        "validation",
+        "calibration",
+        "test",
+    )
+    if not required_splits:
+        raise ValueError("required_splits must not be empty")
+    if len(required_splits) != len(set(required_splits)):
+        raise ValueError("required_splits must be unique")
+    unknown = set(required_splits) - set(split_names)
+    if unknown:
+        raise ValueError(f"unknown required phonetic splits: {sorted(unknown)}")
+    rows_by_split = {split: manifest.rows_for(split) for split in split_names}
+    for split in required_splits:
+        if not rows_by_split[split]:
+            raise ValueError(f"phonetic manifest requires a non-empty {split} split")
     speakers = {split: {row.speaker_id for row in rows} for split, rows in rows_by_split.items()}
     sessions = {split: {row.session_id for row in rows} for split, rows in rows_by_split.items()}
     sources = {split: {row.source_id for row in rows} for split, rows in rows_by_split.items()}
-    for left, right in (("train", "calibration"), ("train", "test"), ("calibration", "test")):
-        if speakers[left].intersection(speakers[right]):
-            raise ValueError(f"speaker leakage between {left} and {right}")
-        if sessions[left].intersection(sessions[right]):
-            raise ValueError(f"session leakage between {left} and {right}")
-        if sources[left].intersection(sources[right]):
-            raise ValueError(f"source leakage between {left} and {right}")
+    for left_index, left in enumerate(split_names):
+        for right in split_names[left_index + 1 :]:
+            if speakers[left].intersection(speakers[right]):
+                raise ValueError(f"speaker leakage between {left} and {right}")
+            if sessions[left].intersection(sessions[right]):
+                raise ValueError(f"session leakage between {left} and {right}")
+            if sources[left].intersection(sources[right]):
+                raise ValueError(f"source leakage between {left} and {right}")
 
 
 def load_phonetic_manifest(path: str | Path) -> PhoneticSplitManifest:

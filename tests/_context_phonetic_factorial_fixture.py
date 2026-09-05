@@ -63,10 +63,7 @@ def lexicon() -> FrozenPronunciationLexicon:
 
 
 def _score_source(kind: str) -> str:
-    return (
-        f"ctc-{kind}:dual-ctc:factorial@r1@{RUNTIME_DIGEST}:"
-        f"{kind}-labels-r1"
-    )
+    return f"ctc-{kind}:dual-ctc:factorial@r1@{RUNTIME_DIGEST}:{kind}-labels-r1"
 
 
 def utility_artifact() -> DualCTCUtilityArtifact:
@@ -118,10 +115,7 @@ def _posterior(kind: str, target_id: str, source_audio_sha256: str) -> Posterior
             PosteriorFrame.from_mapping(
                 start_ms=index * 20,
                 end_ms=(index + 1) * 20,
-                probabilities={
-                    symbol: high if symbol == winner else rest
-                    for symbol in vocabulary
-                },
+                probabilities={symbol: high if symbol == winner else rest for symbol in vocabulary},
             )
         )
     return PosteriorSequence(
@@ -176,7 +170,7 @@ def _phonetic_case(
     critical: bool,
 ) -> PhoneticAblationCase:
     audio = (tmp_path / f"{case_id}.wav").resolve()
-    audio.write_bytes(f"fixture:{case_id}".encode("utf-8"))
+    audio.write_bytes(f"fixture:{case_id}".encode())
     source_digest = sha256_json({"caseId": case_id, "audio": "fixture"})
     return PhoneticAblationCase(
         case_id=case_id,
@@ -247,7 +241,14 @@ def factorial_manifest(tmp_path: Path):
     )
     cases = []
     targets = {}
-    for case_id, first_pass, reference, context_preference, acoustic_target, critical in definitions:
+    for (
+        case_id,
+        first_pass,
+        reference,
+        context_preference,
+        acoustic_target,
+        critical,
+    ) in definitions:
         phonetic = _phonetic_case(
             tmp_path,
             case_id=case_id,

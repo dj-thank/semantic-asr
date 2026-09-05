@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import shutil
 import tempfile
+import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -138,6 +140,37 @@ def _tensor_spec_from_dict(value: dict[str, Any]) -> TensorSpecification:
         dtype=_strict_string(value["dtype"], name="tensor dtype"),
         sha256=_strict_string(value["sha256"], name="tensor SHA-256"),
     )
+
+
+def _write_deterministic_npz(path: Path, arrays: dict[str, Any]) -> None:
+    """Write stable NPZ bytes for identical ordered tensor arrays."""
+
+    import numpy as np
+
+    with path.open("wb") as raw_stream:
+        with zipfile.ZipFile(
+            raw_stream,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+            strict_timestamps=True,
+        ) as archive:
+            for name in sorted(arrays):
+                array_value = arrays[name]
+                buffer = io.BytesIO()
+                np.lib.format.write_array(buffer, array_value, allow_pickle=False)
+                info = zipfile.ZipInfo(
+                    filename=f"{name}.npy",
+                    date_time=(1980, 1, 1, 0, 0, 0),
+                )
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.create_system = 3
+                info.external_attr = 0o600 << 16
+                archive.writestr(
+                    info, buffer.getvalue(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9
+                )
+        raw_stream.flush()
+        os.fsync(raw_stream.fileno())
 
 
 def _metadata_payload(metadata: DualCTCArtifactMetadata) -> dict[str, object]:
@@ -282,7 +315,7 @@ def save_dual_ctc_artifact(
                 )
             )
         weights_path = temporary / _WEIGHTS_FILENAME
-        np.savez_compressed(weights_path, **arrays)
+        _write_deterministic_npz(weights_path, arrays)
         weights_sha256 = _sha256_file(weights_path)
         metadata = DualCTCArtifactMetadata(
             name=name,

@@ -25,8 +25,7 @@ def test_complete_path_scorer_adapter_binds_each_candidate_and_context() -> None
     scorer = CallableGlobalSequenceScorer(
         lambda path, document: (
             1.0
-            if "まだ" in "".join(arc.text for arc in path)
-            and "承認後" in document.right_context
+            if "まだ" in "".join(arc.text for arc in path) and "承認後" in document.right_context
             else -1.0
         ),
         source="complete-path-fixture",

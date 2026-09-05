@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+from _context_phonetic_factorial_fixture import (
+    factorial_manifest,
+    factorial_protocol,
+    utility_artifact,
+)
 
 from semantic_asr.context_phonetic_experiment.promotion import (
     ContextPhoneticPromotionPolicy,
@@ -12,12 +17,6 @@ from semantic_asr.context_phonetic_experiment.registration import (
     run_registered_context_phonetic_experiment,
 )
 from semantic_asr.phonetic_experiment.planner import FrozenPhoneticCandidatePlanner
-
-from _context_phonetic_factorial_fixture import (
-    factorial_manifest,
-    factorial_protocol,
-    utility_artifact,
-)
 
 
 def policy() -> ContextPhoneticPromotionPolicy:
@@ -58,9 +57,7 @@ def components(tmp_path):
 
 
 def test_registered_factorial_experiment_runs_exact_frozen_components(tmp_path) -> None:
-    manifest, _runtime, scorer, protocol, planner, promotion, registration = components(
-        tmp_path
-    )
+    manifest, _runtime, scorer, protocol, planner, promotion, registration = components(tmp_path)
 
     result = run_registered_context_phonetic_experiment(
         registration,
@@ -76,9 +73,7 @@ def test_registered_factorial_experiment_runs_exact_frozen_components(tmp_path) 
 
 
 def test_changed_reference_is_rejected_before_audio_or_context_scoring(tmp_path) -> None:
-    manifest, runtime, scorer, protocol, planner, promotion, registration = components(
-        tmp_path
-    )
+    manifest, runtime, scorer, protocol, planner, promotion, registration = components(tmp_path)
     first = manifest.cases[0]
     changed_manifest = replace(
         manifest,
@@ -108,9 +103,7 @@ def test_changed_reference_is_rejected_before_audio_or_context_scoring(tmp_path)
 
 
 def test_changed_threshold_or_scorer_identity_is_rejected_before_planning(tmp_path) -> None:
-    manifest, runtime, scorer, protocol, planner, promotion, registration = components(
-        tmp_path
-    )
+    manifest, runtime, scorer, protocol, planner, promotion, registration = components(tmp_path)
     changed_policy = replace(promotion, maximum_false_correction_rate=0.0)
 
     with pytest.raises(ValueError, match="promotion_policy_digest"):

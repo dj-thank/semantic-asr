@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+from _context_phonetic_factorial_fixture import (
+    factorial_manifest,
+    factorial_protocol,
+    utility_artifact,
+)
 
 from semantic_asr.context_phonetic_experiment.context_scorer import (
     ContextCandidateScore,
@@ -11,12 +16,6 @@ from semantic_asr.context_phonetic_experiment.planner import (
     prepare_context_phonetic_experiment,
 )
 from semantic_asr.phonetic_experiment.planner import FrozenPhoneticCandidatePlanner
-
-from _context_phonetic_factorial_fixture import (
-    factorial_manifest,
-    factorial_protocol,
-    utility_artifact,
-)
 
 
 def test_acoustic_pool_is_generated_once_and_context_is_scored_twice(tmp_path) -> None:
@@ -32,7 +31,9 @@ def test_acoustic_pool_is_generated_once_and_context_is_scored_twice(tmp_path) -
     )
 
     assert len(runtime.calls) == len(manifest.cases)
-    expected_context_calls = len(manifest.cases) * len(manifest.cases[0].phonetic_case.lexicon.entries) * 2
+    expected_context_calls = (
+        len(manifest.cases) * len(manifest.cases[0].phonetic_case.lexicon.entries) * 2
+    )
     assert len(scorer.calls) == expected_context_calls
     assert len(prepared.cases) == len(manifest.cases)
     for case in prepared.cases:

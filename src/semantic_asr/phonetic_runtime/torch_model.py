@@ -228,6 +228,49 @@ class DualPhoneMoraCTC(nn.Module):
         )
 
 
+def minimum_ctc_frames(targets: Tensor, target_lengths: Tensor) -> Tensor:
+    """Return the minimum CTC frame count, including repeated-label separators."""
+
+    if targets.ndim != 1:
+        raise ValueError("CTC targets must be one-dimensional and concatenated")
+    if target_lengths.ndim != 1:
+        raise ValueError("CTC target_lengths must have shape [batch]")
+    if torch.any(target_lengths < 1):
+        raise ValueError("CTC target lengths must be positive")
+    if int(target_lengths.sum().item()) != targets.numel():
+        raise ValueError("CTC target lengths do not match the concatenated target tensor")
+    output: list[int] = []
+    cursor = 0
+    for length in target_lengths.tolist():
+        row = targets[cursor : cursor + length]
+        repeats = int((row[1:] == row[:-1]).sum().item()) if length > 1 else 0
+        output.append(int(length) + repeats)
+        cursor += int(length)
+    return torch.tensor(output, dtype=torch.long, device=target_lengths.device)
+
+
+def _validate_ctc_feasibility(
+    *,
+    name: str,
+    targets: Tensor,
+    target_lengths: Tensor,
+    output_lengths: Tensor,
+    blank_id: int,
+) -> None:
+    if output_lengths.ndim != 1 or output_lengths.shape != target_lengths.shape:
+        raise ValueError(f"{name} output and target lengths have incompatible shapes")
+    if torch.any(targets == blank_id):
+        raise ValueError(f"{name} targets must not contain the CTC blank")
+    required = minimum_ctc_frames(targets, target_lengths)
+    available = output_lengths.to(required.device)
+    if torch.any(required > available):
+        index = int(torch.nonzero(required > available, as_tuple=False)[0].item())
+        raise ValueError(
+            f"{name} target requires more CTC frames than available for batch row {index}: "
+            f"required={int(required[index])}, available={int(available[index])}"
+        )
+
+
 def multitask_ctc_loss(
     output: DualCTCOutput,
     *,
@@ -240,6 +283,20 @@ def multitask_ctc_loss(
     phone_weight: float = 1.0,
     mora_weight: float = 1.0,
 ) -> tuple[Tensor, Tensor, Tensor]:
+    _validate_ctc_feasibility(
+        name="phone",
+        targets=phone_targets,
+        target_lengths=phone_target_lengths,
+        output_lengths=output.output_lengths,
+        blank_id=phone_blank_id,
+    )
+    _validate_ctc_feasibility(
+        name="mora",
+        targets=mora_targets,
+        target_lengths=mora_target_lengths,
+        output_lengths=output.output_lengths,
+        blank_id=mora_blank_id,
+    )
     if phone_weight < 0.0 or mora_weight < 0.0 or phone_weight + mora_weight <= 0.0:
         raise ValueError("CTC loss weights must be non-negative with positive total")
     phone_loss = F.ctc_loss(
@@ -249,7 +306,7 @@ def multitask_ctc_loss(
         phone_target_lengths,
         blank=phone_blank_id,
         reduction="mean",
-        zero_infinity=True,
+        zero_infinity=False,
     )
     mora_loss = F.ctc_loss(
         output.mora_logits.log_softmax(dim=-1).transpose(0, 1),
@@ -258,7 +315,7 @@ def multitask_ctc_loss(
         mora_target_lengths,
         blank=mora_blank_id,
         reduction="mean",
-        zero_infinity=True,
+        zero_infinity=False,
     )
     denominator = phone_weight + mora_weight
     total = (phone_weight * phone_loss + mora_weight * mora_loss) / denominator

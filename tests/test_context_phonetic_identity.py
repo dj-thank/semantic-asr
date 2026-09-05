@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from _context_phonetic_factorial_fixture import (
+    factorial_manifest,
+    factorial_protocol,
+    utility_artifact,
+)
+
 from semantic_asr.context_phonetic_experiment.planner import (
     prepare_context_phonetic_experiment,
 )
@@ -9,12 +15,6 @@ from semantic_asr.context_phonetic_experiment.selection import (
     select_context_phonetic_arm,
 )
 from semantic_asr.phonetic_experiment.planner import FrozenPhoneticCandidatePlanner
-
-from _context_phonetic_factorial_fixture import (
-    factorial_manifest,
-    factorial_protocol,
-    utility_artifact,
-)
 
 
 def test_prepared_and_decision_identity_exclude_wall_clock_latency(tmp_path) -> None:

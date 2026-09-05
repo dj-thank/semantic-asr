@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from _context_phonetic_factorial_fixture import (
+    factorial_manifest,
+    factorial_protocol,
+    utility_artifact,
+)
+
 from semantic_asr.context_phonetic_experiment.promotion import (
     ContextPhoneticPromotionPolicy,
     evaluate_context_phonetic_promotion,
@@ -10,12 +16,6 @@ from semantic_asr.context_phonetic_experiment.runner import (
     run_context_phonetic_experiment,
 )
 from semantic_asr.phonetic_experiment.planner import FrozenPhoneticCandidatePlanner
-
-from _context_phonetic_factorial_fixture import (
-    factorial_manifest,
-    factorial_protocol,
-    utility_artifact,
-)
 
 
 def report(tmp_path):

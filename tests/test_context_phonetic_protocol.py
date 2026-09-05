@@ -3,13 +3,12 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+from _context_phonetic_factorial_fixture import factorial_manifest, factorial_protocol
 
 from semantic_asr.context_phonetic_experiment.planner import (
     deterministic_context_derangement,
 )
 from semantic_asr.context_phonetic_experiment.protocol import ContextPhoneticManifest
-
-from _context_phonetic_factorial_fixture import factorial_manifest, factorial_protocol
 
 
 def test_shuffle_is_deterministic_and_avoids_registered_identity_leakage(tmp_path) -> None:
@@ -63,3 +62,4 @@ def test_protocol_requires_factorial_counterparts(tmp_path) -> None:
     assert manifest.planning_digest != manifest.digest
     assert protocol.arm("phone+mora:ordered").context_condition == "ordered"
     assert protocol.arm("phone+mora:shuffled").phonetic_arm_name == "phone+mora"
+    assert protocol.require_different_context_group_for_shuffle

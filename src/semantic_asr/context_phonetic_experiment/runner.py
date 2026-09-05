@@ -48,9 +48,7 @@ class ContextPhoneticCaseResult:
         for value in (self.case_digest, self.prepared_case_digest):
             if not _is_sha256(value):
                 raise ValueError("factorial case result digests must be SHA-256 values")
-        if {row.arm_name for row in self.decisions} != {
-            row.arm_name for row in self.metrics
-        }:
+        if {row.arm_name for row in self.decisions} != {row.arm_name for row in self.metrics}:
             raise ValueError("factorial case decisions and metrics contain different arms")
 
     @property
@@ -152,22 +150,16 @@ class ContextPhoneticFactorialReport:
                             "effectiveTextSha256": metrics_by_arm[
                                 decision.arm_name
                             ].effective_text_sha256,
-                            "effectiveExact": metrics_by_arm[
-                                decision.arm_name
-                            ].effective_exact,
+                            "effectiveExact": metrics_by_arm[decision.arm_name].effective_exact,
                             "referenceOutsideFirstPass": metrics_by_arm[
                                 decision.arm_name
                             ].reference_outside_first_pass,
                             "recoveredOutsideFirstPass": metrics_by_arm[
                                 decision.arm_name
                             ].recovered_outside_first_pass,
-                            "falseCorrection": metrics_by_arm[
-                                decision.arm_name
-                            ].false_correction,
+                            "falseCorrection": metrics_by_arm[decision.arm_name].false_correction,
                             "critical": metrics_by_arm[decision.arm_name].critical,
-                            "contextCondition": metrics_by_arm[
-                                decision.arm_name
-                            ].context_condition,
+                            "contextCondition": metrics_by_arm[decision.arm_name].context_condition,
                             "contextDonorCaseId": metrics_by_arm[
                                 decision.arm_name
                             ].context_donor_case_id,
@@ -212,9 +204,7 @@ class ContextPhoneticFactorialReport:
                 }
                 for row in self.aggregates
             ],
-            "contrasts": [
-                {**asdict(row), "contrastDigest": row.digest} for row in self.contrasts
-            ],
+            "contrasts": [{**asdict(row), "contrastDigest": row.digest} for row in self.contrasts],
             "interaction": {
                 **asdict(self.interaction),
                 "interactionDigest": self.interaction.digest,
@@ -241,9 +231,7 @@ class ContextPhoneticFactorialReport:
         try:
             with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
                 json.dump(
-                    self.as_dict(
-                        include_ranked_candidate_ids=include_ranked_candidate_ids
-                    ),
+                    self.as_dict(include_ranked_candidate_ids=include_ranked_candidate_ids),
                     stream,
                     ensure_ascii=False,
                     sort_keys=True,
@@ -269,8 +257,7 @@ def _find_arm(
     rows = [
         arm
         for arm in protocol.arms
-        if arm.phonetic_arm_name == phonetic_arm_name
-        and arm.context_condition == context_condition
+        if arm.phonetic_arm_name == phonetic_arm_name and arm.context_condition == context_condition
     ]
     if len(rows) != 1:
         raise ValueError(
@@ -289,9 +276,7 @@ def evaluate_prepared_context_phonetic_experiment(
         raise ValueError("prepared factorial pools belong to a different planning manifest")
     if prepared.protocol_digest != protocol.digest:
         raise ValueError("prepared factorial pools belong to a different protocol")
-    if {case.case_id for case in prepared.cases} != {
-        case.case_id for case in manifest.cases
-    }:
+    if {case.case_id for case in prepared.cases} != {case.case_id for case in manifest.cases}:
         raise ValueError("prepared factorial case IDs differ from the manifest")
 
     metrics_by_arm: dict[str, list[ContextPhoneticCaseMetrics]] = {
@@ -303,8 +288,7 @@ def evaluate_prepared_context_phonetic_experiment(
         if prepared_case.case_planning_digest != case.planning_digest:
             raise ValueError("prepared factorial case planning digest differs")
         decisions = tuple(
-            select_context_phonetic_arm(prepared_case, arm, protocol)
-            for arm in protocol.arms
+            select_context_phonetic_arm(prepared_case, arm, protocol) for arm in protocol.arms
         )
         metrics = tuple(
             evaluate_factorial_case_arm(
@@ -329,8 +313,7 @@ def evaluate_prepared_context_phonetic_experiment(
         )
 
     aggregates = tuple(
-        aggregate_factorial_arm(tuple(metrics_by_arm[arm.name]))
-        for arm in protocol.arms
+        aggregate_factorial_arm(tuple(metrics_by_arm[arm.name])) for arm in protocol.arms
     )
     target = protocol.arm(protocol.target_arm)
     baseline = protocol.arm(protocol.baseline_arm)

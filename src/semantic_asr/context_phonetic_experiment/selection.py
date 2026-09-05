@@ -191,15 +191,9 @@ def select_context_phonetic_arm(
     proposed = ranked[0]
     has_runner_up = len(ranked) > 1
     margin = proposed.final_score - ranked[1].final_score if has_runner_up else 0.0
-    threshold = (
-        phonetic_arm.minimum_margin
-        if arm.minimum_margin is None
-        else arm.minimum_margin
-    )
+    threshold = phonetic_arm.minimum_margin if arm.minimum_margin is None else arm.minimum_margin
     apply_provisional = (
-        phonetic_arm.apply_provisional
-        if arm.apply_provisional is None
-        else arm.apply_provisional
+        phonetic_arm.apply_provisional if arm.apply_provisional is None else arm.apply_provisional
     )
     status = "accepted"
     reason = "margin-accepted"

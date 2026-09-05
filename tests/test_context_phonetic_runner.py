@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import json
 
+from _context_phonetic_factorial_fixture import (
+    factorial_manifest,
+    factorial_protocol,
+    utility_artifact,
+)
+
 from semantic_asr.context_phonetic_experiment.planner import (
     prepare_context_phonetic_experiment,
 )
@@ -10,12 +16,6 @@ from semantic_asr.context_phonetic_experiment.runner import (
     run_context_phonetic_experiment,
 )
 from semantic_asr.phonetic_experiment.planner import FrozenPhoneticCandidatePlanner
-
-from _context_phonetic_factorial_fixture import (
-    factorial_manifest,
-    factorial_protocol,
-    utility_artifact,
-)
 
 
 def run(tmp_path):
@@ -47,9 +47,10 @@ def test_factorial_report_contains_main_effects_specificity_and_interaction(tmp_
     assert aggregates["phone+mora:none"].false_correction_count == 1
     assert aggregates["phone+mora:ordered"].false_correction_count == 0
     assert aggregates["phone+mora:ordered"].outside_first_pass_recovery_count == 2
-    assert aggregates["phone+mora:shuffled"].exact_accuracy < aggregates[
-        "phone+mora:ordered"
-    ].exact_accuracy
+    assert (
+        aggregates["phone+mora:shuffled"].exact_accuracy
+        < aggregates["phone+mora:ordered"].exact_accuracy
+    )
 
 
 def test_every_arm_uses_the_same_prepared_pool_and_context_scores(tmp_path) -> None:
@@ -69,9 +70,9 @@ def test_every_arm_uses_the_same_prepared_pool_and_context_scores(tmp_path) -> N
     )
 
     for case_result in report.case_results:
-        assert {
-            decision.prepared_case_digest for decision in case_result.decisions
-        } == {case_result.prepared_case_digest}
+        assert {decision.prepared_case_digest for decision in case_result.decisions} == {
+            case_result.prepared_case_digest
+        }
         assert len(case_result.decisions) == len(protocol.arms)
 
 

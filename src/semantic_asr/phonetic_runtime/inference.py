@@ -34,12 +34,12 @@ def _posterior_frames(
         total = sum(row)
         if not math.isfinite(total) or total <= 0.0:
             raise ValueError("posterior frame has invalid probability mass")
-        distribution = {
-            symbol: max(0.0, value / total)
-            for symbol, value in zip(inventory.symbols, row, strict=True)
-        }
-        renormalizer = sum(distribution.values())
-        distribution[inventory.symbols[-1]] += 1.0 - renormalizer
+        normalized = [max(0.0, value) / total for value in row]
+        renormalizer = sum(normalized)
+        normalized = [value / renormalizer for value in normalized]
+        anchor = max(range(len(normalized)), key=lambda index: normalized[index])
+        normalized[anchor] += 1.0 - sum(normalized)
+        distribution = dict(zip(inventory.symbols, normalized, strict=True))
         output.append(
             PosteriorFrame.from_mapping(
                 start_ms=start_ms,

@@ -46,8 +46,8 @@ def four_way_manifest(tmp_path: Path) -> PhoneticSplitManifest:
     )
 
 
-def test_four_way_split_isolation_passes() -> None:
-    value = four_way_manifest(Path(pytest.ensuretemp("four-way-split")))
+def test_four_way_split_isolation_passes(tmp_path: Path) -> None:
+    value = four_way_manifest(tmp_path)
 
     validate_split_isolation(value)
 

@@ -105,7 +105,7 @@ Each JSONL row contains at least:
 ```
 
 A metadata sidecar named `<manifest>.metadata.json` supplies manifest name/revision and may pin the
-exact JSONL SHA-256. Train, calibration, and test partitions reject shared speakers, sessions, or
+exact JSONL SHA-256. Train, validation, calibration, and test partitions reject shared speakers, sessions, or
 source recordings. Every reference-bearing row must explicitly permit the operation.
 
 ## Training
@@ -123,8 +123,8 @@ python scripts/train_dual_phonetic_ctc.py \
   --device cpu
 ```
 
-The trainer updates only the train split, evaluates calibration loss after each epoch, keeps the
-best calibration checkpoint, writes the pickle-free artifact, and immediately reloads it to verify
+The trainer updates only the train split, evaluates validation loss after each epoch, keeps the
+best validation checkpoint, writes the pickle-free artifact, and immediately reloads it to verify
 the complete artifact contract.
 
 Training output must be outside the repository checkout. The test split is not used to choose the
@@ -194,3 +194,32 @@ locked end-to-end comparison with:
 
 No artifact becomes a default profile until the end-to-end frontier improves without violating the
 observed-transcript preservation contract.
+
+
+## Four-way split boundary
+
+The model uses four separate evidence partitions:
+
+```text
+train       gradient updates
+validation  checkpoint and hyperparameter selection
+calibration CTC utility normalization for candidate fusion
+test        final PER/MER and end-to-end ASR evaluation
+```
+
+Validation and calibration must not share speakers, sessions, or source recordings. The test split
+is never used for checkpoint selection or utility normalization. This separation prevents an
+apparently held-out utility profile from being fitted on the same rows already used to select the
+model checkpoint.
+
+## Repeated-label CTC feasibility
+
+A target such as `a a` needs a blank-separated path and therefore at least three acoustic frames.
+The runtime computes `target_length + adjacent_repeat_count` before calling the CTC loss. Impossible
+alignments fail explicitly; `zero_infinity` is not used to silently turn them into zero-loss rows.
+
+## Deterministic weight archives
+
+Tensor arrays are written in sorted order to a ZIP archive with fixed timestamps, permissions, and
+compression settings. Identical state dictionaries therefore produce byte-identical `weights.npz`
+files and the same weight-file SHA-256.

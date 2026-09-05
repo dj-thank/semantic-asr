@@ -78,9 +78,9 @@ class TrainingEpochMetrics:
     training_total_loss: float
     training_phone_loss: float
     training_mora_loss: float
-    calibration_total_loss: float
-    calibration_phone_loss: float
-    calibration_mora_loss: float
+    validation_total_loss: float
+    validation_phone_loss: float
+    validation_mora_loss: float
     update_count: int
 
     def __post_init__(self) -> None:
@@ -92,9 +92,9 @@ class TrainingEpochMetrics:
             "training_total_loss",
             "training_phone_loss",
             "training_mora_loss",
-            "calibration_total_loss",
-            "calibration_phone_loss",
-            "calibration_mora_loss",
+            "validation_total_loss",
+            "validation_phone_loss",
+            "validation_mora_loss",
         ):
             value = float(getattr(self, name))
             if not math.isfinite(value) or value < 0.0:
@@ -109,15 +109,15 @@ class DualCTCTrainingResult:
     manifest_digest: str
     epoch_metrics: tuple[TrainingEpochMetrics, ...]
     best_epoch: int
-    best_calibration_loss: float
+    best_validation_loss: float
 
     def __post_init__(self) -> None:
         if not self.epoch_metrics:
             raise ValueError("training result requires epoch metrics")
         if self.best_epoch not in {row.epoch for row in self.epoch_metrics}:
             raise ValueError("best_epoch is absent from epoch metrics")
-        if not math.isfinite(self.best_calibration_loss):
-            raise ValueError("best_calibration_loss must be finite")
+        if not math.isfinite(self.best_validation_loss):
+            raise ValueError("best_validation_loss must be finite")
 
     @property
     def digest(self) -> str:
@@ -128,7 +128,7 @@ class DualCTCTrainingResult:
                 "manifestDigest": self.manifest_digest,
                 "epochMetrics": [asdict(row) for row in self.epoch_metrics],
                 "bestEpoch": self.best_epoch,
-                "bestCalibrationLoss": self.best_calibration_loss,
+                "bestCalibrationLoss": self.best_validation_loss,
             }
         )
 
@@ -142,7 +142,7 @@ class DualCTCTrainingResult:
             "manifestDigest": self.manifest_digest,
             "epochMetrics": [asdict(row) for row in self.epoch_metrics],
             "bestEpoch": self.best_epoch,
-            "bestCalibrationLoss": self.best_calibration_loss,
+            "bestCalibrationLoss": self.best_validation_loss,
             "trainingResultDigest": self.digest,
         }
         handle, temporary_name = tempfile.mkstemp(
@@ -250,7 +250,7 @@ def _run_split(
     from .torch_model import multitask_ctc_loss
 
     if not rows:
-        raise ValueError("training/calibration split must not be empty")
+        raise ValueError("training/validation split must not be empty")
     batches = _batch_rows(
         rows,
         batch_size=training_config.batch_size,
@@ -352,7 +352,7 @@ def train_dual_ctc_model(
         weight_decay=training_config.weight_decay,
     )
     train_rows = manifest.rows_for("train")
-    calibration_rows = manifest.rows_for("calibration")
+    validation_rows = manifest.rows_for("validation")
     history: list[TrainingEpochMetrics] = []
     best_state: dict[str, object] | None = None
     best_epoch = 0
@@ -369,9 +369,9 @@ def train_dual_ctc_model(
             phone_inventory=phone_inventory,
             mora_inventory=mora_inventory,
         )
-        calibration_total, calibration_phone, calibration_mora, _ = _run_split(
+        validation_total, validation_phone, validation_mora, _ = _run_split(
             model,
-            calibration_rows,
+            validation_rows,
             training=False,
             epoch=epoch,
             optimizer=optimizer,
@@ -386,14 +386,14 @@ def train_dual_ctc_model(
                 training_total_loss=train_total,
                 training_phone_loss=train_phone,
                 training_mora_loss=train_mora,
-                calibration_total_loss=calibration_total,
-                calibration_phone_loss=calibration_phone,
-                calibration_mora_loss=calibration_mora,
+                validation_total_loss=validation_total,
+                validation_phone_loss=validation_phone,
+                validation_mora_loss=validation_mora,
                 update_count=updates,
             )
         )
-        if calibration_total < best_loss:
-            best_loss = calibration_total
+        if validation_total < best_loss:
+            best_loss = validation_total
             best_epoch = epoch
             best_state = {
                 name: tensor.detach().cpu().clone() for name, tensor in model.state_dict().items()
@@ -421,5 +421,5 @@ def train_dual_ctc_model(
         manifest_digest=manifest.digest,
         epoch_metrics=tuple(history),
         best_epoch=best_epoch,
-        best_calibration_loss=best_loss,
+        best_validation_loss=best_loss,
     )

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Callable
 
 from ..contracts import sha256_json
 from ..deliberation_evidence import _is_sha256
@@ -132,6 +132,68 @@ class ContextPhoneticArmAggregate:
     mean_pool_generation_latency_ms: float
     mean_context_scoring_latency_ms: float
     mean_selection_latency_ms: float
+
+    def __post_init__(self) -> None:
+        if not self.arm_name or not self.phonetic_arm_name:
+            raise ValueError("factorial aggregate requires arm identities")
+        if self.context_condition not in {"none", "ordered", "shuffled"}:
+            raise ValueError("factorial aggregate context condition is invalid")
+        count_fields = (
+            "case_count",
+            "exact_count",
+            "proposed_exact_count",
+            "first_pass_exact_count",
+            "oracle_count",
+            "outside_first_pass_case_count",
+            "outside_first_pass_recovery_count",
+            "false_correction_count",
+            "corrected_first_pass_count",
+            "critical_case_count",
+            "critical_exact_count",
+            "accepted_count",
+            "changed_effective_count",
+            "total_reference_characters",
+            "total_first_pass_edits",
+            "total_effective_edits",
+            "total_introduced_error_characters",
+            "total_corrected_error_characters",
+        )
+        for name in count_fields:
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+        if self.case_count < 1 or self.total_reference_characters < 1:
+            raise ValueError("factorial aggregate requires cases and reference characters")
+        bounded_counts = (
+            self.exact_count,
+            self.proposed_exact_count,
+            self.first_pass_exact_count,
+            self.oracle_count,
+            self.false_correction_count,
+            self.corrected_first_pass_count,
+            self.critical_case_count,
+            self.critical_exact_count,
+            self.accepted_count,
+            self.changed_effective_count,
+        )
+        if any(value > self.case_count for value in bounded_counts):
+            raise ValueError("factorial aggregate count exceeds case_count")
+        if self.outside_first_pass_recovery_count > self.outside_first_pass_case_count:
+            raise ValueError("outside-first-pass recovery exceeds eligible cases")
+        if self.false_correction_count > self.first_pass_exact_count:
+            raise ValueError("false corrections exceed first-pass exact cases")
+        if self.critical_exact_count > self.critical_case_count:
+            raise ValueError("critical exact count exceeds critical cases")
+        for name in (
+            "mean_margin",
+            "mean_pool_generation_latency_ms",
+            "mean_context_scoring_latency_ms",
+            "mean_selection_latency_ms",
+        ):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
+            object.__setattr__(self, name, value)
 
     @property
     def exact_accuracy(self) -> float:
@@ -334,7 +396,9 @@ def evaluate_factorial_case_arm(
             reference.text not in first_pass_surfaces and effective.text == reference.text
         ),
         false_correction=(first_pass.text == reference.text and effective.text != reference.text),
-        corrected_first_pass=(first_pass.text != reference.text and effective.text == reference.text),
+        corrected_first_pass=(
+            first_pass.text != reference.text and effective.text == reference.text
+        ),
         introduced_error_characters=max(0, effective_edits - first_edits),
         corrected_error_characters=max(0, first_edits - effective_edits),
         accepted=decision.status == "accepted",
@@ -353,9 +417,7 @@ def aggregate_factorial_arm(
 ) -> ContextPhoneticArmAggregate:
     if not rows:
         raise ValueError("cannot aggregate an empty factorial arm")
-    identities = {
-        (row.arm_name, row.phonetic_arm_name, row.context_condition) for row in rows
-    }
+    identities = {(row.arm_name, row.phonetic_arm_name, row.context_condition) for row in rows}
     if len(identities) != 1:
         raise ValueError("factorial aggregate cannot mix arm identities")
     arm_name, phonetic_arm_name, context_condition = next(iter(identities))
@@ -369,9 +431,7 @@ def aggregate_factorial_arm(
         first_pass_exact_count=sum(row.first_pass_exact for row in rows),
         oracle_count=sum(row.pool_oracle for row in rows),
         outside_first_pass_case_count=sum(row.reference_outside_first_pass for row in rows),
-        outside_first_pass_recovery_count=sum(
-            row.recovered_outside_first_pass for row in rows
-        ),
+        outside_first_pass_recovery_count=sum(row.recovered_outside_first_pass for row in rows),
         false_correction_count=sum(row.false_correction for row in rows),
         corrected_first_pass_count=sum(row.corrected_first_pass for row in rows),
         critical_case_count=sum(row.critical for row in rows),
@@ -381,49 +441,15 @@ def aggregate_factorial_arm(
         total_reference_characters=sum(row.reference_characters for row in rows),
         total_first_pass_edits=sum(row.first_pass_edits for row in rows),
         total_effective_edits=sum(row.effective_edits for row in rows),
-        total_introduced_error_characters=sum(
-            row.introduced_error_characters for row in rows
-        ),
-        total_corrected_error_characters=sum(
-            row.corrected_error_characters for row in rows
-        ),
+        total_introduced_error_characters=sum(row.introduced_error_characters for row in rows),
+        total_corrected_error_characters=sum(row.corrected_error_characters for row in rows),
         mean_margin=sum(row.margin for row in rows) / len(rows),
-        mean_pool_generation_latency_ms=sum(
-            row.pool_generation_latency_ms for row in rows
-        )
+        mean_pool_generation_latency_ms=sum(row.pool_generation_latency_ms for row in rows)
         / len(rows),
-        mean_context_scoring_latency_ms=sum(
-            row.context_scoring_latency_ms for row in rows
-        )
+        mean_context_scoring_latency_ms=sum(row.context_scoring_latency_ms for row in rows)
         / len(rows),
-        mean_selection_latency_ms=sum(row.selection_latency_ms for row in rows)
-        / len(rows),
+        mean_selection_latency_ms=sum(row.selection_latency_ms for row in rows) / len(rows),
     )
-
-
-def _paired_groups(
-    arms: tuple[tuple[ContextPhoneticCaseMetrics, ...], ...],
-) -> tuple[dict[str, dict[str, ContextPhoneticCaseMetrics]], tuple[str, ...]]:
-    if not arms or any(not rows for rows in arms):
-        raise ValueError("grouped factorial bootstrap requires non-empty arms")
-    maps = tuple({row.case_id: row for row in rows} for rows in arms)
-    if any(len(mapping) != len(rows) for mapping, rows in zip(maps, arms, strict=True)):
-        raise ValueError("factorial bootstrap case IDs must be unique within each arm")
-    case_ids = set(maps[0])
-    if any(set(mapping) != case_ids for mapping in maps[1:]):
-        raise ValueError("factorial bootstrap arms have different case IDs")
-    groups: dict[str, list[str]] = {}
-    for case_id in sorted(case_ids):
-        group_ids = {mapping[case_id].group_id for mapping in maps}
-        if len(group_ids) != 1:
-            raise ValueError("factorial bootstrap group identity differs across arms")
-        groups.setdefault(next(iter(group_ids)), []).append(case_id)
-    return (
-        {
-            str(index): mapping for index, mapping in enumerate(maps)
-        },
-        tuple(sorted(groups)),
-    ), {group: tuple(values) for group, values in groups.items()}  # type: ignore[return-value]
 
 
 def _grouped_bootstrap(
@@ -455,22 +481,20 @@ def _grouped_bootstrap(
         sampled_cases = tuple(
             case_id for group_id in sampled_groups for case_id in groups[group_id]
         )
-        return tuple(
-            tuple(mapping[case_id] for case_id in sampled_cases) for mapping in maps
-        )
+        return tuple(tuple(mapping[case_id] for case_id in sampled_cases) for mapping in maps)
 
     point = statistic(sampled_rows(group_ids))
     randomizer = random.Random(seed)
     values = [
-        statistic(
-            sampled_rows(tuple(randomizer.choice(group_ids) for _ in group_ids))
-        )
+        statistic(sampled_rows(tuple(randomizer.choice(group_ids) for _ in group_ids)))
         for _ in range(resamples)
     ]
     values.sort()
     lower_index = max(0, math.floor(0.025 * (len(values) - 1)))
     upper_index = min(len(values) - 1, math.ceil(0.975 * (len(values) - 1)))
-    return point, values[lower_index], values[upper_index], len(group_ids)
+    lower = min(point, values[lower_index])
+    upper = max(point, values[upper_index])
+    return point, lower, upper, len(group_ids)
 
 
 def grouped_paired_contrast(
@@ -503,12 +527,9 @@ def grouped_paired_contrast(
         mean_character_error_delta=point,
         lower_95=lower,
         upper_95=upper,
-        exact_accuracy_delta=(
-            target_aggregate.exact_accuracy - baseline_aggregate.exact_accuracy
-        ),
+        exact_accuracy_delta=(target_aggregate.exact_accuracy - baseline_aggregate.exact_accuracy),
         false_correction_rate_delta=(
-            target_aggregate.false_correction_rate
-            - baseline_aggregate.false_correction_rate
+            target_aggregate.false_correction_rate - baseline_aggregate.false_correction_rate
         ),
         group_count=group_count,
         resamples=resamples,

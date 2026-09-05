@@ -48,7 +48,7 @@ def make_posterior(kind: str, symbols: tuple[str, ...], source: str) -> Posterio
 
 def manifest(tmp_path: Path) -> PhoneticSplitManifest:
     rows = []
-    for index, split in enumerate(("train", "calibration", "test"), 1):
+    for index, split in enumerate(("train", "validation", "calibration", "test"), 1):
         path = tmp_path / f"{split}.wav"
         digest = write_wav(path, frequency=200.0 + index * 100)
         rows.append(

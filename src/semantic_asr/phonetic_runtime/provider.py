@@ -79,6 +79,7 @@ class SourceAudioPhoneticProposalProvider:
     phone_calibration: UtilityCalibrationProfile
     mora_calibration: UtilityCalibrationProfile
     config: PhoneticProposalProviderConfig = PhoneticProposalProviderConfig()
+    utility_artifact_digest: str | None = None
 
     def __post_init__(self) -> None:
         if not _is_sha256(self.runtime.profile_digest):
@@ -87,6 +88,30 @@ class SourceAudioPhoneticProposalProvider:
             raise ValueError("phone calibration must emit the phone utility channel")
         if self.mora_calibration.channel != "mora":
             raise ValueError("mora calibration must emit the mora utility channel")
+        if self.utility_artifact_digest is not None and not _is_sha256(
+            self.utility_artifact_digest
+        ):
+            raise ValueError("utility_artifact_digest must be a SHA-256 value")
+
+    @classmethod
+    def from_utility_artifact(
+        cls,
+        *,
+        runtime: PhoneMoraPosteriorRuntime,
+        lexicon_provider: SpanLexiconProvider,
+        utility_artifact,
+        config: PhoneticProposalProviderConfig | None = None,
+    ) -> SourceAudioPhoneticProposalProvider:
+        if utility_artifact.runtime_profile_digest != runtime.profile_digest:
+            raise ValueError("utility artifact belongs to a different runtime profile")
+        return cls(
+            runtime=runtime,
+            lexicon_provider=lexicon_provider,
+            phone_calibration=utility_artifact.phone_profile,
+            mora_calibration=utility_artifact.mora_profile,
+            config=config or PhoneticProposalProviderConfig(),
+            utility_artifact_digest=utility_artifact.digest,
+        )
 
     def _selected_spans(self, build: SemanticDeliberationBuild) -> tuple[DeliberationSpan, ...]:
         rows = [
@@ -122,6 +147,7 @@ class SourceAudioPhoneticProposalProvider:
         if build.lattice.source_audio_sha256 != source_audio_sha256:
             raise ValueError("deliberation lattice belongs to different source audio")
         output: dict[str, tuple[VerifiedSpanProposal, ...]] = {}
+        total_audio_ms = 0
         for span in self._selected_spans(build):
             lexicon = self.lexicon_provider(span, context)
             if lexicon is None:
@@ -130,6 +156,10 @@ class SourceAudioPhoneticProposalProvider:
             end_ms = min(segment.window.end_ms, span.end_ms + self.config.padding_ms)
             if end_ms <= start_ms:
                 raise ValueError("phonetic proposal crop has a non-positive duration")
+            crop_duration_ms = end_ms - start_ms
+            if total_audio_ms + crop_duration_ms > self.config.maximum_total_audio_ms:
+                break
+            total_audio_ms += crop_duration_ms
             phone_posterior, mora_posterior = self.runtime.infer(
                 audio_path,
                 start_ms=start_ms,

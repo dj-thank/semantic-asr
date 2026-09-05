@@ -139,30 +139,21 @@ def evaluate_context_phonetic_promotion(
         ),
         ContextPhoneticPromotionCheck(
             name="combined-vs-baseline-bootstrap-upper",
-            passed=(
-                combined.upper_95
-                <= policy.maximum_combined_vs_baseline_upper_error_delta
-            ),
+            passed=(combined.upper_95 <= policy.maximum_combined_vs_baseline_upper_error_delta),
             observed=combined.upper_95,
             required=policy.maximum_combined_vs_baseline_upper_error_delta,
             relation="<=",
         ),
         ContextPhoneticPromotionCheck(
             name="ordered-vs-shuffled-bootstrap-upper",
-            passed=(
-                specificity.upper_95
-                <= policy.maximum_ordered_vs_shuffled_upper_error_delta
-            ),
+            passed=(specificity.upper_95 <= policy.maximum_ordered_vs_shuffled_upper_error_delta),
             observed=specificity.upper_95,
             required=policy.maximum_ordered_vs_shuffled_upper_error_delta,
             relation="<=",
         ),
         ContextPhoneticPromotionCheck(
             name="context-phonetic-interaction-upper",
-            passed=(
-                report.interaction.upper_95
-                <= policy.maximum_interaction_upper_error
-            ),
+            passed=(report.interaction.upper_95 <= policy.maximum_interaction_upper_error),
             observed=report.interaction.upper_95,
             required=policy.maximum_interaction_upper_error,
             relation="<=",
@@ -213,10 +204,7 @@ def evaluate_context_phonetic_promotion(
         ),
         ContextPhoneticPromotionCheck(
             name="critical-exact-accuracy",
-            passed=(
-                target.critical_exact_accuracy
-                >= policy.minimum_critical_exact_accuracy
-            ),
+            passed=(target.critical_exact_accuracy >= policy.minimum_critical_exact_accuracy),
             observed=target.critical_exact_accuracy,
             required=policy.minimum_critical_exact_accuracy,
             relation=">=",

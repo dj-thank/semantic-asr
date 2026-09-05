@@ -35,14 +35,14 @@ def patch_protocol() -> None:
         )
         text = text.replace(
             '                "requireDifferentSourceForShuffle": (\n'
-            '                    self.require_different_source_for_shuffle\n'
-            '                ),\n',
+            "                    self.require_different_source_for_shuffle\n"
+            "                ),\n",
             '                "requireDifferentSourceForShuffle": (\n'
-            '                    self.require_different_source_for_shuffle\n'
-            '                ),\n'
+            "                    self.require_different_source_for_shuffle\n"
+            "                ),\n"
             '                "requireDifferentContextGroupForShuffle": (\n'
-            '                    self.require_different_context_group_for_shuffle\n'
-            '                ),\n',
+            "                    self.require_different_context_group_for_shuffle\n"
+            "                ),\n",
             1,
         )
     save(path, text)
@@ -53,10 +53,10 @@ def patch_planner() -> None:
     text = load(path)
     text = text.replace(
         "        if latency < 0.0:\n"
-        "            raise ValueError(\"scoring_latency_ms must be non-negative\")\n",
+        '            raise ValueError("scoring_latency_ms must be non-negative")\n',
         "        if not math.isfinite(latency) or latency < 0.0:\n"
         "            raise ValueError(\n"
-        "                \"scoring_latency_ms must be finite and non-negative\"\n"
+        '                "scoring_latency_ms must be finite and non-negative"\n'
         "            )\n",
     )
     if "import math\n" not in text:
@@ -170,7 +170,7 @@ def patch_context_scorer() -> None:
             "from ..deliberation_lattice import DocumentContext, LatticeArc, path_digest\n",
             1,
         )
-    manual = '''            if row.path_digest != sha256_json(
+    manual = """            if row.path_digest != sha256_json(
                 [
                     {
                         "arcId": path[0].arc_id,
@@ -180,7 +180,7 @@ def patch_context_scorer() -> None:
                     }
                 ]
             ):
-'''
+"""
     if manual in text:
         text = text.replace(
             manual,
@@ -197,11 +197,17 @@ def patch_metrics() -> None:
     paired_end = text.find("\ndef _grouped_bootstrap(\n")
     if paired_start >= 0 and paired_end > paired_start:
         text = text[:paired_start] + text[paired_end:]
-    if "class ContextPhoneticArmAggregate" in text and "def __post_init__(self)" not in text[
-        text.find("class ContextPhoneticArmAggregate"):text.find("class GroupedPairedContrast")
-    ]:
+    if (
+        "class ContextPhoneticArmAggregate" in text
+        and "def __post_init__(self)"
+        not in text[
+            text.find("class ContextPhoneticArmAggregate") : text.find(
+                "class GroupedPairedContrast"
+            )
+        ]
+    ):
         marker = "    mean_selection_latency_ms: float\n\n"
-        addition = '''    def __post_init__(self) -> None:
+        addition = """    def __post_init__(self) -> None:
         if not self.arm_name or not self.phonetic_arm_name:
             raise ValueError("factorial aggregate requires arm identities")
         if self.context_condition not in {"none", "ordered", "shuffled"}:
@@ -263,16 +269,16 @@ def patch_metrics() -> None:
                 raise ValueError(f"{name} must be finite and non-negative")
             object.__setattr__(self, name, value)
 
-'''
+"""
         if marker not in text:
             raise RuntimeError("aggregate validation insertion marker missing")
         text = text.replace(marker, marker + addition, 1)
-    percentile = '''    return point, values[lower_index], values[upper_index], len(group_ids)
-'''
-    replacement = '''    lower = min(point, values[lower_index])
+    percentile = """    return point, values[lower_index], values[upper_index], len(group_ids)
+"""
+    replacement = """    lower = min(point, values[lower_index])
     upper = max(point, values[upper_index])
     return point, lower, upper, len(group_ids)
-'''
+"""
     text = text.replace(percentile, replacement)
     save(path, text)
 
@@ -284,7 +290,7 @@ def patch_protocol_tests() -> None:
         text = text.replace(
             '    assert protocol.arm("phone+mora:shuffled").phonetic_arm_name == "phone+mora"\n',
             '    assert protocol.arm("phone+mora:shuffled").phonetic_arm_name == "phone+mora"\n'
-            '    assert protocol.require_different_context_group_for_shuffle\n',
+            "    assert protocol.require_different_context_group_for_shuffle\n",
             1,
         )
     save(path, text)

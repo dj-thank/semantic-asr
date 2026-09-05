@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 from ..contracts import sha256_json
 from ..deliberation_evidence import _is_sha256
@@ -57,8 +58,8 @@ class ContextScoreSet:
             if row.scorer_profile_digest != self.scorer_profile_digest:
                 raise ValueError("context scorer profile differs within one score set")
         latency = float(self.scoring_latency_ms)
-        if latency < 0.0:
-            raise ValueError("scoring_latency_ms must be non-negative")
+        if not math.isfinite(latency) or latency < 0.0:
+            raise ValueError("scoring_latency_ms must be finite and non-negative")
         object.__setattr__(self, "scoring_latency_ms", latency)
 
     @property
@@ -147,10 +148,7 @@ class PreparedContextPhoneticExperiment:
         for case in self.cases:
             if case.ordered.scorer_source != self.context_scorer_source:
                 raise ValueError("prepared case uses a different context scorer source")
-            if (
-                case.ordered.scorer_profile_digest
-                != self.context_scorer_profile_digest
-            ):
+            if case.ordered.scorer_profile_digest != self.context_scorer_profile_digest:
                 raise ValueError("prepared case uses a different context scorer profile")
 
     @property
@@ -209,6 +207,11 @@ def _shuffle_compatible(
         return False
     if protocol.require_different_source_for_shuffle and left.source_id == right.source_id:
         return False
+    if (
+        protocol.require_different_context_group_for_shuffle
+        and receiver.context_group_id == donor.context_group_id
+    ):
+        return False
     return True
 
 
@@ -216,35 +219,74 @@ def deterministic_context_derangement(
     manifest: ContextPhoneticManifest,
     protocol: ContextPhoneticProtocol,
 ) -> dict[str, ContextPhoneticCase]:
-    cases = tuple(
+    """Find a deterministic perfect donor matching under all registered exclusions."""
+
+    receivers = tuple(
         sorted(
             manifest.cases,
             key=lambda case: hashlib.sha256(
-                f"{protocol.shuffle_seed}:{case.case_id}".encode("utf-8")
+                f"{protocol.shuffle_seed}:receiver:{case.case_id}".encode()
             ).hexdigest(),
         )
     )
-    if len(cases) < 2:
+    if len(receivers) < 2:
         raise ValueError("shuffled-context control requires at least two cases")
-    for shift in range(1, len(cases)):
-        donors = cases[shift:] + cases[:shift]
-        if all(
-            _shuffle_compatible(receiver, donor, protocol)
-            for receiver, donor in zip(cases, donors, strict=True)
-        ):
-            return {
-                receiver.case_id: donor
-                for receiver, donor in zip(cases, donors, strict=True)
-            }
-    raise ValueError(
-        "no deterministic context derangement satisfies the registered speaker/session/source exclusions"
-    )
+    donors_by_receiver = {
+        receiver.case_id: tuple(
+            sorted(
+                (
+                    donor
+                    for donor in manifest.cases
+                    if _shuffle_compatible(receiver, donor, protocol)
+                ),
+                key=lambda donor: hashlib.sha256(
+                    (f"{protocol.shuffle_seed}:donor:{receiver.case_id}:{donor.case_id}").encode()
+                ).hexdigest(),
+            )
+        )
+        for receiver in receivers
+    }
+    if any(not donors for donors in donors_by_receiver.values()):
+        raise ValueError(
+            "no deterministic context derangement satisfies the registered "
+            "speaker/session/source/context-group exclusions"
+        )
+    assigned_receiver_by_donor: dict[str, str] = {}
+    assigned_donor_by_receiver: dict[str, ContextPhoneticCase] = {}
+
+    def augment(receiver: ContextPhoneticCase, visited: set[str]) -> bool:
+        for donor in donors_by_receiver[receiver.case_id]:
+            if donor.case_id in visited:
+                continue
+            visited.add(donor.case_id)
+            previous_receiver_id = assigned_receiver_by_donor.get(donor.case_id)
+            if previous_receiver_id is None:
+                assigned_receiver_by_donor[donor.case_id] = receiver.case_id
+                assigned_donor_by_receiver[receiver.case_id] = donor
+                return True
+            previous_receiver = next(
+                row for row in receivers if row.case_id == previous_receiver_id
+            )
+            if augment(previous_receiver, visited):
+                assigned_receiver_by_donor[donor.case_id] = receiver.case_id
+                assigned_donor_by_receiver[receiver.case_id] = donor
+                return True
+        return False
+
+    for receiver in receivers:
+        if not augment(receiver, set()):
+            raise ValueError(
+                "no deterministic context derangement satisfies the registered "
+                "speaker/session/source/context-group exclusions"
+            )
+    if len(assigned_donor_by_receiver) != len(receivers):
+        raise ValueError("context derangement did not assign every receiver")
+    return assigned_donor_by_receiver
 
 
 def _context_candidates(pool: FrozenPhoneticCandidatePool) -> tuple[ContextCandidate, ...]:
     return tuple(
-        ContextCandidate(candidate_id=row.candidate_id, text=row.text)
-        for row in pool.candidates
+        ContextCandidate(candidate_id=row.candidate_id, text=row.text) for row in pool.candidates
     )
 
 

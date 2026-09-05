@@ -156,7 +156,7 @@ def main() -> int:
                 "trainingResultDigest": result.digest,
                 "manifestDigest": manifest.digest,
                 "bestEpoch": result.best_epoch,
-                "bestCalibrationLoss": result.best_calibration_loss,
+                "bestValidationLoss": result.best_validation_loss,
                 "report": str(report_path),
             },
             ensure_ascii=False,

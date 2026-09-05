@@ -53,8 +53,9 @@ def test_one_epoch_training_saves_best_calibration_checkpoint(tmp_path: Path) ->
         rows=(
             manifest_row(tmp_path, "train", 1),
             manifest_row(tmp_path, "train", 2),
-            manifest_row(tmp_path, "calibration", 3),
-            manifest_row(tmp_path, "calibration", 4),
+            manifest_row(tmp_path, "validation", 3),
+            manifest_row(tmp_path, "validation", 4),
+            manifest_row(tmp_path, "calibration", 5),
         ),
         source_manifest_sha256="a" * 64,
     )
@@ -80,7 +81,7 @@ def test_one_epoch_training_saves_best_calibration_checkpoint(tmp_path: Path) ->
     )
 
     assert result.best_epoch == 1
-    assert result.best_calibration_loss >= 0.0
+    assert result.best_validation_loss >= 0.0
     assert result.epoch_metrics[0].update_count == 2
     loaded = load_dual_ctc_artifact(artifact_directory)
     assert loaded.metadata.digest == result.artifact.digest

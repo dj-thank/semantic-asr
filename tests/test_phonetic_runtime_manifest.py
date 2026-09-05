@@ -39,8 +39,9 @@ def manifest(tmp_path: Path) -> PhoneticSplitManifest:
         revision="r1",
         rows=(
             row(tmp_path, "train", 1),
-            row(tmp_path, "calibration", 2),
-            row(tmp_path, "test", 3),
+            row(tmp_path, "validation", 2),
+            row(tmp_path, "calibration", 3),
+            row(tmp_path, "test", 4),
         ),
         source_manifest_sha256="a" * 64,
     )
@@ -121,6 +122,18 @@ def test_jsonl_loader_requires_sidecar_and_absolute_audio_paths(tmp_path) -> Non
         "rightsDecision": "allow",
         "split": "train",
     }
+    validation = dict(payload)
+    validation.update(
+        {
+            "utteranceId": "validation-1",
+            "audioPath": str((tmp_path / "validation.wav").resolve()),
+            "sourceAudioSha256": write_wav(tmp_path / "validation.wav", frequency=500.0),
+            "speakerId": "speaker-validation",
+            "sessionId": "session-validation",
+            "sourceId": "source-validation",
+            "split": "validation",
+        }
+    )
     calibration = dict(payload)
     calibration.update(
         {
@@ -134,7 +147,7 @@ def test_jsonl_loader_requires_sidecar_and_absolute_audio_paths(tmp_path) -> Non
         }
     )
     manifest_path.write_text(
-        json.dumps(payload) + "\n" + json.dumps(calibration) + "\n",
+        json.dumps(payload) + "\n" + json.dumps(validation) + "\n" + json.dumps(calibration) + "\n",
         encoding="utf-8",
     )
 
@@ -147,4 +160,4 @@ def test_jsonl_loader_requires_sidecar_and_absolute_audio_paths(tmp_path) -> Non
         encoding="utf-8",
     )
     loaded = load_phonetic_manifest(manifest_path)
-    assert len(loaded.rows) == 2
+    assert len(loaded.rows) == 3

@@ -118,9 +118,7 @@ class ContextPhoneticManifest:
                 raise ValueError("factorial manifest digests must be SHA-256 values")
         if len({case.case_id for case in self.cases}) != len(self.cases):
             raise ValueError("factorial case IDs must be unique")
-        split_digests = {
-            case.phonetic_case.split_manifest_sha256 for case in self.cases
-        }
+        split_digests = {case.phonetic_case.split_manifest_sha256 for case in self.cases}
         if len(split_digests) != 1:
             raise ValueError("factorial cases must share one frozen split manifest")
 
@@ -171,15 +169,11 @@ class ContextPhoneticArm:
         if self.minimum_margin is not None:
             margin = _strict_float(self.minimum_margin, name="minimum_margin", minimum=0.0)
             object.__setattr__(self, "minimum_margin", margin)
-        if self.apply_provisional is not None and not isinstance(
-            self.apply_provisional, bool
-        ):
+        if self.apply_provisional is not None and not isinstance(self.apply_provisional, bool):
             raise TypeError("apply_provisional must be a boolean when supplied")
         object.__setattr__(self, "context_weight", weight)
 
-    def resolve_phonetic_arm(
-        self, protocol: PhoneticAblationProtocol
-    ) -> PhoneticAblationArm:
+    def resolve_phonetic_arm(self, protocol: PhoneticAblationProtocol) -> PhoneticAblationArm:
         return protocol.arm(self.phonetic_arm_name)
 
     @property
@@ -202,6 +196,7 @@ class ContextPhoneticProtocol:
     require_different_speaker_for_shuffle: bool = True
     require_different_session_for_shuffle: bool = True
     require_different_source_for_shuffle: bool = True
+    require_different_context_group_for_shuffle: bool = True
     schema_version: str = "1"
 
     def __post_init__(self) -> None:
@@ -229,6 +224,7 @@ class ContextPhoneticProtocol:
             "require_different_speaker_for_shuffle",
             "require_different_session_for_shuffle",
             "require_different_source_for_shuffle",
+            "require_different_context_group_for_shuffle",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a boolean")
@@ -265,14 +261,11 @@ class ContextPhoneticProtocol:
                 "shuffleSeed": self.shuffle_seed,
                 "bootstrapGroup": self.bootstrap_group,
                 "bootstrapResamples": self.bootstrap_resamples,
-                "requireDifferentSpeakerForShuffle": (
-                    self.require_different_speaker_for_shuffle
-                ),
-                "requireDifferentSessionForShuffle": (
-                    self.require_different_session_for_shuffle
-                ),
-                "requireDifferentSourceForShuffle": (
-                    self.require_different_source_for_shuffle
+                "requireDifferentSpeakerForShuffle": (self.require_different_speaker_for_shuffle),
+                "requireDifferentSessionForShuffle": (self.require_different_session_for_shuffle),
+                "requireDifferentSourceForShuffle": (self.require_different_source_for_shuffle),
+                "requireDifferentContextGroupForShuffle": (
+                    self.require_different_context_group_for_shuffle
                 ),
             }
         )

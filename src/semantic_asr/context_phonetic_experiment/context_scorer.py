@@ -9,7 +9,7 @@ from typing import Protocol
 
 from ..contracts import sha256_json
 from ..deliberation_evidence import _is_sha256
-from ..deliberation_lattice import DocumentContext, LatticeArc
+from ..deliberation_lattice import DocumentContext, LatticeArc, path_digest
 from ..global_scorer import GlobalPathScore, GlobalSequenceScorer
 from .protocol import FrozenContextSnapshot
 
@@ -197,9 +197,7 @@ class GlobalSequenceCandidateContextAdapter:
         if callable(batched):
             rows = tuple(batched(paths, context=document_context))
         else:
-            rows = tuple(
-                self.scorer.score(path, context=document_context) for path in paths
-            )
+            rows = tuple(self.scorer.score(path, context=document_context) for path in paths)
         if len(rows) != len(candidates):
             raise ValueError("global scorer returned the wrong number of candidate scores")
         output: list[ContextCandidateScore] = []
@@ -207,16 +205,7 @@ class GlobalSequenceCandidateContextAdapter:
         for candidate, path, row in zip(candidates, paths, rows, strict=True):
             if not isinstance(row, GlobalPathScore):
                 raise TypeError("global scorer must return GlobalPathScore values")
-            if row.path_digest != sha256_json(
-                [
-                    {
-                        "arcId": path[0].arc_id,
-                        "spanId": path[0].span_id,
-                        "text": path[0].text,
-                        "arcDigest": path[0].digest,
-                    }
-                ]
-            ):
+            if row.path_digest != path_digest(path):
                 raise ValueError("global score is bound to a different candidate path")
             if row.context_digest != document_context.digest:
                 raise ValueError("global score is bound to a different document context")
