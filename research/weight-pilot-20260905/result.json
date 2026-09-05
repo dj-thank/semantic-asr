@@ -1,0 +1,126 @@
+{
+  "schema": "semantic-asr-weight-feasibility-result-v1",
+  "source_commit": "5c3a99498e1c8c27ad15874d244e8422e5aba75d",
+  "workflow_run": 33955411922,
+  "artifact_id": 9966336524,
+  "artifact_sha256": "84390dba589dae36c678244a4a87bd714443943b6fdd7cae4c730b1837e7eb8d",
+  "real_weights_trained": true,
+  "fresh_process_reload": true,
+  "promotion_approved": false,
+  "heldout_publication_test": false,
+  "roles": {
+    "train": 32,
+    "development": 8
+  },
+  "audio_seconds": 329.76,
+  "new_source_ids": [
+    12,
+    57,
+    86,
+    147,
+    191,
+    196,
+    203,
+    215,
+    219,
+    232,
+    245,
+    257,
+    322,
+    330,
+    343,
+    350,
+    382,
+    463,
+    508,
+    571,
+    586,
+    613,
+    641,
+    786,
+    795,
+    849,
+    850,
+    857,
+    1012,
+    1096,
+    1135,
+    1225,
+    1234,
+    1262,
+    1288,
+    1289,
+    1301,
+    1344,
+    1443,
+    1451
+  ],
+  "training_manifest_sha256": "1900caee8a4fde153397667427a87a7d2c7db6610794096a97e28c4bfeb91dce",
+  "acoustic": {
+    "comparison": "random-initialized-heads",
+    "steps": 128,
+    "trainable_parameters": 193788,
+    "parameter_delta_l2": 41.05544391301841,
+    "encoder_unchanged": true,
+    "development_before": {
+      "loss": 24.504176139831543,
+      "proxy_error_counts": {
+        "phone": {
+          "errors": 1110,
+          "labels": 540
+        },
+        "mora": {
+          "errors": 1395,
+          "labels": 309
+        }
+      },
+      "warning": "G2P-derived weak labels, NOT gold phonetic annotations"
+    },
+    "development_after": {
+      "loss": 0.4232756942510605,
+      "proxy_error_counts": {
+        "phone": {
+          "errors": 19,
+          "labels": 540
+        },
+        "mora": {
+          "errors": 64,
+          "labels": 309
+        }
+      },
+      "warning": "G2P-derived weak labels, NOT gold phonetic annotations"
+    },
+    "checkpoint_sha256": "7055181ff0466330980643843496b56c10894417957426d437b4944a19c58b79",
+    "reload_max_abs_difference": 0.0
+  },
+  "lora": {
+    "base": "Qwen/Qwen3-0.6B-Base",
+    "base_revision": "da87bfb608c14b7cf20ba1ce41287e8de496c0cd",
+    "steps": 16,
+    "rank": 8,
+    "layers": [
+      26,
+      27
+    ],
+    "trainable_parameters": 81920,
+    "real_train_pairs": 10,
+    "parameter_delta_l2": 0.2963794325572404,
+    "frozen_base_unchanged": true,
+    "development_errors_before": 5,
+    "development_errors_after": 5,
+    "development_reference_characters": 236,
+    "development_changed_selections": 0,
+    "development_multicandidate_examples": 3,
+    "checkpoint_sha256": "b34e939f287bd67b00b9321739b2f6e98da5f2e29b853cebbbc25196a55ae55f",
+    "reload_score_abs_difference": 0.0
+  },
+  "limitations": [
+    "G2P weak labels, not gold phonetic annotations",
+    "Phone-group mora inventory includes pauses; not standard mora benchmark",
+    "No trained acoustic baseline comparison",
+    "No verified speaker split or pretraining-contamination exclusion",
+    "One seed, ten ranking pairs, no hyperparameter search",
+    "No resume proof or integrated production runtime",
+    "Full acceptance of issues 35/36/37 is not complete"
+  ]
+}

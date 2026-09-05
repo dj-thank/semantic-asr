@@ -247,9 +247,13 @@ def prepare(out, exclusions, check_time):
                 try:
                     canonical, _ = sf.read(path, dtype="float32")
                     with torch.inference_mode():
-                        hidden = encoder(
-                            **extractor(canonical, sampling_rate=16000, return_tensors="pt")
-                        ).last_hidden_state[0].cpu()
+                        hidden = (
+                            encoder(
+                                **extractor(canonical, sampling_rate=16000, return_tensors="pt")
+                            )
+                            .last_hidden_state[0]
+                            .cpu()
+                        )
                     result = transcribe(path, transcriber=warm)
                 finally:
                     temporary.unlink(missing_ok=True)
@@ -373,8 +377,7 @@ def run(out, exclusions, check_time):
         raise ValueError("acoustic weights did not change")
     save_file(state, str(out / "acoustic-heads.safetensors"))
     save_file(
-        {"features": features[dev[0]["id"]].contiguous()},
-        str(out / "reload-features.safetensors"),
+        {"features": features[dev[0]["id"]].contiguous()}, str(out / "reload-features.safetensors")
     )
     model.eval()
     with torch.no_grad():
