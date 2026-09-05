@@ -62,12 +62,6 @@ jobs:
           )
           text = replace_once(
               text,
-              '            # its stored value is explicitly mean-frame likelihood and carries\n            # frameCount in the receipt.\n',
-              '            # both reserved producers stored candidate values as mean-frame likelihood.\n',
-              'legacy CTC explanation',
-          )
-          text = replace_once(
-              text,
               'raise ValueError("use an applicable calibration profile to construct probabilities")',
               'raise ValueError("use an applicable calibrator profile to construct probabilities")',
               'probability construction error',
