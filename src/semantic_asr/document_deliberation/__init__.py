@@ -26,6 +26,7 @@ __all__ = [
     "OverlapCompatibility",
     "WindowPathOption",
     "WindowPathSet",
+    "_coverage_attribution",
     "apply_document_deliberation",
     "build_frozen_window_contexts",
     "plan_document_deliberation",
