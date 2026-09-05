@@ -8,6 +8,7 @@ import subprocess
 import wave
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -27,6 +28,7 @@ from .candidate_pool import (
     merge_candidate_pools,
 )
 from .contracts import CandidateEvidence, NormalizedTranscript, ObservedTranscript, sha256_json
+from .evidence_execution import EvidenceExecution
 from .evidence_router import (
     QuantileBalancedRouterConfig,
     RouterState,
@@ -809,8 +811,10 @@ class SemanticASRTranscriber:
                     ("whisper-relisten", True),
                     ("qwen-second-ear", self.second_ear is not None),
                     ("forced-align", self.forced_aligner is not None),
-                    ("local-teacher", self.teacher is not None),
-                    ("lexicon-lookup", self.evidence_enricher is not None),
+                    (
+                        "local-teacher",
+                        self.teacher is not None and self.teacher_policy.should_query(ranked),
+                    ),
                 )
                 if enabled
             ),
@@ -842,59 +846,51 @@ class SemanticASRTranscriber:
                 "rejectedCount": len(routed.rejected),
             }
 
+        execution = EvidenceExecution(plan, self.evidence_budget)
         additional: list[CandidateEvidence] = []
         span_rows: list[CandidateEvidence] = []
         alignment_rows: list[dict[str, Any]] = []
         for action_index, action in enumerate(plan.selected):
+            # The single shared teacher call is deferred until acoustic evidence
+            # has been merged. It still needs admission from this same plan.
+            if action.kind == "local-teacher":
+                continue
             if action.start_ms is None or action.end_ms is None:
                 continue
             covers_window = action.start_ms <= window.start_ms and action.end_ms >= window.end_ms
             sink = additional if covers_window else span_rows
-            if action.kind == "whisper-relisten":
+            if action.kind in {"whisper-relisten", "qwen-second-ear"}:
+                relisten = action.kind == "whisper-relisten"
+                adapter = self.base_adapter if relisten else self.second_ear
+                if adapter is None:
+                    continue
                 request = DecodeRequest(
                     audio_path=str(source),
                     language=language,
-                    beam_size=self.relisten_beam_size,
-                    hypotheses=self.relisten_hypotheses,
+                    beam_size=self.relisten_beam_size if relisten else 1,
+                    hypotheses=self.relisten_hypotheses if relisten else 1,
                     start_ms=action.start_ms,
                     end_ms=action.end_ms,
                     initial_prompt=initial_prompt,
                     hotwords=hotwords,
+                    return_timestamps=not relisten,
                 )
-                rows, action_hit = self._decode(
-                    self.base_adapter,
-                    request,
-                    namespace=f"whisper-relisten-{action_index:02d}",
-                    audio_sha256=audio_sha256,
-                    context=context,
-                    calibration_digest=ranked[0].gate.calibration_digest,
+                rows = execution.run(
+                    action,
+                    partial(
+                        self._decode,
+                        adapter,
+                        request,
+                        namespace=f"{action.kind}-{action_index:02d}",
+                        audio_sha256=audio_sha256,
+                        context=context,
+                        calibration_digest=ranked[0].gate.calibration_digest,
+                    ),
                 )
-                sink.extend(rows)
-                if action_hit:
-                    cache_hits.append("whisper-relisten")
-            elif action.kind == "qwen-second-ear" and self.second_ear is not None:
-                request = DecodeRequest(
-                    audio_path=str(source),
-                    language=language,
-                    beam_size=1,
-                    hypotheses=1,
-                    start_ms=action.start_ms,
-                    end_ms=action.end_ms,
-                    initial_prompt=initial_prompt,
-                    hotwords=hotwords,
-                    return_timestamps=True,
-                )
-                rows, action_hit = self._decode(
-                    self.second_ear,
-                    request,
-                    namespace=f"qwen-second-ear-{action_index:02d}",
-                    audio_sha256=audio_sha256,
-                    context=context,
-                    calibration_digest=ranked[0].gate.calibration_digest,
-                )
-                sink.extend(rows)
-                if action_hit:
-                    cache_hits.append("qwen-second-ear")
+                if rows:
+                    sink.extend(rows)
+                if execution.records[-1]["cacheHit"]:
+                    cache_hits.append(action.kind)
             elif action.kind == "forced-align" and self.forced_aligner is not None:
                 request = DecodeRequest(
                     audio_path=str(source),
@@ -904,11 +900,18 @@ class SemanticASRTranscriber:
                     start_ms=action.start_ms,
                     end_ms=action.end_ms,
                 )
-                aligned = self.forced_aligner.align(request, text=ranked[0].candidate.text)
-                alignment_rows.extend(
-                    asdict(row) if hasattr(row, "__dataclass_fields__") else dict(row)
-                    for row in aligned
+                aligned = execution.run(
+                    action,
+                    lambda request=request: (
+                        self.forced_aligner.align(request, text=ranked[0].candidate.text),
+                        False,
+                    ),
                 )
+                if aligned is not None:
+                    alignment_rows.extend(
+                        asdict(row) if hasattr(row, "__dataclass_fields__") else dict(row)
+                        for row in aligned
+                    )
 
         if span_rows:
             candidates = apply_span_evidence(candidates, span_rows)
@@ -926,18 +929,21 @@ class SemanticASRTranscriber:
 
         teacher_result: TeacherResult | None = None
         teacher_cache_hit = False
-        teacher_planned = any(action.kind == "local-teacher" for action in plan.selected)
-        if self.teacher is not None and (
-            teacher_planned or self.teacher_policy.should_query(ranked)
-        ):
-            teacher_result, teacher_cache_hit = self._teacher_result(
-                candidates,
-                base_request,
-                audio_sha256=audio_sha256,
-                context=context,
-                lattice=lattice,
-                calibration_digest=ranked[0].gate.calibration_digest,
+        teacher_action = next((a for a in plan.selected if a.kind == "local-teacher"), None)
+        if self.teacher is not None and teacher_action is not None:
+            teacher_result = execution.run(
+                teacher_action,
+                partial(
+                    self._teacher_result,
+                    candidates,
+                    base_request,
+                    audio_sha256=audio_sha256,
+                    context=context,
+                    lattice=lattice,
+                    calibration_digest=ranked[0].gate.calibration_digest,
+                ),
             )
+            teacher_cache_hit = bool(execution.records[-1]["cacheHit"])
             if teacher_cache_hit:
                 cache_hits.append("local-teacher")
 
@@ -1003,6 +1009,8 @@ class SemanticASRTranscriber:
             ),
             "evidenceBudgetMs": plan.budget_ms,
             "evidenceBudgetUsedMs": plan.used_ms,
+            "evidenceBudgetUsedMsSemantics": "planned-estimate-not-elapsed",
+            "evidenceExecution": execution.diagnostics(),
             "plannedInformationGain": plan.expected_information_gain,
             "evidenceStoppingReason": plan.stopping_reason,
             "evidenceRouting": routing_diagnostics,
