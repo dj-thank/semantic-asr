@@ -1,0 +1,538 @@
+name: Finalize Japanese reading provenance layer
+
+on:
+  push:
+    branches:
+      - codex/japanese-reading-provenance-v03
+    paths:
+      - .github/workflows/finalize-japanese-reading-provenance-v03.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/japanese-reading-provenance-v03
+          fetch-depth: 0
+
+      - name: Wait for and merge the independently validated integrated v0.3 head
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/reading-provenance-validation
+          echo wait-base > /tmp/reading-provenance-validation/stage
+          ready=0
+          for attempt in $(seq 1 100); do
+            git fetch origin codex/semantic-asr-v03-integrated-research
+            if git show origin/codex/semantic-asr-v03-integrated-research:docs/SEMANTIC_ASR_V03_INTEGRATED_AUDIT_V2.json > /tmp/integrated-audit.json 2>/dev/null; then
+              if python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('/tmp/integrated-audit.json').read_text(encoding='utf-8'))
+          assert payload['schemaVersion'] == '2'
+          assert payload['ruffFormat'] == 'passed'
+          assert payload['ruffLint'] == 'passed'
+          assert payload['cleanWheelImport'] == 'passed'
+          assert len(payload['digest']) == 64
+          PY
+              then
+                ready=1
+                break
+              fi
+            fi
+            sleep 15
+          done
+          if [ "$ready" != "1" ]; then
+            echo 'Integrated PR #22 audit ledger did not become available.' >&2
+            exit 1
+          fi
+          git merge --no-edit origin/codex/semantic-asr-v03-integrated-research
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Harden loaded proposal and review validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo reconcile > /tmp/reading-provenance-validation/stage
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one {label}, found {count}")
+              return text.replace(old, new, 1)
+
+          path = Path('src/semantic_asr/reading_provenance.py')
+          text = path.read_text(encoding='utf-8')
+          if 'def verify_with_policy(' not in text:
+              marker = '''    @property
+              def digest(self) -> str:
+                  return sha256_json(
+                      {
+                          "schemaVersion": self.schema_version,
+                          "sourceTextSha256": self.source_text_sha256,
+          '''
+              method = '''    def verify_with_policy(
+              self,
+              policy: JapanesePronunciationPolicy,
+          ) -> None:
+              if policy.digest != self.pronunciation_policy_digest:
+                  raise ValueError("reading proposal uses a different pronunciation policy")
+              normalized = _normalized_reading(self.normalized_reading, policy)
+              if normalized != self.normalized_reading:
+                  raise ValueError("reading proposal is not normalized under its policy")
+
+          '''
+              if marker not in text:
+                  raise SystemExit('proposal digest anchor missing')
+              text = text.replace(marker, method + marker, 1)
+          if 'review approved reading is not normalized' not in text:
+              marker = '''    def verify_proposal(self, proposal: JapaneseReadingProposal) -> None:
+              if proposal.digest != self.proposal_digest:
+          '''
+              method = '''    def verify_with_policy(
+              self,
+              policy: JapanesePronunciationPolicy,
+          ) -> None:
+              if policy.digest != self.pronunciation_policy_digest:
+                  raise ValueError("reading review uses a different pronunciation policy")
+              if self.approved_reading is not None:
+                  normalized = _normalized_reading(self.approved_reading, policy)
+                  if normalized != self.approved_reading:
+                      raise ValueError("review approved reading is not normalized")
+
+          '''
+              if marker not in text:
+                  raise SystemExit('review verify anchor missing')
+              text = text.replace(marker, method + marker, 1)
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('src/semantic_asr/reading_manifest_prepare.py')
+          text = path.read_text(encoding='utf-8')
+          if 'machine proposal metadata must be an object' not in text:
+              marker = '''            utterance_id = str(value["utteranceId"])
+              proposal = JapaneseReadingProposal(
+          '''
+              replacement = '''            metadata = value["metadata"]
+              if not isinstance(metadata, dict):
+                  raise ValueError("machine proposal metadata must be an object")
+              utterance_id = str(value["utteranceId"])
+              proposal = JapaneseReadingProposal(
+          '''
+              text = replace_once(text, marker, replacement, 'proposal metadata guard')
+              text = text.replace(
+                  '                metadata=dict(value["metadata"]),  # type: ignore[arg-type]',
+                  '                metadata=metadata,',
+                  1,
+              )
+          if 'proposal.verify_with_policy(policy)' not in text:
+              marker = '''            if proposal.pronunciation_policy_digest != policy.digest:
+                  raise ValueError("machine proposal uses a different pronunciation policy")
+          '''
+              replacement = '''            proposal.verify_with_policy(policy)
+          '''
+              text = replace_once(text, marker, replacement, 'proposal policy verification')
+          signature = '''def load_reading_review_ledger(
+              path: str | Path,
+              *,
+              revision: str,
+              review_protocol_revision: str,
+              review_batch_manifest_sha256: str,
+          ) -> JapaneseReadingReviewLedger:
+          '''
+          if 'pronunciation_policy: JapanesePronunciationPolicy | None = None,' not in text.split('def load_reading_review_ledger', 1)[1].split(') -> JapaneseReadingReviewLedger', 1)[0]:
+              replacement = '''def load_reading_review_ledger(
+              path: str | Path,
+              *,
+              revision: str,
+              review_protocol_revision: str,
+              review_batch_manifest_sha256: str,
+              pronunciation_policy: JapanesePronunciationPolicy | None = None,
+          ) -> JapaneseReadingReviewLedger:
+          '''
+              text = replace_once(text, signature, replacement, 'review loader signature')
+          if 'policy = pronunciation_policy or JapanesePronunciationPolicy()' not in text.split('def load_reading_review_ledger', 1)[1].split('expected =', 1)[0]:
+              marker = '''    expected = {
+                  "schemaVersion",
+          '''
+              replacement = '''    policy = pronunciation_policy or JapanesePronunciationPolicy()
+              expected = {
+                  "schemaVersion",
+          '''
+              start = text.index('def load_reading_review_ledger')
+              index = text.index(marker, start)
+              text = text[:index] + replacement + text[index + len(marker):]
+          if 'record.verify_with_policy(policy)' not in text:
+              old = '''            records.append(
+                  JapaneseReadingReview(
+                      schema_version=str(value["schemaVersion"]),
+                      proposal_digest=str(value["proposalDigest"]),
+                      source_text_sha256=str(value["sourceTextSha256"]),
+                      proposed_reading_sha256=str(value["proposedReadingSha256"]),
+                      disposition=str(value["disposition"]),  # type: ignore[arg-type]
+                      approved_reading=approved,
+                      approved_reading_sha256=approved_hash,
+                      reviewer_id_hash=str(value["reviewerIdHash"]),
+                      review_protocol_revision=str(value["reviewProtocolRevision"]),
+                      review_manifest_sha256=str(value["reviewManifestSha256"]),
+                      pronunciation_policy_digest=str(value["pronunciationPolicyDigest"]),
+                      metadata=metadata,
+                  )
+              )
+          '''
+              new = '''            record = JapaneseReadingReview(
+                  schema_version=str(value["schemaVersion"]),
+                  proposal_digest=str(value["proposalDigest"]),
+                  source_text_sha256=str(value["sourceTextSha256"]),
+                  proposed_reading_sha256=str(value["proposedReadingSha256"]),
+                  disposition=str(value["disposition"]),  # type: ignore[arg-type]
+                  approved_reading=approved,
+                  approved_reading_sha256=approved_hash,
+                  reviewer_id_hash=str(value["reviewerIdHash"]),
+                  review_protocol_revision=str(value["reviewProtocolRevision"]),
+                  review_manifest_sha256=str(value["reviewManifestSha256"]),
+                  pronunciation_policy_digest=str(value["pronunciationPolicyDigest"]),
+                  metadata=metadata,
+              )
+              record.verify_with_policy(policy)
+              records.append(record)
+          '''
+              text = replace_once(text, old, new, 'review record validation')
+          text = text.replace(
+              '            "review_ledger_digest": (None if review_ledger is None else review_ledger.digest),',
+              '            "review_ledger_digest": (\n'
+              '                None\n'
+              '                if proposal is None or review_ledger is None\n'
+              '                else review_ledger.digest\n'
+              '            ),',
+          )
+          text = text.replace('            *(),\n', '')
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('scripts/prepare_phonetic_readings.py')
+          text = path.read_text(encoding='utf-8')
+          if 'pronunciation_policy=pronunciation_policy,' not in text.split('load_reading_review_ledger', 1)[1].split(')', 1)[0]:
+              text = text.replace(
+                  '            review_batch_manifest_sha256=args.review_batch_manifest_sha256,\n        )',
+                  '            review_batch_manifest_sha256=args.review_batch_manifest_sha256,\n'
+                  '            pronunciation_policy=pronunciation_policy,\n'
+                  '        )',
+                  1,
+              )
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Publish the reading preparation API and permanent CLI discovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import textwrap
+
+          path = Path('src/semantic_asr/__init__.py')
+          text = path.read_text(encoding='utf-8')
+          for module in ('reading_manifest_prepare', 'reading_provenance'):
+              text = re.sub(rf'\nfrom \.{module} import \(.*?\n\)\n', '\n', text, flags=re.S)
+          imports = '''
+          from .reading_manifest_prepare import (
+              PreparedReadingReceipt,
+              ReadingPreparationInputItem,
+              ReadingPreparationManifest,
+              ReadingPreparationResult,
+              load_machine_reading_proposals,
+              load_reading_preparation_manifest,
+              load_reading_review_ledger,
+              prepare_phonetic_source_manifest,
+          )
+          from .reading_provenance import (
+              CallableJapaneseReadingProvider,
+              JapaneseReadingProposal,
+              JapaneseReadingProvider,
+              JapaneseReadingReview,
+              JapaneseReadingReviewLedger,
+              ReadingProviderIdentity,
+              ReadingResolutionPolicy,
+              ResolvedJapaneseReading,
+              resolve_japanese_reading,
+          )
+          '''
+          anchor = 'from .score_semantics import EvidenceScore, ScoreKind\n'
+          if anchor not in text:
+              raise SystemExit('root reading API anchor missing')
+          text = text.replace(anchor, textwrap.dedent(imports).lstrip() + anchor, 1)
+          start = '# japanese-reading-provenance-v03-public-api-start'
+          end = '# japanese-reading-provenance-v03-public-api-end'
+          text = re.sub(rf'\n{re.escape(start)}.*?{re.escape(end)}\n', '\n', text, flags=re.S)
+          names = (
+              'CallableJapaneseReadingProvider',
+              'JapaneseReadingProposal',
+              'JapaneseReadingProvider',
+              'JapaneseReadingReview',
+              'JapaneseReadingReviewLedger',
+              'PreparedReadingReceipt',
+              'ReadingPreparationInputItem',
+              'ReadingPreparationManifest',
+              'ReadingPreparationResult',
+              'ReadingProviderIdentity',
+              'ReadingResolutionPolicy',
+              'ResolvedJapaneseReading',
+              'load_machine_reading_proposals',
+              'load_reading_preparation_manifest',
+              'load_reading_review_ledger',
+              'prepare_phonetic_source_manifest',
+              'resolve_japanese_reading',
+          )
+          extension = (
+              '\n' + start + '\n__all__.extend(\n    name for name in '
+              + repr(names)
+              + ' if name not in __all__\n)\n'
+              + end + '\n'
+          )
+          version = '\n__version__ = "0.2.0"\n'
+          if version not in text:
+              raise SystemExit('root reading API version anchor missing')
+          text = text.replace(version, extension + version, 1)
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('.github/workflows/ci.yml')
+          text = path.read_text(encoding='utf-8')
+          command = '          python scripts/prepare_phonetic_readings.py --help\n'
+          anchor = '          python scripts/export_phonetic_features.py --help\n'
+          if command.strip() not in text:
+              if anchor not in text:
+                  raise SystemExit('reading CLI discovery anchor missing')
+              text = text.replace(anchor, anchor + command, 1)
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('docs/PHONETIC_FEATURE_EXPORT.md')
+          text = path.read_text(encoding='utf-8')
+          link = (
+              '\nFor kanji-containing source transcripts, first create the explicit reading manifest '
+              'with [`JAPANESE_READING_PROVENANCE.md`](JAPANESE_READING_PROVENANCE.md). '
+              'The feature exporter does not run G2P itself.\n'
+          )
+          if 'JAPANESE_READING_PROVENANCE.md' not in text:
+              text = text.rstrip() + '\n' + link
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Format, lint, compile, test, and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo validate > /tmp/reading-provenance-validation/stage
+          python -m pip install --upgrade pip
+          python -m pip install build
+          python -m pip install -e '.[dev]'
+          python -m ruff format src tests scripts examples
+          python -m ruff check --fix src tests scripts examples
+          python -m ruff format src tests scripts examples
+          python -m ruff format --check src tests scripts examples
+          python -m ruff check src tests scripts examples
+          python -m compileall -q src tests scripts examples
+          python -m pytest -q --junitxml=/tmp/reading-provenance-validation/tests.xml \
+            2>&1 | tee /tmp/reading-provenance-validation/tests.log
+          python scripts/prepare_phonetic_readings.py --help
+          rm -rf dist build
+          python -m build --wheel
+          git diff --check
+
+      - name: Validate clean-wheel reading API and CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo wheel > /tmp/reading-provenance-validation/stage
+          rm -rf /tmp/reading-provenance-wheel
+          python -m venv /tmp/reading-provenance-wheel
+          /tmp/reading-provenance-wheel/bin/python -m pip install dist/*.whl
+          /tmp/reading-provenance-wheel/bin/python - <<'PY'
+          import semantic_asr
+          required = (
+              'JapaneseReadingProposal',
+              'JapaneseReadingReviewLedger',
+              'ReadingResolutionPolicy',
+              'prepare_phonetic_source_manifest',
+              'resolve_japanese_reading',
+          )
+          for name in required:
+              assert hasattr(semantic_asr, name), name
+              assert name in semantic_asr.__all__, name
+          PY
+          /tmp/reading-provenance-wheel/bin/python scripts/prepare_phonetic_readings.py --help
+          /tmp/reading-provenance-wheel/bin/python -m pip check
+
+      - name: Write validation ledger and commit validated reading layer
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo ledger > /tmp/reading-provenance-validation/stage
+          python - <<'PY'
+          import hashlib
+          import json
+          import subprocess
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          root = ET.parse('/tmp/reading-provenance-validation/tests.xml').getroot()
+          suites = [root] if root.tag == 'testsuite' else list(root.findall('testsuite'))
+          counts = {
+              key: sum(int(suite.attrib.get(key, 0)) for suite in suites)
+              for key in ('tests', 'failures', 'errors', 'skipped')
+          }
+          wheel = next(Path('dist').glob('*.whl'))
+          base = json.loads(Path('/tmp/integrated-audit.json').read_text(encoding='utf-8'))
+          payload = {
+              'schemaVersion': '1',
+              'baseIntegratedAuditDigest': base['digest'],
+              'inputHead': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'validatedWorkingTree': subprocess.check_output(
+                  ['git', 'write-tree'], text=True
+              ).strip(),
+              'pytest': counts,
+              'ruffFormat': 'passed',
+              'ruffLint': 'passed',
+              'compileall': 'passed',
+              'humanReadingBoundary': 'passed',
+              'machineProviderIdentity': 'passed',
+              'lockedTestReviewGate': 'passed',
+              'correctedAndRejectedReviewPaths': 'passed',
+              'preparedManifestAndReceiptBinding': 'passed',
+              'cli': 'passed',
+              'wheelBuild': 'passed',
+              'cleanWheelImport': 'passed',
+              'wheelSha256': hashlib.sha256(wheel.read_bytes()).hexdigest(),
+              'claimBoundary': (
+                  'reading provenance software validation only; no G2P, pronunciation, '
+                  'phonetic-model, or ASR quality claim'
+              ),
+          }
+          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+          payload['digest'] = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+          Path('docs/JAPANESE_READING_PROVENANCE_VALIDATION.json').write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          rm -f .github/workflows/finalize-japanese-reading-provenance-v03.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Validate Japanese reading provenance preparation'
+          git push origin HEAD:codex/japanese-reading-provenance-v03
+
+      - name: Wait for permanent checks and mark the reading PR ready
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha=$(git rev-parse HEAD)
+          success=0
+          for attempt in $(seq 1 100); do
+            payload=$(gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/dj-thank/semantic-asr/commits/$head_sha/check-runs?per_page=100")
+            pending=$(printf '%s' "$payload" | jq '[.check_runs[] | select(.status != "completed")] | length')
+            failed=$(printf '%s' "$payload" | jq '[.check_runs[] | select(.status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))] | length')
+            names=$(printf '%s' "$payload" | jq -r '[.check_runs[].name] | join("\n")')
+            required=1
+            for marker in \
+              'Core (ubuntu-latest, Python 3.11)' \
+              'Core (ubuntu-latest, Python 3.12)' \
+              'Core (windows-latest, Python 3.12)' \
+              'Optional training and acoustic verifier (CPU)' \
+              'Clean wheel installation'; do
+              if ! printf '%s\n' "$names" | grep -Fq "$marker"; then
+                required=0
+              fi
+            done
+            if [ "$pending" -eq 0 ] && [ "$failed" -eq 0 ] && [ "$required" -eq 1 ]; then
+              success=1
+              break
+            fi
+            sleep 15
+          done
+          if [ "$success" != "1" ]; then
+            echo 'Permanent checks did not converge to success; reading PR remains draft.' >&2
+            exit 1
+          fi
+          pr_number=$(gh pr list \
+            --repo dj-thank/semantic-asr \
+            --head codex/japanese-reading-provenance-v03 \
+            --state open \
+            --json number \
+            --jq '.[0].number')
+          gh pr comment "$pr_number" --repo dj-thank/semantic-asr --body "Japanese reading provenance validation passed on \\`$head_sha\\`.
+
+- explicit human, machine proposal, reviewed, corrected, and rejected paths: passed
+- calibration/test unreviewed-machine rejection: passed
+- exact prepared manifest and receipt binding: passed
+- Ruff, full suite, CLI, wheel, and permanent repository checks: passed
+- independently validated integrated PR #22 head was required as the base
+
+This validates provenance policy only. It does not claim G2P, pronunciation, phone/mora, or ASR quality."
+          draft=$(gh api "repos/dj-thank/semantic-asr/pulls/$pr_number" --jq '.draft')
+          if [ "$draft" = "true" ]; then
+            gh pr ready "$pr_number" --repo dj-thank/semantic-asr
+          fi
+
+      - name: Preserve compact failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          stage=$(cat /tmp/reading-provenance-validation/stage 2>/dev/null || echo unknown)
+          git reset --hard HEAD
+          git clean -fdx
+          mkdir -p docs
+          STAGE="$stage" python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          summaries = {}
+          log_dir = Path('/tmp/reading-provenance-validation')
+          for path in sorted(log_dir.glob('*.log')):
+              summaries[path.name] = path.read_text(
+                  encoding='utf-8', errors='replace'
+              ).splitlines()[-120:]
+          payload = {
+              'schemaVersion': '1',
+              'stage': os.environ['STAGE'],
+              'inputHead': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'logTails': summaries,
+              'claimBoundary': 'failure diagnostic only',
+          }
+          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+          payload['digest'] = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+          Path('docs/JAPANESE_READING_PROVENANCE_FAILURE.json').write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/JAPANESE_READING_PROVENANCE_FAILURE.json
+          git commit -m 'Record Japanese reading provenance validation failure'
+          git push origin HEAD:codex/japanese-reading-provenance-v03
