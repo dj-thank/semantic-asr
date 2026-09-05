@@ -97,6 +97,8 @@ class FrozenCharacterNgramModel:
             raise ValueError("model revision is required")
         if not isinstance(self.reversed_text, bool):
             raise TypeError("reversed_text must be a boolean")
+        if not isinstance(self.reversed_text, bool):
+            raise TypeError("reversed_text must be a boolean")
         vocabulary = tuple(dict.fromkeys(self.vocabulary))
         if vocabulary != self.vocabulary or any(not token for token in vocabulary):
             raise ValueError("vocabulary must contain unique non-empty symbols")
