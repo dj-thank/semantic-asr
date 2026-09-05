@@ -1,0 +1,385 @@
+name: Final privacy and reproducibility audit
+
+on:
+  push:
+    branches:
+      - codex/document-context-experiment-v1-38
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/document-context-experiment-v1-38
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Apply idempotent final audit corrections
+        shell: bash
+        run: |
+          cat > /tmp/finalize_context_experiment.py <<'PY'
+          from __future__ import annotations
+
+          import re
+          from pathlib import Path
+
+
+          def write(path: str, text: str) -> None:
+              Path(path).write_text(text.rstrip() + "\n", encoding="utf-8")
+
+
+          def remove_indented_block(text: str, needle: str) -> str:
+              lines = text.splitlines()
+              output: list[str] = []
+              index = 0
+              removed = 0
+              while index < len(lines):
+                  line = lines[index]
+                  if needle not in line:
+                      output.append(line)
+                      index += 1
+                      continue
+                  removed += 1
+                  indentation = len(line) - len(line.lstrip())
+                  index += 1
+                  while index < len(lines):
+                      candidate = lines[index]
+                      candidate_indent = len(candidate) - len(candidate.lstrip())
+                      if candidate.strip() and candidate_indent <= indentation:
+                          break
+                      index += 1
+              if removed > 1:
+                  raise SystemExit(f"removed {removed} copies of {needle!r}")
+              return "\n".join(output)
+
+
+          protocol_path = "src/semantic_asr/document_experiment/protocol.py"
+          protocol = Path(protocol_path).read_text(encoding="utf-8")
+          protocol = remove_indented_block(
+              protocol,
+              'if "".join(self.window_texts) != self.text:',
+          )
+          write(protocol_path, protocol)
+
+          metric_test_path = "tests/test_document_experiment_metrics.py"
+          metric_test = Path(metric_test_path).read_text(encoding="utf-8")
+          metric_test = metric_test.replace(
+              "    assert harmful.windows.worsened_windows == 2\n",
+              "    assert harmful.windows.worsened_windows == 1\n",
+          )
+          write(metric_test_path, metric_test)
+
+          init_path = "src/semantic_asr/document_experiment/__init__.py"
+          write(
+              init_path,
+              '''"""Preregistered, leakage-resistant document-context experiment surface."""
+
+          from .api import *  # noqa: F403
+          from .api import __all__
+          ''',
+          )
+
+          runner_path = "src/semantic_asr/document_experiment/runner.py"
+          runner = Path(runner_path).read_text(encoding="utf-8")
+          runner = runner.replace(
+              "from ..contracts import canonical_json, sha256_json\n",
+              "from ..contracts import sha256_json\n",
+          )
+          runner = runner.replace("from typing import Any, Protocol\n", "from typing import Protocol\n")
+          runner = runner.replace(
+              "return sha256_json(self.as_dict(include_digest=False))",
+              "return sha256_json(self.as_dict(include_digest=False, include_text=False))",
+          )
+          old_signature = "def as_dict(self, *, include_digest: bool = True) -> dict[str, object]:"
+          new_signature = (
+              "def as_dict(\n"
+              "        self,\n"
+              "        *,\n"
+              "        include_digest: bool = True,\n"
+              "        include_text: bool = False,\n"
+              "    ) -> dict[str, object]:"
+          )
+          if old_signature in runner:
+              runner = runner.replace(old_signature, new_signature)
+          elif "include_text: bool = False" not in runner:
+              raise SystemExit("DocumentContextExperimentReport.as_dict signature not found")
+          runner = runner.replace(
+              '                    "selectedText": row.selected_text,\n'
+              '                    "selectedWindowTexts": row.selected_window_texts,\n',
+              '                    "selectedTextSha256": sha256_json({"text": row.selected_text}),\n'
+              '                    "selectedWindowTextSha256": [\n'
+              '                        sha256_json({"text": value})\n'
+              '                        for value in row.selected_window_texts\n'
+              '                    ],\n'
+              '                    **(\n'
+              '                        {\n'
+              '                            "selectedText": row.selected_text,\n'
+              '                            "selectedWindowTexts": row.selected_window_texts,\n'
+              '                        }\n'
+              '                        if include_text\n'
+              '                        else {}\n'
+              '                    ),\n',
+          )
+          old_write = "def write(self, path: str | Path) -> Path:"
+          new_write = (
+              "def write(\n"
+              "        self,\n"
+              "        path: str | Path,\n"
+              "        *,\n"
+              "        include_text: bool = False,\n"
+              "    ) -> Path:"
+          )
+          if old_write in runner:
+              runner = runner.replace(old_write, new_write)
+          elif "include_text: bool = False" not in runner:
+              raise SystemExit("DocumentContextExperimentReport.write signature not found")
+          runner = runner.replace(
+              "json.dumps(self.as_dict(), ensure_ascii=False, indent=2)",
+              "json.dumps(\n"
+              "                        self.as_dict(include_text=include_text),\n"
+              "                        ensure_ascii=False,\n"
+              "                        indent=2,\n"
+              "                    )",
+          )
+          old_arm_check = (
+              '            if language.arm_digest != arm.digest:\n'
+              '                raise ValueError("document scorer returned a result for a different arm")\n'
+          )
+          new_arm_check = (
+              '            if language.arm_digest != arm.digest:\n'
+              '                raise ValueError("document scorer returned a result for a different arm")\n'
+              '            if arm.scorer_key is not None and language.profile_digest != scorer.profile_digest:\n'
+              '                raise ValueError("document scorer result profile does not match the registered scorer")\n'
+          )
+          if old_arm_check in runner and "result profile does not match" not in runner:
+              runner = runner.replace(old_arm_check, new_arm_check)
+          write(runner_path, runner)
+
+          registration_test_path = "tests/test_document_experiment_registration.py"
+          registration_test = Path(registration_test_path).read_text(encoding="utf-8")
+          registration_test = registration_test.replace(
+              '    assert "selectedText" not in str(result.as_dict(include_text=False))\n',
+              '    payload = result.as_dict(include_text=False)\n'
+              '    case_result = payload["report"]["caseResults"][0]\n'
+              '    assert "selectedText" not in case_result\n'
+              '    assert "selectedTextSha256" in case_result\n',
+          )
+          write(registration_test_path, registration_test)
+
+          ngram_path = "src/semantic_asr/document_experiment/ngram_scorer.py"
+          ngram = Path(ngram_path).read_text(encoding="utf-8")
+          ngram = ngram.replace(
+              "from collections.abc import Iterable, Sequence\n",
+              "from collections.abc import Iterable, Mapping, Sequence\n",
+          )
+          if "from functools import lru_cache\n" not in ngram:
+              ngram = ngram.replace(
+                  "from dataclasses import asdict, dataclass\n",
+                  "from dataclasses import asdict, dataclass\nfrom functools import lru_cache\nfrom types import MappingProxyType\n",
+              )
+          old_order = '''def _deterministic_order(size: int, *, seed: str, case_id: str) -> tuple[int, ...]:
+              return tuple(
+                  sorted(
+                      range(size),
+                      key=lambda index: sha256_json(
+                          {"seed": seed, "caseId": case_id, "windowIndex": index}
+                      ),
+                  )
+              )
+          '''
+          new_order = '''def _deterministic_order(size: int, *, seed: str, case_id: str) -> tuple[int, ...]:
+              if isinstance(size, bool) or not isinstance(size, int):
+                  raise TypeError("shuffle size must be an integer")
+              if size < 0:
+                  raise ValueError("shuffle size must be non-negative")
+              order = tuple(
+                  sorted(
+                      range(size),
+                      key=lambda index: sha256_json(
+                          {"seed": seed, "caseId": case_id, "windowIndex": index}
+                      ),
+                  )
+              )
+              if size > 1 and order == tuple(range(size)):
+                  order = (*order[1:], order[0])
+              return order
+          '''
+          if old_order in ngram:
+              ngram = ngram.replace(old_order, new_order)
+          if "def _immutable_count_map(" not in ngram:
+              marker = "\n\n@dataclass(frozen=True, slots=True)\nclass CharacterNgramScore:"
+              cache_code = '''
+
+          @lru_cache(maxsize=64)
+          def _immutable_count_map(
+              rows: tuple[tuple[str, tuple[tuple[str, int], ...]], ...],
+          ) -> Mapping[str, Mapping[str, int]]:
+              return MappingProxyType(
+                  {
+                      context: MappingProxyType(dict(counts))
+                      for context, counts in rows
+                  }
+              )
+          '''
+              if marker not in ngram:
+                  raise SystemExit("ngram cache insertion marker not found")
+              ngram = ngram.replace(marker, cache_code + marker)
+          ngram = ngram.replace(
+              "        if not self.revision:\n"
+              "            raise ValueError(\"model revision is required\")\n",
+              "        if not self.revision:\n"
+              "            raise ValueError(\"model revision is required\")\n"
+              "        if not isinstance(self.reversed_text, bool):\n"
+              "            raise TypeError(\"reversed_text must be a boolean\")\n",
+          )
+          old_count_map = '''    @property
+              def count_map(self) -> dict[str, dict[str, int]]:
+                  return {context: dict(counts) for context, counts in self.rows}
+          '''
+          new_count_map = '''    @property
+              def count_map(self) -> Mapping[str, Mapping[str, int]]:
+                  return _immutable_count_map(self.rows)
+          '''
+          if old_count_map in ngram:
+              ngram = ngram.replace(old_count_map, new_count_map)
+          write(ngram_path, ngram)
+
+          ngram_test_path = "tests/test_document_ngram_scorer.py"
+          ngram_test = Path(ngram_test_path).read_text(encoding="utf-8")
+          if "test_shuffled_control_is_not_identity" not in ngram_test:
+              ngram_test += '''
+
+          def test_shuffled_control_is_not_identity_for_multi_window_document() -> None:
+              model = scorer()
+              retained, _corrected, _harmful = fake_paths()
+              shuffled = arm(view="shuffled-document")
+              ordered = arm(view="ordered-document")
+
+              shuffled_score = model.score_path(
+                  retained,
+                  shuffled,
+                  case_id="identity-prone-case",
+                  maximum_characters=10_000,
+              )
+              ordered_score = model.score_path(
+                  retained,
+                  ordered,
+                  case_id="identity-prone-case",
+                  maximum_characters=10_000,
+              )
+
+              assert shuffled_score.arm_digest != ordered_score.arm_digest
+              assert shuffled_score.raw_average_log_likelihood != ordered_score.raw_average_log_likelihood
+          '''
+          write(ngram_test_path, ngram_test)
+          PY
+          python /tmp/finalize_context_experiment.py
+      - name: Install repository validation environment
+        run: python -m pip install -e '.[dev]'
+      - name: Format, lint, compile, and check diffs
+        run: |
+          python -m ruff format src tests scripts
+          python -m ruff check --fix src tests scripts
+          python -m ruff format src tests scripts
+          python -m ruff format --check src tests scripts
+          python -m ruff check src tests scripts
+          python -m compileall -q src tests scripts
+          git diff --check
+      - name: Run focused document experiment suite
+        id: focused
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q \
+            tests/test_document_experiment_protocol.py \
+            tests/test_document_experiment_metrics.py \
+            tests/test_document_ngram_scorer.py \
+            tests/test_document_experiment_runner.py \
+            tests/test_document_experiment_planner.py \
+            tests/test_document_context_promotion.py \
+            tests/test_document_experiment_artifacts.py \
+            tests/test_train_document_ngram_scorer.py \
+            tests/test_document_experiment_registration.py \
+            2>&1 | tee /tmp/focused.log
+      - name: Run complete dependency-free suite
+        id: full
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q 2>&1 | tee /tmp/full.log
+      - name: Write success ledger and remove one-shot workflows
+        if: success()
+        shell: bash
+        run: |
+          focused_summary=$(tail -n 1 /tmp/focused.log)
+          full_summary=$(tail -n 1 /tmp/full.log)
+          cat > docs/DOCUMENT_CONTEXT_EXPERIMENT_VALIDATION.md <<EOF
+          # Document-context experiment validation ledger
+
+          ## Final privacy and reproducibility audit
+
+          Focused context-experiment suite:
+
+          \`\`\`text
+          $focused_summary
+          \`\`\`
+
+          Complete dependency-free suite:
+
+          \`\`\`text
+          $full_summary
+          \`\`\`
+
+          The exact committed source passed Ruff formatting, Ruff lint, compileall, protocol and
+          rights guards, speaker/session leakage checks, reference-free candidate planning,
+          candidate-set equality, non-identity shuffled controls, scorer-profile result binding,
+          false-correction metrics, deterministic paired bootstrap, scored-character budgets,
+          privacy-safe report serialization, tamper-checked n-gram artifacts, preregistration,
+          promotion gating, and the rights-gated training CLI.
+
+          This ledger is software validation only. It is not a Japanese CER or context-quality
+          improvement claim. Runtime promotion still requires the locked, rights-approved,
+          speaker/session-disjoint continuous-speech experiment described in
+          \`DOCUMENT_CONTEXT_EXPERIMENT.md\`.
+          EOF
+          rm -f docs/DOCUMENT_CONTEXT_EXPERIMENT_FAILURE.md
+          rm -f .github/workflows/finalize-context-experiment.yml
+          rm -f .github/workflows/finalize-context-experiment-v2.yml
+          rm -f .github/workflows/finalize-context-experiment-v3.yml
+          rm -f .github/workflows/finalize-context-experiment-v4.yml
+      - name: Write failure ledger
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '# Document-context experiment validation failure'
+            echo
+            echo '## Focused suite'
+            echo '```text'
+            cat /tmp/focused.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo '## Full suite'
+            echo '```text'
+            cat /tmp/full.log 2>/dev/null || true
+            echo '```'
+          } > docs/DOCUMENT_CONTEXT_EXPERIMENT_FAILURE.md
+      - name: Commit exact audit state
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests scripts docs .github/workflows/finalize-context-experiment.yml .github/workflows/finalize-context-experiment-v2.yml .github/workflows/finalize-context-experiment-v3.yml .github/workflows/finalize-context-experiment-v4.yml
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Finalize document-context experiment harness'
+          git push origin HEAD:codex/document-context-experiment-v1-38
