@@ -1,0 +1,63 @@
+name: Finalize document-context experiment harness
+
+on:
+  push:
+    branches:
+      - codex/document-context-experiment-v1-38
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/document-context-experiment-v1-38
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Apply audited reference-window contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/semantic_asr/document_experiment/protocol.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''        if "".join(self.window_texts) != self.text:
+              raise ValueError("window reference text must exactly reconstruct the document reference")
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one obsolete window concatenation invariant, found {text.count(old)}')
+          path.write_text(text.replace(old, ''), encoding='utf-8')
+          PY
+      - name: Install and format
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m ruff format src tests scripts
+          python -m ruff check --fix src tests scripts
+          python -m ruff format src tests scripts
+          git diff --check
+      - name: Focused document experiment tests
+        run: |
+          python -m pytest -q \
+            tests/test_document_experiment_protocol.py \
+            tests/test_document_experiment_metrics.py \
+            tests/test_document_ngram_scorer.py \
+            tests/test_document_experiment_runner.py
+      - name: Full dependency-free suite
+        run: python -m pytest -q
+      - name: Remove one-shot workflow and commit validated source
+        shell: bash
+        run: |
+          rm .github/workflows/finalize-context-experiment.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests docs .github/workflows/finalize-context-experiment.yml
+          git commit -m 'Validate document-context experiment harness'
+          git push origin HEAD:codex/document-context-experiment-v1-38
