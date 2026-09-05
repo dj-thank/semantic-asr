@@ -278,7 +278,7 @@ jobs:
 
       - name: Upload transcript-bearing research artifacts only when explicitly requested
         if: ${{ inputs.upload_text_artifacts }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.experiment_name }}-${{ github.run_id }}
           path: ${{ steps.paths.outputs.output }}
