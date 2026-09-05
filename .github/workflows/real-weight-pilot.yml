@@ -1,0 +1,103 @@
+name: Real acoustic and LoRA weight pilot
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/real-weight-pilot-20260905]
+    paths: [.github/workflows/real-weight-pilot.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  PYTHONUTF8: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  TOKENIZERS_PARALLELISM: "false"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+
+jobs:
+  train-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Load frozen prior-exposure identities
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 33946834870 --repo dj-thank/semantic-asr --name public-phonetic-probe-33946834870 --dir prior-wave1
+          gh run download 33947793936 --repo dj-thank/semantic-asr --name expanded-phonetic-probe-33947793936 --dir prior-wave2
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          ids, audio, text = set(), set(), set()
+          for root, expected in (
+              (Path('prior-wave1'), '21241a08c3755e240f6f37ada4f6efbb9b9be37dcf3a6a24524a74764a1982d1'),
+              (Path('prior-wave2/expanded-probe'), '177f43bb16865bfb756f79d788957238b34cbe5f011034ba2153570457bcfe45'),
+          ):
+              raw = (root / 'manifest.json').read_bytes()
+              if hashlib.sha256(raw).hexdigest() != expected:
+                  raise ValueError('prior manifest hash mismatch')
+              manifest = json.loads(raw)
+              for item in manifest['records']:
+                  record = (root / (item['id'] + '.json')).read_bytes()
+                  if hashlib.sha256(record).hexdigest() != item['record_sha256']:
+                      raise ValueError('prior record hash mismatch')
+                  row = json.loads(record)
+                  ids.add(row['source_id'])
+                  audio.add(row['pcm_sha256'])
+                  text.add(hashlib.sha256(row['reference'].encode()).hexdigest())
+          assert len(ids) == len(audio) == len(text) == 72
+          Path('pilot-exclusions.json').write_text(json.dumps({
+              'source_ids': sorted(ids), 'pcm_sha256': sorted(audio),
+              'reference_sha256': sorted(text)}, indent=2) + '\n')
+          PY
+      - name: Install explicit CPU feasibility environment
+        run: |
+          python -m pip install 'torch==2.10.0' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e . 'transformers==4.57.6' 'peft==0.18.0' 'safetensors==0.7.0' 'numpy==2.3.5' 'faster-whisper==1.2.1' 'ctranslate2==4.8.2' 'pyopenjtalk-plus==0.4.1.post9' 'pyarrow==22.0.0' 'soundfile==0.13.1'
+          python -m pip check
+          python -m pip freeze > pilot-dependencies.txt
+      - name: Train new heads and real LoRA tensors, no reference-conditioned inference
+        run: python scripts/train_public_weight_pilot.py --output weight-pilot --exclusions pilot-exclusions.json
+      - name: Verify exported weights in a fresh Python process
+        run: python scripts/train_public_weight_pilot.py --output weight-pilot --verify
+      - name: Record notices and artifact hashes
+        if: always()
+        run: |
+          python - <<'PY'
+          import hashlib, json, shutil
+          from pathlib import Path
+          root = Path('weight-pilot')
+          root.mkdir(exist_ok=True)
+          for name in ('pilot-exclusions.json', 'pilot-dependencies.txt'):
+              if Path(name).exists(): shutil.copy2(name, root / name)
+          shutil.copy2('LICENSE', root / 'LICENSE-code-and-new-weights.txt')
+          (root / 'NOTICE.txt').write_text(
+              'Research feasibility pilot, NOT deployment weights.\n'
+              'FLEURS, Google, Conneau et al. (2022), CC-BY-4.0; derived labels/features and training.\n'
+              'https://huggingface.co/datasets/google/fleurs\n'
+              'Base HuBERT: prj-beatrice/japanese-hubert-base-phoneme-ctc-v4, Apache-2.0.\n'
+              'Base LLM: Qwen/Qwen3-0.6B-Base, Qwen Team, Apache-2.0.\n'
+              'New heads and LoRA adaptation: semantic-asr, SHOTA Moriwaki, 2026.\n'
+              'No raw audio/base weights redistributed. G2P labels are weak supervision.\n')
+          hashes = {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+                    for p in root.rglob('*') if p.is_file()}
+          (root / 'artifact-hashes.json').write_text(json.dumps(hashes, indent=2) + '\n')
+          PY
+      - name: Verify source immutability
+        run: git diff --exit-code
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: real-weight-pilot-${{ github.run_id }}
+          path: weight-pilot/
+          retention-days: 30
+          if-no-files-found: error
