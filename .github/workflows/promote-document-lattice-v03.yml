@@ -1,0 +1,208 @@
+name: Promote validated document lattice stack
+
+on:
+  push:
+    branches:
+      - codex/document-lattice-promotion-v03
+    paths:
+      - .github/workflows/promote-document-lattice-v03.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/document-lattice-promotion-v03
+          fetch-depth: 0
+
+      - name: Wait for the isolated release validation commit
+        shell: bash
+        run: |
+          ready=0
+          for attempt in $(seq 1 40); do
+            git fetch origin codex/document-lattice-release-v03
+            if git show origin/codex/document-lattice-release-v03:docs/DOCUMENT_JOINT_VALIDATION.json > /tmp/release-ledger.json 2>/dev/null; then
+              if python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('/tmp/release-ledger.json').read_text(encoding='utf-8'))
+          raise SystemExit(0 if int(payload.get('schemaVersion', 0)) >= 4 else 1)
+          PY
+              then
+                ready=1
+                break
+              fi
+            fi
+            sleep 15
+          done
+          if [ "$ready" != "1" ]; then
+            echo 'Validated release ledger did not appear; leaving PR 18 as draft.' >&2
+            exit 1
+          fi
+          git reset --hard origin/codex/document-lattice-release-v03
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Verify temporary workflows are absent from the validated tree
+        shell: bash
+        run: |
+          forbidden=(
+            finalize-document-joint.yml
+            finalize-document-joint-v3.yml
+            validate-document-joint-v03.yml
+            reconcile-document-joint-v03.yml
+            repair-document-joint-v4.yml
+            stabilize-document-lattice-release-v03.yml
+          )
+          for name in "${forbidden[@]}"; do
+            test ! -e ".github/workflows/$name" || {
+              echo "temporary workflow still present: $name" >&2
+              exit 1
+            }
+          done
+
+      - name: Re-run dependency-free validation from the exact release tree
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+          python -m pip install -e '.[dev]'
+          python -m ruff format --check src tests scripts examples
+          python -m ruff check src tests scripts examples
+          python -m compileall -q src tests scripts examples
+          python -m pytest -q --junitxml=document-promotion-tests.xml
+          python -m build --wheel
+          python examples/document_joint_deliberation.py --help
+          python scripts/benchmark_document_deliberation.py --help
+          git diff --exit-code
+
+      - name: Re-run optional CPU PyTorch validation
+        run: |
+          python -m pip install 'torch>=2.4' --index-url https://download.pytorch.org/whl/cpu
+          python -m pytest -q tests/test_phonetic_heads_optional.py
+
+      - name: Re-run clean-wheel public API validation
+        run: |
+          python -m venv .promotion-wheel
+          .promotion-wheel/bin/python -m pip install dist/*.whl
+          .promotion-wheel/bin/python - <<'PY'
+          import semantic_asr
+          required = (
+              'DocumentDeliberationConfig',
+              'DocumentPassThroughResult',
+              'SelectivePhoneticSpanProposalProvider',
+              'JointPhoneticHeadConfig',
+              'apply_joint_document_deliberation',
+              'evaluate_document_deliberation',
+          )
+          for name in required:
+              assert hasattr(semantic_asr, name), name
+              assert name in semantic_asr.__all__, name
+          PY
+          .promotion-wheel/bin/semantic-asr demo --output runs/promotion-wheel-demo.json
+          .promotion-wheel/bin/semantic-asr research-smoke --output runs/promotion-wheel-smoke.json
+
+      - name: Write final promotion ledger
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import subprocess
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          root = ET.parse('document-promotion-tests.xml').getroot()
+          suites = [root] if root.tag == 'testsuite' else list(root.findall('testsuite'))
+          counts = {
+              key: sum(int(suite.attrib.get(key, 0)) for suite in suites)
+              for key in ('tests', 'failures', 'errors', 'skipped')
+          }
+          wheel = next(Path('dist').glob('*.whl'))
+          source_ledger = json.loads(
+              Path('docs/DOCUMENT_JOINT_VALIDATION.json').read_text(encoding='utf-8')
+          )
+          payload = {
+              'schemaVersion': '5',
+              'sourceReleaseLedgerDigest': source_ledger['digest'],
+              'validatedHead': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'validatedTree': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD^{tree}'], text=True
+              ).strip(),
+              'dependencyFreePytest': counts,
+              'optionalCpuPyTorch': 'passed',
+              'ruffFormat': 'passed',
+              'ruffLint': 'passed',
+              'compileall': 'passed',
+              'wheelBuild': 'passed',
+              'cleanWheelImport': 'passed',
+              'wheelSha256': hashlib.sha256(wheel.read_bytes()).hexdigest(),
+              'promotionTarget': 'pull/18',
+              'claimBoundary': (
+                  'software and reproducibility validation only; '
+                  'no measured Japanese CER promotion claim'
+              ),
+          }
+          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+          payload['digest'] = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+          Path('docs/DOCUMENT_JOINT_PROMOTION_VALIDATION.json').write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Commit the success-only ledger and remove the promotion workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/promote-document-lattice-v03.yml
+          rm -f document-promotion-tests.xml
+          rm -rf .promotion-wheel
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/DOCUMENT_JOINT_PROMOTION_VALIDATION.json .github/workflows/promote-document-lattice-v03.yml
+          git commit -m 'Record success-gated document lattice promotion validation'
+          git push origin HEAD:codex/document-lattice-promotion-v03
+          git push origin HEAD:codex/document-lattice-joint-decoding-v03
+
+      - name: Comment on and mark PR 18 ready only after validation passes
+        shell: bash
+        run: |
+          head_sha=$(git rev-parse HEAD)
+          tests=$(python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(
+              Path('docs/DOCUMENT_JOINT_PROMOTION_VALIDATION.json').read_text(encoding='utf-8')
+          )
+          row = payload['dependencyFreePytest']
+          print(f"{row['tests']} tests, {row['skipped']} skipped")
+          PY
+          )
+          gh api repos/dj-thank/semantic-asr/issues/18/comments \
+            -f body="Success-gated release validation passed on \\`$head_sha\\`.
+
+- dependency-free suite: $tests
+- Ruff format and lint: passed
+- compileall: passed
+- optional CPU PyTorch joint phone/mora head: passed
+- wheel build and clean-wheel public API import: passed
+- example and benchmark CLI discovery: passed
+- temporary mutation workflows removed
+
+The measured v0.2 default path remains unchanged. This validates software and reproducibility contracts only; it does not claim Japanese CER improvement."
+          draft=$(gh api repos/dj-thank/semantic-asr/pulls/18 --jq '.draft')
+          if [ "$draft" = "true" ]; then
+            gh pr ready 18 --repo dj-thank/semantic-asr
+          fi
