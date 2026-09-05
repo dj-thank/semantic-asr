@@ -1,0 +1,183 @@
+name: Frozen phonetic proposal ablation audit
+
+on:
+  push:
+    branches:
+      - codex/phonetic-proposal-ablation-v4-38
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: semantic-asr-phonetic-ablation-v4
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/phonetic-proposal-ablation-v4-38
+          fetch-depth: 0
+      - name: Synchronize all lower experiment layers
+        shell: bash
+        run: |
+          git fetch origin \
+            codex/document-context-experiment-v1-38 \
+            codex/audio-phonetic-ctc-v1-38 \
+            codex/audio-phonetic-ctc-v2-38 \
+            codex/japanese-phonetic-labels-v3-38
+          git merge --no-edit origin/codex/document-context-experiment-v1-38
+          git merge --no-edit origin/codex/audio-phonetic-ctc-v1-38
+          git merge --no-edit origin/codex/audio-phonetic-ctc-v2-38
+          git merge --no-edit origin/codex/japanese-phonetic-labels-v3-38
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Apply idempotent statistical and identity hardening
+        run: python scripts/finalize_phonetic_ablation_v4.py
+      - name: Install validation environment
+        run: python -m pip install -e '.[dev]'
+      - name: Format, lint, compile, and run full dependency-free suite
+        id: full
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m ruff format src tests scripts
+          python -m ruff check --fix src tests scripts
+          python -m ruff format src tests scripts
+          python -m ruff format --check src tests scripts
+          python -m ruff check src tests scripts
+          python -m compileall -q src tests scripts
+          python -m pytest -q 2>&1 | tee /tmp/full.log
+          git diff --check
+      - name: Run focused reference-separation and promotion suite
+        id: focused
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q \
+            tests/test_phonetic_experiment_protocol.py \
+            tests/test_phonetic_experiment_metrics.py \
+            tests/test_phonetic_experiment_runner.py \
+            tests/test_phonetic_experiment_promotion.py \
+            tests/test_phonetic_experiment_registration.py \
+            2>&1 | tee /tmp/focused.log
+      - name: Build and clean-install wheel
+        id: wheel
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pip install build
+          python -m build --wheel
+          python -m venv /tmp/semantic-asr-phonetic-ablation-wheel
+          /tmp/semantic-asr-phonetic-ablation-wheel/bin/python -m pip install dist/*.whl
+          /tmp/semantic-asr-phonetic-ablation-wheel/bin/python - <<'PY' 2>&1 | tee /tmp/wheel.log
+          import semantic_asr.phonetic_experiment as experiment
+
+          required = {
+              "FrozenPhoneticCandidatePlanner",
+              "PhoneticAblationProtocol",
+              "PhoneticExperimentRegistration",
+              "PhoneticPromotionPolicy",
+              "run_registered_phonetic_experiment",
+          }
+          assert required.issubset(set(experiment.__all__))
+          print(sorted(required))
+          PY
+      - name: Record successful audit
+        if: success()
+        shell: bash
+        run: |
+          full_summary=$(tail -n 1 /tmp/full.log)
+          focused_summary=$(tail -n 1 /tmp/focused.log)
+          wheel_summary=$(tail -n 1 /tmp/wheel.log)
+          cat > docs/PHONETIC_PROPOSAL_ABLATION_VALIDATION.md <<EOF
+          # Phonetic proposal ablation validation ledger
+
+          ## Frozen-pool and grouped-statistics audit
+
+          Full dependency-free suite:
+
+          \`\`\`text
+          $full_summary
+          \`\`\`
+
+          Focused experiment suite:
+
+          \`\`\`text
+          $focused_summary
+          \`\`\`
+
+          Clean-wheel API check:
+
+          \`\`\`text
+          $wheel_summary
+          \`\`\`
+
+          The exact committed source passed reference-free pool preparation, one-pool reuse across
+          every arm, source-audio/runtime/utility/lexicon binding, N-best-outside recovery metrics,
+          conditional false-correction metrics, speaker-grouped paired bootstrap, provisional
+          fallback, latency/evidence identity separation, privacy-safe reports, conjunctive
+          promotion gates, preregistered thresholds, formatting, lint, compileall, and clean-wheel
+          import.
+
+          The synthetic fixture intentionally contains both one successful outside-N-best recovery
+          and one false correction. This validates measurement behavior, not model quality.
+          EOF
+          rm -f docs/PHONETIC_PROPOSAL_ABLATION_FAILURE.md
+          rm -f .github/workflows/finalize-phonetic-ablation-v4.yml
+          rm -f scripts/finalize_phonetic_ablation_v4.py
+      - name: Record failed audit
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '# Phonetic proposal ablation validation failure'
+            echo
+            echo '## Full suite'
+            echo '```text'
+            cat /tmp/full.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo '## Focused suite'
+            echo '```text'
+            cat /tmp/focused.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo '## Wheel check'
+            echo '```text'
+            cat /tmp/wheel.log 2>/dev/null || true
+            echo '```'
+          } > docs/PHONETIC_PROPOSAL_ABLATION_FAILURE.md
+      - name: Commit exact audit state
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Complete frozen phonetic ablation audit'
+          git push origin HEAD:codex/phonetic-proposal-ablation-v4-38
+      - name: Mark PR ready and publish exact counts
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          pr=$(gh pr list --head codex/phonetic-proposal-ablation-v4-38 --state open --json number --jq '.[0].number')
+          if [ -z "$pr" ]; then
+            exit 0
+          fi
+          gh pr ready "$pr" || true
+          full_summary=$(tail -n 1 /tmp/full.log)
+          focused_summary=$(tail -n 1 /tmp/focused.log)
+          gh pr comment "$pr" --body "Frozen phonetic ablation audit passed. Full: **$full_summary**. Focused: **$focused_summary**. The PR is ready for review. The fixture includes both a recovery and a false correction; this is contract validation, not an accuracy claim."
