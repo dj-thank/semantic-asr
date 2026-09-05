@@ -25,46 +25,56 @@ jobs:
       - name: Assemble the canonical module
         shell: bash
         run: |
-          cat .score-contract-parts/part-* | tr -d '\n\r' | base64 --decode > src/semantic_asr/score_contract.py
+          cat .score-contract-parts/part-* | tr -d '\n\r' | base64 --decode > /tmp/score_contract.py.bz2
+          python - <<'PY'
+          import bz2
+          from pathlib import Path
+
+          compressed = Path('/tmp/score_contract.py.bz2').read_bytes()
+          Path('src/semantic_asr/score_contract.py').write_bytes(bz2.decompress(compressed))
+          PY
           test "$(sha256sum src/semantic_asr/score_contract.py | cut -d' ' -f1)" = "e49eac2fcc0d1bb0581a671151744c6586af8669922fa1ee5c544d96fae34e27"
       - name: Export the canonical public API
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
+          import textwrap
 
           path = Path('src/semantic_asr/__init__.py')
           text = path.read_text(encoding='utf-8')
           old = 'from .score_semantics import EvidenceScore, ScoreKind\n'
-          new = '''from .score_contract import (
-              SCORE_SCHEMA_VERSION,
-              CalibrationProfile,
-              CalibrationProfileRegistry,
-              EvidenceScore,
-              ScoreContractError,
-              ScoreDomain,
-              ScoreMigrationError,
-              ScoreNormalization,
-              ScoreProvenance,
-              ScoreSemantics,
-              require_same_score_domain,
-          )
-          from .score_semantics import ScoreKind
-          '''
+          new = textwrap.dedent('''
+              from .score_contract import (
+                  SCORE_SCHEMA_VERSION,
+                  CalibrationProfile,
+                  CalibrationProfileRegistry,
+                  EvidenceScore,
+                  ScoreContractError,
+                  ScoreDomain,
+                  ScoreMigrationError,
+                  ScoreNormalization,
+                  ScoreProvenance,
+                  ScoreSemantics,
+                  require_same_score_domain,
+              )
+              from .score_semantics import ScoreKind
+          ''').lstrip()
           if text.count(old) != 1:
               raise SystemExit(f'expected one legacy score import, found {text.count(old)}')
           text = text.replace(old, new)
           marker = '    "EvidenceScore",\n'
-          additions = '''    "SCORE_SCHEMA_VERSION",
-              "CalibrationProfile",
-              "CalibrationProfileRegistry",
-              "ScoreContractError",
-              "ScoreDomain",
-              "ScoreMigrationError",
-              "ScoreNormalization",
-              "ScoreProvenance",
-              "ScoreSemantics",
-          '''
+          additions = textwrap.dedent('''
+                  "SCORE_SCHEMA_VERSION",
+                  "CalibrationProfile",
+                  "CalibrationProfileRegistry",
+                  "ScoreContractError",
+                  "ScoreDomain",
+                  "ScoreMigrationError",
+                  "ScoreNormalization",
+                  "ScoreProvenance",
+                  "ScoreSemantics",
+          ''')
           if text.count(marker) != 1:
               raise SystemExit(f'expected one EvidenceScore __all__ entry, found {text.count(marker)}')
           text = text.replace(marker, marker + additions)
@@ -96,14 +106,14 @@ jobs:
           python scripts/replay_phonetic_decisions.py
           python - <<'PY'
           from pathlib import Path
+
           definitions = []
           for path in Path('src/semantic_asr').glob('*.py'):
               for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
                   if line.startswith('class EvidenceScore'):
                       definitions.append((str(path), number))
-          assert definitions == [('src/semantic_asr/score_contract.py', 1)] or (
-              len(definitions) == 1 and definitions[0][0] == 'src/semantic_asr/score_contract.py'
-          ), definitions
+          assert len(definitions) == 1, definitions
+          assert definitions[0][0] == 'src/semantic_asr/score_contract.py', definitions
           PY
       - name: Commit the validated source
         shell: bash
