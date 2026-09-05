@@ -19,11 +19,14 @@ Read [AGENTS](../../AGENTS.md), the [audit](AUDIT_2026-09-05.md),
 Each number is in the [machine-readable plan](release-plan.json), with prerequisites,
 current source entry points, new tests to create and responsible skill/role.
 Full instructions and acceptance criteria live in the corresponding GitHub Issue.
-Existing #19 and #21 remain open; this roadmap does not silently supersede them.
+This is a dated plan, not live status. As checked on 2026-09-06, #19 was closed by
+#46 and #24 by #42; #21 remains an unfinished research Issue, not a draft PR.
+Read the [current handoff](EXECUTION_2026-09-06.md) before choosing files.
 
 ## Execution order
 
-Begin #19, #24, #25, #26 and #28 in parallel only when file ownership does not overlap.
+Begin remaining #25, #26 and #28 only after checking their current reservations.
+Do not duplicate an active branch or reopen completed #19/#24 without a regression.
 The inventory phase of #27 and documentation phase of #40 can also start immediately.
 Finish #25 before score/evidence migrations. Build #29 on #26; #35 then supplies
 training infrastructure. #36 and #37 are independent acoustic and LLM experiments,
@@ -56,9 +59,10 @@ categories are Research questions, Experiment results, Design RFC and Q&A.
 Discussions were not enabled or populated by this change. A future discussion must
 link its final decision back to the versioned ADR and implementation Issue.
 
-## What this change does not claim
+## What the original planning change did not claim
 
-It does not repair #24/#25, remove legacy modules, train new model weights, publish
-an integrated phonetic checkpoint, or establish world-leading Japanese accuracy.
+The original planning PR alone did not repair runtime defects, remove legacy modules,
+train weights, publish an integrated phonetic model, or establish world-leading accuracy.
+Subsequent #42/#43/#44 have separate implementation and limited training evidence.
 Those outcomes need the evidence specified in the work queue. Historical research
 remains in its original dated documents; do not overwrite its conclusions.
