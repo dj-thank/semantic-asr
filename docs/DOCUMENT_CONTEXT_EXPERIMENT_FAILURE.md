@@ -428,19 +428,19 @@ FAILED tests/test_document_experiment_runner.py::test_all_arms_share_candidates_
 FAILED tests/test_document_experiment_runner.py::test_report_writes_canonical_evidence_with_negative_results - ValueError: first-pass long-form evidence hash mismatch
 FAILED tests/test_document_experiment_runner.py::test_scored_character_budget_fails_closed - ValueError: first-pass long-form evidence hash mismatch
 FAILED tests/test_document_experiment_runner.py::test_candidate_set_digest_binds_planner_output - ValueError: first-pass long-form evidence hash mismatch
-8 failed, 12 passed in 0.92s
+8 failed, 12 passed in 0.87s
 ```
 
 ## Full suite
 ```text
-..s........sss.......................................................... [ 14%]
-.....................FF..........F.FF.FFFFF............................. [ 28%]
-........................................................................ [ 42%]
-.....................................ssss............................... [ 56%]
-..............................................................xxx....... [ 70%]
-........................................................................ [ 84%]
-........................................................................ [ 98%]
-.......ss.                                                               [100%]
+..s........sss.......................................................... [ 13%]
+.....................FF..........F.FF.FFFFFFFF.......................... [ 27%]
+........................................................................ [ 41%]
+........................................ssss............................ [ 55%]
+.................................................................xxx.... [ 69%]
+........................................................................ [ 83%]
+........................................................................ [ 97%]
+..........ss.                                                            [100%]
 =================================== FAILURES ===================================
 ____________ test_promotion_rejects_gain_shared_by_shuffled_control ____________
 
@@ -633,6 +633,159 @@ tests/test_document_experiment_protocol.py:104:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 tests/test_document_experiment_protocol.py:36: in case
     return DocumentExperimentCase(
+<string>:14: in __init__
+    ???
+src/semantic_asr/document_experiment/protocol.py:170: in __post_init__
+    self.first_pass.verify()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = LongformResult(source_name='fixture.wav', source_audio_sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...a72451ac12426ec6d7396', diagnostics={'provisionalWindowCount': 0}, evidence_schema='semantic-asr-longform-evidence-v2')
+
+    def verify(self) -> None:
+        if self.evidence_schema != "semantic-asr-longform-evidence-v2":
+            raise ValueError("unsupported long-form evidence schema")
+        require_integer(self.duration_ms, name="duration_ms", minimum=1)
+        if not self.segments:
+            raise ValueError("long-form evidence requires segments")
+        if len(self.source_audio_sha256) != 64 or any(
+            c not in "0123456789abcdef" for c in self.source_audio_sha256
+        ):
+            raise ValueError("source audio identity must be a SHA-256 digest")
+        previous_start = -1
+        for index, segment in enumerate(self.segments):
+            window = segment.window
+            if (
+                window.index != index
+                or window.start_ms <= previous_start
+                or window.end_ms > self.duration_ms
+            ):
+                raise ValueError("long-form window sequence does not match the recording")
+            previous_start = window.start_ms
+            segment.observed.verify()
+            if segment.observed.source_audio_sha256 != self.source_audio_sha256:
+                raise ValueError("segment evidence belongs to a different source recording")
+            segment.normalized.verify(segment.observed)
+        if self.observed_text != join_segment_text(self.segments):
+            raise ValueError("long-form observed text does not match its segments")
+        if self.normalized_text != join_segment_text(self.segments, normalized=True):
+            raise ValueError("long-form normalized text does not match its segments")
+        if sha256_json(self.evidence_payload()) != self.evidence_sha256:
+>           raise ValueError("first-pass long-form evidence hash mismatch")
+E           ValueError: first-pass long-form evidence hash mismatch
+
+src/semantic_asr/longform.py:176: ValueError
+________ test_registered_run_binds_protocol_manifest_and_model_profile _________
+
+    def test_registered_run_binds_protocol_manifest_and_model_profile() -> None:
+>       manifest, protocol = inputs()
+                             ^^^^^^^^
+
+tests/test_document_experiment_registration.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_document_experiment_registration.py:57: in inputs
+    case = DocumentExperimentCase(
+<string>:14: in __init__
+    ???
+src/semantic_asr/document_experiment/protocol.py:170: in __post_init__
+    self.first_pass.verify()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = LongformResult(source_name='fixture.wav', source_audio_sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...a72451ac12426ec6d7396', diagnostics={'provisionalWindowCount': 0}, evidence_schema='semantic-asr-longform-evidence-v2')
+
+    def verify(self) -> None:
+        if self.evidence_schema != "semantic-asr-longform-evidence-v2":
+            raise ValueError("unsupported long-form evidence schema")
+        require_integer(self.duration_ms, name="duration_ms", minimum=1)
+        if not self.segments:
+            raise ValueError("long-form evidence requires segments")
+        if len(self.source_audio_sha256) != 64 or any(
+            c not in "0123456789abcdef" for c in self.source_audio_sha256
+        ):
+            raise ValueError("source audio identity must be a SHA-256 digest")
+        previous_start = -1
+        for index, segment in enumerate(self.segments):
+            window = segment.window
+            if (
+                window.index != index
+                or window.start_ms <= previous_start
+                or window.end_ms > self.duration_ms
+            ):
+                raise ValueError("long-form window sequence does not match the recording")
+            previous_start = window.start_ms
+            segment.observed.verify()
+            if segment.observed.source_audio_sha256 != self.source_audio_sha256:
+                raise ValueError("segment evidence belongs to a different source recording")
+            segment.normalized.verify(segment.observed)
+        if self.observed_text != join_segment_text(self.segments):
+            raise ValueError("long-form observed text does not match its segments")
+        if self.normalized_text != join_segment_text(self.segments, normalized=True):
+            raise ValueError("long-form normalized text does not match its segments")
+        if sha256_json(self.evidence_payload()) != self.evidence_sha256:
+>           raise ValueError("first-pass long-form evidence hash mismatch")
+E           ValueError: first-pass long-form evidence hash mismatch
+
+src/semantic_asr/longform.py:176: ValueError
+_______________ test_registry_rejects_runtime_model_replacement ________________
+
+    def test_registry_rejects_runtime_model_replacement() -> None:
+>       manifest, protocol = inputs()
+                             ^^^^^^^^
+
+tests/test_document_experiment_registration.py:134: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_document_experiment_registration.py:57: in inputs
+    case = DocumentExperimentCase(
+<string>:14: in __init__
+    ???
+src/semantic_asr/document_experiment/protocol.py:170: in __post_init__
+    self.first_pass.verify()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = LongformResult(source_name='fixture.wav', source_audio_sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...a72451ac12426ec6d7396', diagnostics={'provisionalWindowCount': 0}, evidence_schema='semantic-asr-longform-evidence-v2')
+
+    def verify(self) -> None:
+        if self.evidence_schema != "semantic-asr-longform-evidence-v2":
+            raise ValueError("unsupported long-form evidence schema")
+        require_integer(self.duration_ms, name="duration_ms", minimum=1)
+        if not self.segments:
+            raise ValueError("long-form evidence requires segments")
+        if len(self.source_audio_sha256) != 64 or any(
+            c not in "0123456789abcdef" for c in self.source_audio_sha256
+        ):
+            raise ValueError("source audio identity must be a SHA-256 digest")
+        previous_start = -1
+        for index, segment in enumerate(self.segments):
+            window = segment.window
+            if (
+                window.index != index
+                or window.start_ms <= previous_start
+                or window.end_ms > self.duration_ms
+            ):
+                raise ValueError("long-form window sequence does not match the recording")
+            previous_start = window.start_ms
+            segment.observed.verify()
+            if segment.observed.source_audio_sha256 != self.source_audio_sha256:
+                raise ValueError("segment evidence belongs to a different source recording")
+            segment.normalized.verify(segment.observed)
+        if self.observed_text != join_segment_text(self.segments):
+            raise ValueError("long-form observed text does not match its segments")
+        if self.normalized_text != join_segment_text(self.segments, normalized=True):
+            raise ValueError("long-form normalized text does not match its segments")
+        if sha256_json(self.evidence_payload()) != self.evidence_sha256:
+>           raise ValueError("first-pass long-form evidence hash mismatch")
+E           ValueError: first-pass long-form evidence hash mismatch
+
+src/semantic_asr/longform.py:176: ValueError
+____________ test_registration_rejects_protocol_change_after_freeze ____________
+
+    def test_registration_rejects_protocol_change_after_freeze() -> None:
+>       manifest, protocol = inputs()
+                             ^^^^^^^^
+
+tests/test_document_experiment_registration.py:144: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_document_experiment_registration.py:57: in inputs
+    case = DocumentExperimentCase(
 <string>:14: in __init__
     ???
 src/semantic_asr/document_experiment/protocol.py:170: in __post_init__
@@ -992,10 +1145,13 @@ FAILED tests/test_document_experiment_protocol.py::test_complete_reference_in_ex
   Expected regex: 'complete evaluation reference'
   Actual message: 'first-pass long-form evidence hash mismatch'
 FAILED tests/test_document_experiment_protocol.py::test_manifest_rejects_speaker_or_session_leakage - ValueError: first-pass long-form evidence hash mismatch
+FAILED tests/test_document_experiment_registration.py::test_registered_run_binds_protocol_manifest_and_model_profile - ValueError: first-pass long-form evidence hash mismatch
+FAILED tests/test_document_experiment_registration.py::test_registry_rejects_runtime_model_replacement - ValueError: first-pass long-form evidence hash mismatch
+FAILED tests/test_document_experiment_registration.py::test_registration_rejects_protocol_change_after_freeze - ValueError: first-pass long-form evidence hash mismatch
 FAILED tests/test_document_experiment_runner.py::test_planner_receives_no_reference_and_candidates_are_frozen_once - ValueError: first-pass long-form evidence hash mismatch
 FAILED tests/test_document_experiment_runner.py::test_all_arms_share_candidates_and_context_arm_improves_fixture - ValueError: first-pass long-form evidence hash mismatch
 FAILED tests/test_document_experiment_runner.py::test_report_writes_canonical_evidence_with_negative_results - ValueError: first-pass long-form evidence hash mismatch
 FAILED tests/test_document_experiment_runner.py::test_scored_character_budget_fails_closed - ValueError: first-pass long-form evidence hash mismatch
 FAILED tests/test_document_experiment_runner.py::test_candidate_set_digest_binds_planner_output - ValueError: first-pass long-form evidence hash mismatch
-10 failed, 491 passed, 15 skipped, 3 xfailed in 6.50s
+13 failed, 491 passed, 15 skipped, 3 xfailed in 6.10s
 ```

@@ -42,9 +42,7 @@ class FrozenScorerRegistry:
         revision: str,
     ) -> FrozenScorerRegistry:
         return cls(
-            profiles=tuple(
-                sorted((key, scorer.profile_digest) for key, scorer in scorers.items())
-            ),
+            profiles=tuple(sorted((key, scorer.profile_digest) for key, scorer in scorers.items())),
             revision=revision,
         )
 

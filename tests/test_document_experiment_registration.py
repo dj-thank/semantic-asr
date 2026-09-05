@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from _document_experiment_fixture import AUDIO, RIGHTS, SPLIT, fake_plan, first_pass
 
 from semantic_asr.document_experiment.ngram_scorer import DocumentLanguageScore
 from semantic_asr.document_experiment.protocol import (
@@ -16,8 +17,6 @@ from semantic_asr.document_experiment.registration import (
     run_registered_document_context_experiment,
 )
 from semantic_asr.document_experiment.runner import prepare_document_experiment
-
-from _document_experiment_fixture import AUDIO, RIGHTS, SPLIT, fake_plan, first_pass
 
 
 class RegisteredScorer:
