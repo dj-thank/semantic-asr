@@ -307,6 +307,7 @@ def test_utility_calibration_preserves_score_semantics() -> None:
         value=-0.5,
         kind=ScoreKind.LOG_LIKELIHOOD,
         source="ctc-phone:model@r1:phones-r1",
+        normalization=ScoreNormalization.MEAN_FRAME,
     )
 
     transformed = profile.transform(score)

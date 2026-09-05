@@ -15,4 +15,4 @@ def test_repository_defines_one_evidence_score_class() -> None:
                 definitions.append((source_path.name, line_number))
 
     assert len(definitions) == 1, definitions
-    assert definitions[0][0] == "score_contract.py"
+    assert definitions[0][0] == "_score_contract_base.py"

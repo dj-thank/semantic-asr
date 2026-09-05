@@ -48,6 +48,9 @@ This table records semantic ownership. It is not a benchmark result.
 ## Audit queries
 
 The migration test asserts that both historical import paths expose the exact same Python class.
-Future code review should reject new `class EvidenceScore` definitions outside `score_contract.py`.
+Future code review should reject new `class EvidenceScore` definitions outside the internal `_score_contract_base.py` implementation.
 A repository-level source audit should also flag direct probability construction outside registered
 calibrators and raw arithmetic over scores without `require_same_score_domain()`.
+
+
+The public `semantic_asr.score_contract` module is a stable facade. It installs strict untrusted-input guards before re-exporting the single internal `EvidenceScore` class; it does not define a second numeric type.
