@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import sys
 import wave
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -215,11 +217,89 @@ def test_confidence_is_disabled_for_unmeasured_profiles_and_numerically_stable()
     assert calibrated_confidence(extreme, True) is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Legacy DecodeRequest still accepts invalid beam sizes; legacy adapter repair deferred.",
-)
-@pytest.mark.parametrize("bad", [True, 1.2, float("nan")])
-def test_legacy_decode_request_integer_validation_gap(bad):
+@pytest.mark.parametrize("field", ["beam_size", "hypotheses"])
+@pytest.mark.parametrize("bad", [True, False, 0, -1, 1.2, float("nan"), float("inf")])
+def test_legacy_decode_request_integer_validation_is_strict(field, bad):
     with pytest.raises((TypeError, ValueError)):
-        DecodeRequest(audio_path="x", beam_size=bad)
+        DecodeRequest(audio_path="x", **{field: bad})
+
+
+@pytest.mark.parametrize(
+    "start_ms,end_ms",
+    [
+        (True, None),
+        (1.2, None),
+        (float("nan"), None),
+        (None, True),
+        (None, 1.2),
+        (None, float("nan")),
+        (None, 0),
+        (100, 100),
+        (100, 99),
+    ],
+)
+def test_legacy_decode_request_span_validation_is_strict(start_ms, end_ms):
+    with pytest.raises((TypeError, ValueError)):
+        DecodeRequest(audio_path="x", start_ms=start_ms, end_ms=end_ms)
+
+
+def test_legacy_decode_request_hypothesis_count_cannot_exceed_beam():
+    with pytest.raises(ValueError, match="hypotheses cannot exceed beam_size"):
+        DecodeRequest(audio_path="x", beam_size=3, hypotheses=4)
+
+
+def test_legacy_decode_request_end_without_start_is_explicit():
+    request = DecodeRequest(audio_path="x", end_ms=1)
+    assert request.start_ms is None
+    assert request.end_ms == 1
+
+
+def test_legacy_decode_request_return_timestamps_requires_boolean():
+    with pytest.raises(TypeError, match="return_timestamps"):
+        DecodeRequest(audio_path="x", return_timestamps=1)
+
+
+def test_legacy_faster_whisper_adapter_uses_shared_bounded_reader(monkeypatch):
+    import semantic_asr.adapters as adapter_module
+
+    faster_whisper = ModuleType("faster_whisper")
+    faster_whisper.__path__ = []  # type: ignore[attr-defined]
+    audio_module = ModuleType("faster_whisper.audio")
+    tokenizer_module = ModuleType("faster_whisper.tokenizer")
+
+    def fallback_decoder(*args, **kwargs):
+        raise AssertionError("the fallback decoder must be passed through, not called eagerly")
+
+    class Tokenizer:
+        pass
+
+    audio_module.decode_audio = fallback_decoder  # type: ignore[attr-defined]
+    tokenizer_module.Tokenizer = Tokenizer  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", faster_whisper)
+    monkeypatch.setitem(sys.modules, "faster_whisper.audio", audio_module)
+    monkeypatch.setitem(sys.modules, "faster_whisper.tokenizer", tokenizer_module)
+
+    calls = {}
+
+    def bounded_reader(path, *, start_ms, end_ms, decoder):
+        calls.update(
+            path=path,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            decoder=decoder,
+        )
+        raise RuntimeError("bounded-reader-invoked")
+
+    monkeypatch.setattr(adapter_module, "decode_audio_window", bounded_reader)
+    adapter = object.__new__(adapter_module.FasterWhisperAdapter)
+    request = DecodeRequest(audio_path="recording.wav", start_ms=250, end_ms=500)
+
+    with pytest.raises(RuntimeError, match="bounded-reader-invoked"):
+        adapter.decode(request)
+
+    assert calls == {
+        "path": "recording.wav",
+        "start_ms": 250,
+        "end_ms": 500,
+        "decoder": fallback_decoder,
+    }
