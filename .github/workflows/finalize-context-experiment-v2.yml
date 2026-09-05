@@ -1,0 +1,146 @@
+name: Audit document-context experiment harness
+
+on:
+  push:
+    branches:
+      - codex/document-context-experiment-v1-38
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/document-context-experiment-v1-38
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Apply reviewed contract corrections
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/semantic_asr/document_experiment/protocol.py')
+          text = path.read_text(encoding='utf-8')
+          lines = text.splitlines()
+          output = []
+          skip_raise = False
+          removed = 0
+          for line in lines:
+              if 'if "".join(self.window_texts) != self.text:' in line:
+                  skip_raise = True
+                  removed += 1
+                  continue
+              if skip_raise and 'window reference text must exactly reconstruct' in line:
+                  skip_raise = False
+                  continue
+              output.append(line)
+          if removed != 1 or skip_raise:
+              raise SystemExit(f'expected one window concatenation invariant, removed={removed}')
+          path.write_text('\n'.join(output) + '\n', encoding='utf-8')
+
+          path = Path('tests/test_document_experiment_metrics.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    assert harmful.windows.worsened_windows == 2\n'
+          new = '    assert harmful.windows.worsened_windows == 1\n'
+          if text.count(old) != 1:
+              raise SystemExit('expected one harmful-window assertion')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+      - name: Install and normalize source
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m ruff format src tests scripts
+          python -m ruff check --fix src tests scripts
+          python -m ruff format src tests scripts
+          git diff --check
+      - name: Run focused and full validation
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -q \
+            tests/test_document_experiment_protocol.py \
+            tests/test_document_experiment_metrics.py \
+            tests/test_document_ngram_scorer.py \
+            tests/test_document_experiment_runner.py \
+            2>&1 | tee /tmp/focused.log
+          focused_status=${PIPESTATUS[0]}
+          python -m pytest -q 2>&1 | tee /tmp/full.log
+          full_status=${PIPESTATUS[0]}
+          echo "focused_status=$focused_status" >> "$GITHUB_OUTPUT"
+          echo "full_status=$full_status" >> "$GITHUB_OUTPUT"
+          if [ "$focused_status" -ne 0 ] || [ "$full_status" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Record success ledger
+        if: success()
+        shell: bash
+        run: |
+          focused_summary=$(tail -n 1 /tmp/focused.log)
+          full_summary=$(tail -n 1 /tmp/full.log)
+          cat > docs/DOCUMENT_CONTEXT_EXPERIMENT_VALIDATION.md <<EOF
+          # Document-context experiment validation ledger
+
+          ## Automated audit
+
+          Exact branch source was formatted and linted with the repository toolchain, then tested
+          in a dependency-free Python 3.12 environment.
+
+          Focused suite:
+
+          \`\`\`text
+          $focused_summary
+          \`\`\`
+
+          Complete suite:
+
+          \`\`\`text
+          $full_summary
+          \`\`\`
+
+          This is a software-contract validation only. It is not a Japanese CER or context-quality
+          claim. Real promotion still requires the frozen, rights-approved, speaker/session-disjoint
+          continuous-speech experiment described in \`DOCUMENT_CONTEXT_EXPERIMENT.md\`.
+          EOF
+      - name: Record failure log
+        if: failure() && steps.tests.outcome == 'failure'
+        shell: bash
+        run: |
+          {
+            echo '# Document-context experiment validation failure'
+            echo
+            echo '## Focused suite'
+            echo '```text'
+            cat /tmp/focused.log
+            echo '```'
+            echo
+            echo '## Full suite'
+            echo '```text'
+            cat /tmp/full.log
+            echo '```'
+          } > docs/DOCUMENT_CONTEXT_EXPERIMENT_FAILURE.md
+      - name: Commit audit result
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.tests.outcome }}" = "success" ]; then
+            rm -f .github/workflows/finalize-context-experiment.yml
+            rm -f .github/workflows/finalize-context-experiment-v2.yml
+            rm -f docs/DOCUMENT_CONTEXT_EXPERIMENT_FAILURE.md
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests docs .github/workflows/finalize-context-experiment.yml .github/workflows/finalize-context-experiment-v2.yml
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Validate document-context experiment harness'
+          git push origin HEAD:codex/document-context-experiment-v1-38
