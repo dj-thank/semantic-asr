@@ -159,6 +159,10 @@ PROFILES: dict[str, RuntimeProfile] = {
 }
 
 
+# Keep the calibration reference independent of the caller-editable profile registry.
+_CALIBRATED_CPU_PROFILE = PROFILES["cpu-ja-v1"]
+
+
 def runtime_profile(name: str | RuntimeProfile) -> RuntimeProfile:
     if isinstance(name, RuntimeProfile):
         return name
@@ -226,7 +230,9 @@ def _candidate_spans(candidate: Any) -> list[Mapping[str, Any]]:
     if metadata is None and isinstance(candidate, Mapping):
         metadata = candidate.get("metadata")
     spans = (metadata or {}).get("utteranceSpans") if isinstance(metadata, Mapping) else None
-    return [span for span in (spans or []) if isinstance(span, Mapping) and span.get("text")]
+    if not isinstance(spans, (list, tuple)):
+        return []
+    return [span for span in spans if isinstance(span, Mapping) and span.get("text")]
 
 
 def utterances_from_segments(
@@ -253,7 +259,7 @@ def utterances_from_segments(
             return None
         try:
             number = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         if not math.isfinite(number):
             return None
@@ -372,6 +378,7 @@ class TranscriptResult:
     def verify(self) -> None:
         self.longform.verify()
         for name in (
+            "source_name",
             "source_audio_sha256",
             "duration_ms",
             "observed_text",
@@ -382,9 +389,13 @@ class TranscriptResult:
                 raise ValueError(f"facade {name} does not match verified long-form evidence")
         if len(self.segments) != len(self.longform.segments):
             raise ValueError("facade segments do not match long-form evidence")
-        for segment, raw in zip(self.segments, self.longform.segments, strict=True):
+        for index, (segment, raw) in enumerate(
+            zip(self.segments, self.longform.segments, strict=True), 1
+        ):
             if (
-                segment.observed != raw.observed.text
+                segment.index != index
+                or segment.status != _segment_status(raw)
+                or segment.observed != raw.observed.text
                 or segment.normalized != raw.normalized.text
                 or segment.start_ms != raw.window.start_ms
                 or segment.end_ms != raw.window.end_ms
@@ -473,14 +484,25 @@ def calibrated_confidence(profile: RuntimeProfile, top_posterior: Any) -> float 
 
 
 def _confidence_eligible(
-    profile: RuntimeProfile, adapter: ASRAdapter, *, language: str, prompted: bool
+    profile: RuntimeProfile,
+    adapter: ASRAdapter,
+    *,
+    language: str,
+    prompted: bool,
+    transcriber: SemanticASRTranscriber,
 ) -> bool:
-    from .advanced_adapters import PathPreservingFasterWhisperAdapter
+    """Withhold the old calibration when decoder or fusion semantics change.
 
-    measured = PROFILES["cpu-ja-v1"]
+    This is a configuration eligibility check, not proof that a new speaker,
+    device, dependency version or recording domain matches the calibration set.
+    """
+    from .advanced_adapters import LoopGuardConfig, PathPreservingFasterWhisperAdapter
+    from .fusion import FusionConfig
+
+    measured = _CALIBRATED_CPU_PROFILE
     return (
         profile.digest == measured.digest
-        and isinstance(adapter, PathPreservingFasterWhisperAdapter)
+        and type(adapter) is PathPreservingFasterWhisperAdapter
         and not prompted
         and language == measured.language
         and getattr(adapter, "model_name", None) == measured.model
@@ -488,7 +510,20 @@ def _confidence_eligible(
         and getattr(adapter, "device", None) == measured.device
         and getattr(adapter, "compute_type", None) == measured.compute_type
         and getattr(adapter, "patience", None) == measured.patience
-        and getattr(getattr(adapter, "loop_guard", None), "enabled", None) is measured.loop_guard
+        and getattr(adapter, "loop_guard", None) == LoopGuardConfig(enabled=measured.loop_guard)
+        and getattr(adapter, "length_penalty", None) == 1.0
+        and getattr(adapter, "repetition_penalty", None) == 1.0
+        and getattr(adapter, "no_repeat_ngram_size", None) == 0
+        and getattr(adapter, "without_timestamps", None) is False
+        and getattr(adapter, "cpu_threads", None) == 0
+        and transcriber.surface_policy == "lenient"
+        and transcriber.fusion_config == FusionConfig()
+        and transcriber.evidence_budget.total_cost_ms == 0
+        and transcriber.evidence_budget.max_actions == 0
+        and transcriber.evidence_enricher is None
+        and transcriber.second_ear is None
+        and transcriber.teacher is None
+        and transcriber.forced_aligner is None
     )
 
 
@@ -732,6 +767,7 @@ def transcribe(
         base,
         language=language or resolved.language,
         prompted=bool(effective_hotwords or initial_prompt),
+        transcriber=transcriber,
     )
     segments = tuple(
         TranscriptSegment(
