@@ -29,6 +29,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--per-split", type=int, default=24)
     parser.add_argument("--phone-model", default="prj-beatrice/japanese-hubert-base-phoneme-ctc-v4")
+    parser.add_argument("--dataset-revision")
+    parser.add_argument("--phone-revision")
     args = parser.parse_args()
     if not 1 <= args.per_split <= 64:
         parser.error("per-split must be in [1, 64]")
@@ -50,8 +52,8 @@ def main():
     torch.manual_seed(17)
     hub = HfApi()
     dataset = "google/fleurs"
-    ds_info = hub.dataset_info(dataset)
-    model_info = hub.model_info(args.phone_model)
+    ds_info = hub.dataset_info(dataset, revision=args.dataset_revision)
+    model_info = hub.model_info(args.phone_model, revision=args.phone_revision)
     for revision in (ds_info.sha, model_info.sha):
         if not re.fullmatch(r"[0-9a-f]{40}", revision):
             raise RuntimeError("expected an immutable Hub commit")

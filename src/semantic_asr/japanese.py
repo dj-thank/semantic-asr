@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import Any
 
 from .contracts import MoraUnit
+from .mora_phonology import MORA_COMBINATIONS
 
 SMALL_KANA = frozenset("ァィゥェォャュョヮヵヶ")
 PUNCTUATION = frozenset(" \t\r\n、。,.!?！？・「」『』（）()［］[]【】…‥:：;；\"'“”‘’")
@@ -47,7 +48,12 @@ def split_mora(value: str, *, include_unknown: bool = False) -> list[MoraUnit]:
     for offset, character in enumerate(normalized):
         if character in PUNCTUATION:
             continue
-        if character in SMALL_KANA and units and units[-1].kind == "regular":
+        if (
+            character in SMALL_KANA
+            and units
+            and units[-1].char_end == offset
+            and units[-1].kana + character in MORA_COMBINATIONS
+        ):
             previous = units[-1]
             units[-1] = replace(
                 previous,
@@ -96,15 +102,22 @@ def merge_character_alignment(rows: Iterable[Mapping[str, Any]]) -> list[MoraUni
     """Merge timed character CTC rows into canonical timed mora units."""
 
     units: list[MoraUnit] = []
+    adjacent = False
     for row in rows:
         raw = row.get("char", row.get("surface", row.get("text", "")))
         for character in to_katakana(str(raw)):
             if character in PUNCTUATION or not _is_katakana(character):
+                adjacent = False
                 continue
             start_ms = _finite_number(row.get("startMs", row.get("start_ms")))
             end_ms = _finite_number(row.get("endMs", row.get("end_ms")))
             confidence = _confidence(row.get("confidence"))
-            if character in SMALL_KANA and units and units[-1].kind == "regular":
+            if (
+                adjacent
+                and character in SMALL_KANA
+                and units
+                and units[-1].kana + character in MORA_COMBINATIONS
+            ):
                 previous = units[-1]
                 combined_confidence = previous.confidence
                 if confidence is not None:
@@ -122,6 +135,7 @@ def merge_character_alignment(rows: Iterable[Mapping[str, Any]]) -> list[MoraUni
                     confidence=combined_confidence,
                 )
                 continue
+            adjacent = True
             units.append(
                 MoraUnit(
                     index=len(units),

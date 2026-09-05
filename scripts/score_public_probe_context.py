@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--probe", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model", default="Qwen/Qwen3-0.6B-Base")
+    parser.add_argument("--revision")
     args = parser.parse_args()
     import torch
     from huggingface_hub import HfApi
@@ -36,16 +37,22 @@ def main():
     manifest = json.loads(manifest_bytes)
     if not manifest.get("complete") or manifest["reference_used_during_inference"]:
         raise ValueError("requires a complete reference-blind probe")
-    revision = HfApi().model_info(args.model).sha
+    revision = HfApi().model_info(args.model, revision=args.revision).sha
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("LM revision must be immutable")
-    tokenizer = AutoTokenizer.from_pretrained(args.model, revision=revision, trust_remote_code=False)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model, revision=revision, trust_remote_code=False
+    )
     model = AutoModelForCausalLM.from_pretrained(
-        args.model, revision=revision, use_safetensors=True, trust_remote_code=False,
+        args.model,
+        revision=revision,
+        use_safetensors=True,
+        trust_remote_code=False,
         torch_dtype=torch.float32,
     ).eval()
     scorer = TransformersCausalSequenceScorer(
-        model, tokenizer,
+        model,
+        tokenizer,
         CausalScoringConfig(model_name=args.model, model_revision=revision, batch_size=1),
     )
     args.output.mkdir(parents=True, exist_ok=True)
@@ -72,15 +79,21 @@ def main():
             [TextCandidate(c["id"], c["text"]) for c in candidates],
             context=result["context"],
         )
-        result["records"].append({
-            "id": item["id"],
-            "record_sha256": item["record_sha256"],
-            "scores": [
-                {"candidate_id": s.candidate_id, "sum_logprob": s.cumulative.value,
-                 "average_logprob": s.average.value, "token_count": s.token_count}
-                for s in scores
-            ],
-        })
+        result["records"].append(
+            {
+                "id": item["id"],
+                "record_sha256": item["record_sha256"],
+                "scores": [
+                    {
+                        "candidate_id": s.candidate_id,
+                        "sum_logprob": s.cumulative.value,
+                        "average_logprob": s.average.value,
+                        "token_count": s.token_count,
+                    }
+                    for s in scores
+                ],
+            }
+        )
         (args.output / "context-scores.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
             encoding="utf-8",
