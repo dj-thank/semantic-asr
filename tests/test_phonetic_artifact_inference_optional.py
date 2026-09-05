@@ -8,6 +8,13 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("numpy")
 
+from _phonetic_runtime_fixture import (  # noqa: E402
+    model_config,
+    mora_inventory,
+    phone_inventory,
+    write_wav,
+)
+
 from semantic_asr.phonetic_runtime.artifact import (  # noqa: E402
     load_dual_ctc_artifact,
     read_dual_ctc_metadata,
@@ -15,13 +22,6 @@ from semantic_asr.phonetic_runtime.artifact import (  # noqa: E402
 )
 from semantic_asr.phonetic_runtime.inference import DualCTCPosteriorRuntime  # noqa: E402
 from semantic_asr.phonetic_runtime.torch_model import DualPhoneMoraCTC  # noqa: E402
-
-from _phonetic_runtime_fixture import (  # noqa: E402
-    model_config,
-    mora_inventory,
-    phone_inventory,
-    write_wav,
-)
 
 
 def save_fixture(tmp_path: Path):

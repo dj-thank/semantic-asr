@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from _phonetic_runtime_fixture import write_wav
 
 from semantic_asr.phonetic_runtime.manifest import (
     PhoneticManifestRow,
@@ -11,8 +12,6 @@ from semantic_asr.phonetic_runtime.manifest import (
     load_phonetic_manifest,
     validate_split_isolation,
 )
-
-from _phonetic_runtime_fixture import write_wav
 
 
 def row(tmp_path: Path, split: str, index: int) -> PhoneticManifestRow:

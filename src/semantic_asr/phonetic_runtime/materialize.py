@@ -207,9 +207,7 @@ def materialize_japanese_phonetic_manifest(
         sample_rate = _wav_sample_rate(audio_path)
         transcript = input_row.get("transcript")
         transcript_sha256 = (
-            None
-            if transcript is None
-            else hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+            None if transcript is None else hashlib.sha256(transcript.encode("utf-8")).hexdigest()
         )
         row = PhoneticManifestRow(
             utterance_id=input_row["utteranceId"],
@@ -242,9 +240,7 @@ def materialize_japanese_phonetic_manifest(
                 "rightsDecision": row.rights_decision,
                 "split": row.split,
                 **(
-                    {"transcriptSha256": transcript_sha256}
-                    if transcript_sha256 is not None
-                    else {}
+                    {"transcriptSha256": transcript_sha256} if transcript_sha256 is not None else {}
                 ),
             }
         )
@@ -263,19 +259,22 @@ def materialize_japanese_phonetic_manifest(
         phone_path = temporary / "phone_inventory.json"
         mora_path = temporary / "mora_inventory.json"
         manifest_text = "".join(
-            json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
-            for row in serialized_rows
+            json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in serialized_rows
         )
         manifest_path.write_text(manifest_text, encoding="utf-8", newline="\n")
         manifest_sha256 = _sha256_file(manifest_path)
         phone_path.write_text(
-            json.dumps(_inventory_payload(phone_inventory), ensure_ascii=False, sort_keys=True, indent=2)
+            json.dumps(
+                _inventory_payload(phone_inventory), ensure_ascii=False, sort_keys=True, indent=2
+            )
             + "\n",
             encoding="utf-8",
             newline="\n",
         )
         mora_path.write_text(
-            json.dumps(_inventory_payload(mora_inventory), ensure_ascii=False, sort_keys=True, indent=2)
+            json.dumps(
+                _inventory_payload(mora_inventory), ensure_ascii=False, sort_keys=True, indent=2
+            )
             + "\n",
             encoding="utf-8",
             newline="\n",

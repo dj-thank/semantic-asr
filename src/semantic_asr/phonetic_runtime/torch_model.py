@@ -265,7 +265,9 @@ def multitask_ctc_loss(
     return total, phone_loss, mora_loss
 
 
-def greedy_ctc_ids(logits: Tensor, lengths: Tensor, *, blank_id: int = 0) -> tuple[tuple[int, ...], ...]:
+def greedy_ctc_ids(
+    logits: Tensor, lengths: Tensor, *, blank_id: int = 0
+) -> tuple[tuple[int, ...], ...]:
     if logits.ndim != 3 or lengths.ndim != 1 or logits.shape[0] != lengths.shape[0]:
         raise ValueError("greedy CTC inputs have incompatible shapes")
     predictions = logits.argmax(dim=-1)

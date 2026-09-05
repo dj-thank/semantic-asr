@@ -153,12 +153,8 @@ class PhoneticEvaluationReport:
                     "phoneEdits": row.phone_edits,
                     "moraReferenceCount": row.mora_reference_count,
                     "moraEdits": row.mora_edits,
-                    "phonePredictionSha256": sha256_json(
-                        {"symbols": row.phone_prediction}
-                    ),
-                    "moraPredictionSha256": sha256_json(
-                        {"symbols": row.mora_prediction}
-                    ),
+                    "phonePredictionSha256": sha256_json({"symbols": row.phone_prediction}),
+                    "moraPredictionSha256": sha256_json({"symbols": row.mora_prediction}),
                     "phonePosteriorDigest": row.phone_posterior_digest,
                     "moraPosteriorDigest": row.mora_posterior_digest,
                     "latencyMs": row.latency_ms,

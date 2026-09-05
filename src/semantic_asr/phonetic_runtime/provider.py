@@ -93,8 +93,7 @@ class SourceAudioPhoneticProposalProvider:
             span
             for span in build.lattice.spans
             if bool(span.metadata.get("isContradiction"))
-            and float(span.metadata.get("factorWeight", 0.0))
-            >= self.config.minimum_factor_weight
+            and float(span.metadata.get("factorWeight", 0.0)) >= self.config.minimum_factor_weight
         ]
         rows.sort(
             key=lambda span: (
@@ -163,8 +162,7 @@ class SourceAudioPhoneticProposalProvider:
                 verified.append(
                     VerifiedSpanProposal(
                         proposal_id=(
-                            f"dual-ctc-{segment_index:04d}-{span.index:04d}-"
-                            f"{proposal.candidate_id}"
+                            f"dual-ctc-{segment_index:04d}-{span.index:04d}-{proposal.candidate_id}"
                         ),
                         text=proposal.text,
                         utilities=proposal.utilities,

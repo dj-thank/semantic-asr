@@ -29,6 +29,11 @@ from .protocol import (
     PhoneticAblationManifest,
     PhoneticAblationProtocol,
 )
+from .registration import (
+    PhoneticExperimentRegistration,
+    RegisteredPhoneticExperimentResult,
+    run_registered_phonetic_experiment,
+)
 from .runner import (
     PhoneticAblationCaseResult,
     PhoneticAblationReport,
@@ -60,6 +65,9 @@ __all__ = [
     "PhoneticArmAggregate",
     "PhoneticCaseArmMetrics",
     "PhoneticPromotionDecision",
+    "run_registered_phonetic_experiment",
+    "RegisteredPhoneticExperimentResult",
+    "PhoneticExperimentRegistration",
     "PhoneticPromotionPolicy",
     "PlanningCaseView",
     "PreparedPhoneticAblation",

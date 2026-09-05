@@ -49,7 +49,9 @@ def metric(
 
 def test_false_correction_rate_is_conditioned_on_correct_first_pass_cases() -> None:
     rows = (
-        metric("a", "speaker-a", "target", first_pass_edits=0, effective_edits=1, false_correction=True),
+        metric(
+            "a", "speaker-a", "target", first_pass_edits=0, effective_edits=1, false_correction=True
+        ),
         metric("b", "speaker-b", "target", first_pass_edits=0, effective_edits=0),
         metric("c", "speaker-c", "target", first_pass_edits=2, effective_edits=0),
     )

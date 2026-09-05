@@ -4,13 +4,13 @@ import json
 
 import pytest
 
+from semantic_asr.phonetic_evidence import PosteriorFrame, PosteriorSequence
 from semantic_asr.phonetic_runtime.calibration import (
     PhoneticCalibrationCandidate,
     PhoneticCalibrationExample,
     fit_ctc_utility_calibration,
 )
 from semantic_asr.phonetic_runtime.calibration_artifact import DualCTCUtilityArtifact
-from semantic_asr.phonetic_evidence import PosteriorFrame, PosteriorSequence
 
 
 def posterior(kind: str, symbols: tuple[str, ...]) -> PosteriorSequence:

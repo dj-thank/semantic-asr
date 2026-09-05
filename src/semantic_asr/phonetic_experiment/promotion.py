@@ -100,8 +100,7 @@ def evaluate_phonetic_promotion(
         (
             row
             for row in report.paired_deltas
-            if row.target_arm == policy.target_arm
-            and row.baseline_arm == policy.baseline_arm
+            if row.target_arm == policy.target_arm and row.baseline_arm == policy.baseline_arm
         ),
         None,
     )
@@ -161,10 +160,7 @@ def evaluate_phonetic_promotion(
         ),
         PromotionCheck(
             name="critical-exact-accuracy",
-            passed=(
-                target.critical_exact_accuracy
-                >= policy.minimum_critical_exact_accuracy
-            ),
+            passed=(target.critical_exact_accuracy >= policy.minimum_critical_exact_accuracy),
             observed=target.critical_exact_accuracy,
             required=policy.minimum_critical_exact_accuracy,
             relation=">=",
@@ -178,10 +174,7 @@ def evaluate_phonetic_promotion(
         ),
         PromotionCheck(
             name="generation-latency",
-            passed=(
-                target.mean_generation_latency_ms
-                <= policy.maximum_mean_generation_latency_ms
-            ),
+            passed=(target.mean_generation_latency_ms <= policy.maximum_mean_generation_latency_ms),
             observed=target.mean_generation_latency_ms,
             required=policy.maximum_mean_generation_latency_ms,
             relation="<=",

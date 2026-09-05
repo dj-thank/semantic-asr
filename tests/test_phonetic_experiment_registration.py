@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+from _phonetic_experiment_fixture import manifest, protocol, utility_artifact
 
 from semantic_asr.phonetic_experiment.planner import FrozenPhoneticCandidatePlanner
 from semantic_asr.phonetic_experiment.promotion import PhoneticPromotionPolicy
@@ -10,8 +11,6 @@ from semantic_asr.phonetic_experiment.registration import (
     PhoneticExperimentRegistration,
     run_registered_phonetic_experiment,
 )
-
-from _phonetic_experiment_fixture import manifest, protocol, utility_artifact
 
 
 def permissive_policy() -> PhoneticPromotionPolicy:

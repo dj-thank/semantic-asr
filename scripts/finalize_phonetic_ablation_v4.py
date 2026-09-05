@@ -37,17 +37,17 @@ def patch_protocol() -> None:
             'BootstrapGroup = Literal["speaker", "session", "source"]\n',
             1,
         )
-    reference_requirement = '''        if self.reference.text not in lexicon_surfaces:
+    reference_requirement = """        if self.reference.text not in lexicon_surfaces:
             raise ValueError("reference surface must be present in the frozen exogenous lexicon")
-'''
+"""
     text = text.replace(reference_requirement, "")
-    speaker_requirement = '''        speakers = [case.speaker_id for case in self.cases]
+    speaker_requirement = """        speakers = [case.speaker_id for case in self.cases]
         sessions = [case.session_id for case in self.cases]
         if len(speakers) != len(set(speakers)):
             raise ValueError("ablation test cases must be speaker-disjoint")
         if len(sessions) != len(set(sessions)):
             raise ValueError("ablation test cases must be session-disjoint")
-'''
+"""
     text = text.replace(speaker_requirement, "")
     if "bootstrap_group: BootstrapGroup" not in text:
         text = text.replace(
@@ -58,7 +58,7 @@ def patch_protocol() -> None:
         )
         text = text.replace(
             '        if not self.bootstrap_seed:\n            raise ValueError("bootstrap_seed is required")\n',
-            '        if not self.bootstrap_seed:\n'
+            "        if not self.bootstrap_seed:\n"
             '            raise ValueError("bootstrap_seed is required")\n'
             '        if self.bootstrap_group not in {"speaker", "session", "source"}:\n'
             '            raise ValueError("bootstrap_group must be speaker, session, or source")\n',
@@ -88,8 +88,10 @@ def patch_planner() -> None:
         )
     text = text.replace("    lexicon: object\n", "    lexicon: FrozenPronunciationLexicon\n")
     if '"generationLatencyMs": self.generation_latency_ms,\n' in text:
-        text = text.replace('                "generationLatencyMs": self.generation_latency_ms,\n', "")
-    old_digest = '''                    proposal_digest=sha256_json(
+        text = text.replace(
+            '                "generationLatencyMs": self.generation_latency_ms,\n', ""
+        )
+    old_digest = """                    proposal_digest=sha256_json(
                         {
                             "candidateId": proposal.candidate_id,
                             "entryId": proposal.entry_id,
@@ -101,8 +103,8 @@ def patch_planner() -> None:
                             "moraScoreDigest": proposal.mora_score.evidence.metadata,
                         }
                     ),
-'''
-    new_digest = '''                    proposal_digest=sha256_json(
+"""
+    new_digest = """                    proposal_digest=sha256_json(
                         {
                             "candidateId": proposal.candidate_id,
                             "entryId": proposal.entry_id,
@@ -116,7 +118,7 @@ def patch_planner() -> None:
                             "moraPronunciationDigest": proposal.mora_score.pronunciation_digest,
                         }
                     ),
-'''
+"""
     if old_digest in text:
         text = text.replace(old_digest, new_digest, 1)
     if "if len(proposals) != len(case.lexicon.entries):" not in text:
@@ -126,9 +128,8 @@ def patch_planner() -> None:
             marker,
             "        if len(proposals) != len(case.lexicon.entries):\n"
             "            raise ValueError(\n"
-            "                \"frozen planner did not score every exogenous lexicon entry\"\n"
-            "            )\n"
-            + marker,
+            '                "frozen planner did not score every exogenous lexicon entry"\n'
+            "            )\n" + marker,
             label="planner complete lexicon coverage",
         )
     save(path, text)
@@ -146,7 +147,7 @@ def patch_selection() -> None:
         r"            \}\n"
         r"        \)\n",
     )
-    replacement = '''    @property
+    replacement = """    @property
     def digest(self) -> str:
         return sha256_json(
             {
@@ -163,9 +164,13 @@ def patch_selection() -> None:
                 "reason": self.reason,
             }
         )
-'''
+"""
     text, count = pattern.subn(replacement, text, count=1)
-    if count == 0 and '"selection_latency_ms"' in text[text.find("def digest"):text.find("def digest") + 800]:
+    if (
+        count == 0
+        and '"selection_latency_ms"'
+        in text[text.find("def digest") : text.find("def digest") + 800]
+    ):
         raise RuntimeError("could not remove selection latency from decision digest")
     save(path, text)
 
@@ -176,8 +181,7 @@ def patch_metrics() -> None:
     if "from ..deliberation_evidence import _is_sha256\n" not in text:
         text = text.replace(
             "from ..contracts import sha256_json\n",
-            "from ..contracts import sha256_json\n"
-            "from ..deliberation_evidence import _is_sha256\n",
+            "from ..contracts import sha256_json\nfrom ..deliberation_evidence import _is_sha256\n",
             1,
         )
     if "    group_id: str\n" not in text:
@@ -187,17 +191,17 @@ def patch_metrics() -> None:
             1,
         )
         text = text.replace(
-            '        if not self.case_id or not self.arm_name:\n'
+            "        if not self.case_id or not self.arm_name:\n"
             '            raise ValueError("case arm metrics require case and arm names")\n',
-            '        if not self.case_id or not self.group_id or not self.arm_name:\n'
+            "        if not self.case_id or not self.group_id or not self.arm_name:\n"
             '            raise ValueError("case arm metrics require case, group, and arm names")\n'
-            '        for digest in (\n'
-            '            self.reference_text_sha256,\n'
-            '            self.first_pass_text_sha256,\n'
-            '            self.proposed_text_sha256,\n'
-            '            self.effective_text_sha256,\n'
-            '        ):\n'
-            '            if not _is_sha256(digest):\n'
+            "        for digest in (\n"
+            "            self.reference_text_sha256,\n"
+            "            self.first_pass_text_sha256,\n"
+            "            self.proposed_text_sha256,\n"
+            "            self.effective_text_sha256,\n"
+            "        ):\n"
+            "            if not _is_sha256(digest):\n"
             '                raise ValueError("case arm text digests must be SHA-256 values")\n',
             1,
         )
@@ -215,7 +219,10 @@ def patch_metrics() -> None:
         "            return 0.0\n"
         "        return self.false_correction_count / self.first_pass_exact_count\n",
     )
-    if "        first_pass_exact_count=sum(row.first_pass_edits == 0 for row in rows),\n" not in text:
+    if (
+        "        first_pass_exact_count=sum(row.first_pass_edits == 0 for row in rows),\n"
+        not in text
+    ):
         text = text.replace(
             "        proposed_exact_count=sum(row.proposed_exact for row in rows),\n",
             "        proposed_exact_count=sum(row.proposed_exact for row in rows),\n"
@@ -260,7 +267,7 @@ def patch_metrics() -> None:
         r"    \)\n",
         re.DOTALL,
     )
-    bootstrap_replacement = '''def paired_bootstrap_error_delta(
+    bootstrap_replacement = """def paired_bootstrap_error_delta(
     target: tuple[PhoneticCaseArmMetrics, ...],
     baseline: tuple[PhoneticCaseArmMetrics, ...],
     *,
@@ -318,7 +325,7 @@ def patch_metrics() -> None:
         seed=seed,
         group_count=len(group_ids),
     )
-'''
+"""
     text, count = bootstrap_pattern.subn(bootstrap_replacement, text, count=1)
     if count != 1 and "sampled_groups" not in text:
         raise RuntimeError("could not replace paired bootstrap implementation")
@@ -352,7 +359,7 @@ def patch_runner() -> None:
     )
     if "def _bootstrap_group_id(" not in text:
         marker = "\ndef prepare_phonetic_ablation(\n"
-        helper = '''
+        helper = """
 
 def _bootstrap_group_id(case, protocol: PhoneticAblationProtocol) -> str:
     if protocol.bootstrap_group == "speaker":
@@ -362,7 +369,7 @@ def _bootstrap_group_id(case, protocol: PhoneticAblationProtocol) -> str:
     if protocol.bootstrap_group == "source":
         return case.source_id
     raise ValueError("unknown bootstrap group")
-'''
+"""
         if marker not in text:
             raise RuntimeError("runner group helper insertion marker missing")
         text = text.replace(marker, helper + marker, 1)
@@ -419,7 +426,7 @@ def patch_tests() -> None:
         )
     text = text.replace(
         "def test_planning_view_contains_no_reference() -> None:\n"
-        "    experiment, _runtime = manifest(pytest.ensuretemp(\"phonetic-planning-view\"))",
+        '    experiment, _runtime = manifest(pytest.ensuretemp("phonetic-planning-view"))',
         "def test_planning_view_contains_no_reference(tmp_path) -> None:\n"
         "    experiment, _runtime = manifest(tmp_path)",
     )
@@ -440,11 +447,11 @@ def patch_tests() -> None:
         r"        \}\n"
         r"    \)\n",
     )
-    replacement = '''    changed_case = replace(
+    replacement = """    changed_case = replace(
         case,
         reference=replace(case.reference, text="ただ"),
     )
-'''
+"""
     text, _count = constructor_pattern.subn(replacement, text, count=1)
     save(path, text)
 

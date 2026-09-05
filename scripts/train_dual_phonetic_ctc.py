@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
 
 from semantic_asr.phonetic_runtime.contracts import (
     DualCTCModelConfig,
@@ -100,7 +99,9 @@ def main() -> int:
     artifact_directory = _outside_checkout(args.artifact_dir)
     report_path = _outside_checkout(args.report)
     if artifact_directory == report_path or artifact_directory in report_path.parents:
-        raise ValueError("training report must not be nested inside the immutable artifact directory")
+        raise ValueError(
+            "training report must not be nested inside the immutable artifact directory"
+        )
     manifest = load_phonetic_manifest(args.manifest)
     phone_inventory = _load_inventory(args.phone_inventory, expected_kind="phone")
     mora_inventory = _load_inventory(args.mora_inventory, expected_kind="mora")

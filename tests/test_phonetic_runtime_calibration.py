@@ -23,9 +23,7 @@ def posterior(*, kind: str, winner: tuple[str, ...], revision: str) -> Posterior
             PosteriorFrame.from_mapping(
                 start_ms=index * 20,
                 end_ms=(index + 1) * 20,
-                probabilities={
-                    symbol: high if symbol == value else rest for symbol in vocabulary
-                },
+                probabilities={symbol: high if symbol == value else rest for symbol in vocabulary},
             )
         )
     return PosteriorSequence(

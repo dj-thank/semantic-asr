@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from _phonetic_experiment_fixture import (
+    RIGHTS_DIGEST,
+    SPLIT_DIGEST,
+    case,
+    lexicon,
+    utility_artifact,
+)
+
 from semantic_asr.phonetic_experiment.protocol import (
     FrozenSpanReference,
     PhoneticAblationManifest,
 )
-
-from _phonetic_experiment_fixture import RIGHTS_DIGEST, SPLIT_DIGEST, case, lexicon, utility_artifact
 
 
 def test_reference_may_be_outside_exogenous_lexicon(tmp_path) -> None:

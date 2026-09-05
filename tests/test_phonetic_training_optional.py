@@ -7,6 +7,13 @@ import pytest
 pytest.importorskip("torch")
 pytest.importorskip("numpy")
 
+from _phonetic_runtime_fixture import (  # noqa: E402
+    model_config,
+    mora_inventory,
+    phone_inventory,
+    write_wav,
+)
+
 from semantic_asr.phonetic_runtime.artifact import load_dual_ctc_artifact  # noqa: E402
 from semantic_asr.phonetic_runtime.manifest import (  # noqa: E402
     PhoneticManifestRow,
@@ -15,13 +22,6 @@ from semantic_asr.phonetic_runtime.manifest import (  # noqa: E402
 from semantic_asr.phonetic_runtime.training import (  # noqa: E402
     DualCTCTrainingConfig,
     train_dual_ctc_model,
-)
-
-from _phonetic_runtime_fixture import (  # noqa: E402
-    model_config,
-    mora_inventory,
-    phone_inventory,
-    write_wav,
 )
 
 

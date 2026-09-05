@@ -396,8 +396,7 @@ def train_dual_ctc_model(
             best_loss = calibration_total
             best_epoch = epoch
             best_state = {
-                name: tensor.detach().cpu().clone()
-                for name, tensor in model.state_dict().items()
+                name: tensor.detach().cpu().clone() for name, tensor in model.state_dict().items()
             }
     if best_state is None:
         raise RuntimeError("dual CTC trainer did not produce a checkpoint")

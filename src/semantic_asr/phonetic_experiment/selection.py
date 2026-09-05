@@ -72,8 +72,17 @@ class PhoneticAblationDecision:
     def digest(self) -> str:
         return sha256_json(
             {
-                **asdict(self),
+                "armName": self.arm_name,
+                "armDigest": self.arm_digest,
+                "poolDigest": self.pool_digest,
+                "proposedCandidateId": self.proposed_candidate_id,
+                "effectiveCandidateId": self.effective_candidate_id,
+                "firstPassSelectedCandidateId": self.first_pass_selected_candidate_id,
+                "status": self.status,
+                "margin": self.margin,
+                "proposedScore": self.proposed_score,
                 "ranked": [asdict(row) for row in self.ranked],
+                "reason": self.reason,
             }
         )
 

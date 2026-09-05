@@ -4,11 +4,10 @@ import json
 from pathlib import Path
 
 import pytest
+from _phonetic_runtime_fixture import write_wav
 
 from semantic_asr.phonetic_runtime.manifest import load_phonetic_manifest
 from semantic_asr.phonetic_runtime.materialize import materialize_japanese_phonetic_manifest
-
-from _phonetic_runtime_fixture import write_wav
 
 
 def source_rows(tmp_path: Path) -> list[dict[str, object]]:

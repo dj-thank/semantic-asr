@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+from _document_experiment_fixture import AUDIO, first_pass
 
 from semantic_asr.deliberation_lattice import DocumentContext
 from semantic_asr.phonetic_bridge import (
@@ -21,8 +22,6 @@ from semantic_asr.phonetic_runtime.provider import (
     SourceAudioPhoneticProposalProvider,
 )
 from semantic_asr.semantic_deliberation import build_semantic_deliberation_lattice
-
-from _document_experiment_fixture import AUDIO, first_pass
 
 
 class CountingRuntime:
@@ -52,9 +51,7 @@ def posterior(kind: str) -> PosteriorSequence:
             PosteriorFrame.from_mapping(
                 start_ms=index * 20,
                 end_ms=(index + 1) * 20,
-                probabilities={
-                    symbol: high if symbol == winner else rest for symbol in vocabulary
-                },
+                probabilities={symbol: high if symbol == winner else rest for symbol in vocabulary},
             )
         )
     return PosteriorSequence(

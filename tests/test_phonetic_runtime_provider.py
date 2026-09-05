@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from _document_experiment_fixture import AUDIO, first_pass
 
 from semantic_asr.deliberation_evidence import UtilityCalibrationProfile
 from semantic_asr.phonetic_bridge import (
@@ -14,8 +15,6 @@ from semantic_asr.phonetic_runtime.provider import (
 )
 from semantic_asr.score_semantics import ScoreKind
 from semantic_asr.semantic_deliberation import build_semantic_deliberation_lattice
-
-from _document_experiment_fixture import AUDIO, first_pass
 
 
 def posterior(kind: str, *, audio_sha256: str = AUDIO) -> PosteriorSequence:
@@ -33,9 +32,7 @@ def posterior(kind: str, *, audio_sha256: str = AUDIO) -> PosteriorSequence:
             PosteriorFrame.from_mapping(
                 start_ms=index * 20,
                 end_ms=(index + 1) * 20,
-                probabilities={
-                    symbol: high if symbol == winner else rest for symbol in vocabulary
-                },
+                probabilities={symbol: high if symbol == winner else rest for symbol in vocabulary},
             )
         )
     return PosteriorSequence(
@@ -133,9 +130,7 @@ def test_provider_calls_runtime_only_for_active_contradiction_spans() -> None:
     )
 
     active = [
-        span
-        for span in lattice_build.lattice.spans
-        if bool(span.metadata.get("isContradiction"))
+        span for span in lattice_build.lattice.spans if bool(span.metadata.get("isContradiction"))
     ]
     assert len(runtime.calls) == min(2, len(active))
     assert proposals

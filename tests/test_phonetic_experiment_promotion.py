@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+from _phonetic_experiment_fixture import manifest, protocol, utility_artifact
+
 from semantic_asr.phonetic_experiment.planner import FrozenPhoneticCandidatePlanner
 from semantic_asr.phonetic_experiment.promotion import (
     PhoneticPromotionPolicy,
     evaluate_phonetic_promotion,
 )
 from semantic_asr.phonetic_experiment.runner import run_phonetic_ablation
-
-from _phonetic_experiment_fixture import manifest, protocol, utility_artifact
 
 
 def report(tmp_path):

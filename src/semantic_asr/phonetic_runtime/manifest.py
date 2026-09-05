@@ -145,24 +145,12 @@ def phone_inventory_sample_rate(manifest: PhoneticSplitManifest) -> int:
 
 
 def validate_split_isolation(manifest: PhoneticSplitManifest) -> None:
-    rows_by_split = {
-        split: manifest.rows_for(split)
-        for split in ("train", "calibration", "test")
-    }
+    rows_by_split = {split: manifest.rows_for(split) for split in ("train", "calibration", "test")}
     if not rows_by_split["train"] or not rows_by_split["calibration"]:
         raise ValueError("phonetic manifest requires non-empty train and calibration splits")
-    speakers = {
-        split: {row.speaker_id for row in rows}
-        for split, rows in rows_by_split.items()
-    }
-    sessions = {
-        split: {row.session_id for row in rows}
-        for split, rows in rows_by_split.items()
-    }
-    sources = {
-        split: {row.source_id for row in rows}
-        for split, rows in rows_by_split.items()
-    }
+    speakers = {split: {row.speaker_id for row in rows} for split, rows in rows_by_split.items()}
+    sessions = {split: {row.session_id for row in rows} for split, rows in rows_by_split.items()}
+    sources = {split: {row.source_id for row in rows} for split, rows in rows_by_split.items()}
     for left, right in (("train", "calibration"), ("train", "test"), ("calibration", "test")):
         if speakers[left].intersection(speakers[right]):
             raise ValueError(f"speaker leakage between {left} and {right}")

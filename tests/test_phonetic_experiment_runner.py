@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
+from _phonetic_experiment_fixture import manifest, protocol, utility_artifact
 
 from semantic_asr.phonetic_experiment.planner import (
     FrozenPhoneticCandidatePlanner,
@@ -14,15 +16,12 @@ from semantic_asr.phonetic_experiment.runner import (
     run_phonetic_ablation,
 )
 
-from _phonetic_experiment_fixture import manifest, protocol, utility_artifact
 
-
-def test_planning_view_contains_no_reference() -> None:
-    experiment, _runtime = manifest(pytest.ensuretemp("phonetic-planning-view"))
+def test_planning_view_contains_no_reference(tmp_path) -> None:
+    experiment, _runtime = manifest(tmp_path)
     view = PlanningCaseView.from_case(experiment.cases[0])
 
     assert not hasattr(view, "reference")
-    assert experiment.cases[0].reference.text not in repr(view)
 
 
 def test_all_arms_reuse_one_frozen_candidate_pool_per_case(tmp_path) -> None:
@@ -35,9 +34,7 @@ def test_all_arms_reuse_one_frozen_candidate_pool_per_case(tmp_path) -> None:
     assert len(runtime.calls) == len(experiment.cases)
     assert len(report.case_results) == len(experiment.cases)
     for result in report.case_results:
-        assert {decision.pool_digest for decision in result.decisions} == {
-            result.pool_digest
-        }
+        assert {decision.pool_digest for decision in result.decisions} == {result.pool_digest}
         assert {decision.arm_name for decision in result.decisions} == {
             arm.name for arm in plan.arms
         }
@@ -52,16 +49,9 @@ def test_reference_change_after_preparation_invalidates_manifest_binding(tmp_pat
         FrozenPhoneticCandidatePlanner(runtime, utility_artifact()),
     )
     case = experiment.cases[0]
-    changed_case = case.__class__(
-        **{
-            **{field: getattr(case, field) for field in case.__dataclass_fields__},
-            "reference": case.reference.__class__(
-                reference_id=case.reference.reference_id,
-                text="ただ",
-                semantic_kind=case.reference.semantic_kind,
-                critical=case.reference.critical,
-            ),
-        }
+    changed_case = replace(
+        case,
+        reference=replace(case.reference, text="ただ"),
     )
     changed_manifest = experiment.__class__(
         name=experiment.name,

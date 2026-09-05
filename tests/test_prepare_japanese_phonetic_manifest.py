@@ -5,9 +5,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from semantic_asr.phonetic_runtime.manifest import load_phonetic_manifest
-
 from _phonetic_runtime_fixture import write_wav
+
+from semantic_asr.phonetic_runtime.manifest import load_phonetic_manifest
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "prepare_japanese_phonetic_manifest.py"
 

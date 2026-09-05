@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from _phonetic_runtime_fixture import write_wav
+
 from semantic_asr.phonetic_evidence import PosteriorFrame, PosteriorSequence
 from semantic_asr.phonetic_runtime.evaluation import evaluate_phonetic_runtime
 from semantic_asr.phonetic_runtime.manifest import (
@@ -10,17 +12,13 @@ from semantic_asr.phonetic_runtime.manifest import (
     PhoneticSplitManifest,
 )
 
-from _phonetic_runtime_fixture import write_wav
-
 
 class PerfectRuntime:
     profile_digest = "d" * 64
 
     def infer(self, audio_path, **kwargs):
         source = kwargs["expected_source_audio_sha256"]
-        return make_posterior("phone", ("k", "a"), source), make_posterior(
-            "mora", ("カ",), source
-        )
+        return make_posterior("phone", ("k", "a"), source), make_posterior("mora", ("カ",), source)
 
 
 def make_posterior(kind: str, symbols: tuple[str, ...], source: str) -> PosteriorSequence:
@@ -32,9 +30,7 @@ def make_posterior(kind: str, symbols: tuple[str, ...], source: str) -> Posterio
         PosteriorFrame.from_mapping(
             start_ms=index * 20,
             end_ms=(index + 1) * 20,
-            probabilities={
-                value: 1.0 if value == winner else 0.0 for value in vocabulary
-            },
+            probabilities={value: 1.0 if value == winner else 0.0 for value in vocabulary},
         )
         for index, winner in enumerate(sequence)
     )

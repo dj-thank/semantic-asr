@@ -7,6 +7,7 @@ import random
 from dataclasses import asdict, dataclass
 
 from ..contracts import sha256_json
+from ..deliberation_evidence import _is_sha256
 from .planner import FrozenPhoneticCandidatePool
 from .protocol import FrozenSpanReference
 from .selection import PhoneticAblationDecision
@@ -31,6 +32,7 @@ def edit_distance(left: str, right: str) -> int:
 @dataclass(frozen=True, slots=True)
 class PhoneticCaseArmMetrics:
     case_id: str
+    group_id: str
     arm_name: str
     reference_text_sha256: str
     first_pass_text_sha256: str
@@ -58,8 +60,16 @@ class PhoneticCaseArmMetrics:
     selection_latency_ms: float
 
     def __post_init__(self) -> None:
-        if not self.case_id or not self.arm_name:
-            raise ValueError("case arm metrics require case and arm names")
+        if not self.case_id or not self.group_id or not self.arm_name:
+            raise ValueError("case arm metrics require case, group, and arm names")
+        for digest in (
+            self.reference_text_sha256,
+            self.first_pass_text_sha256,
+            self.proposed_text_sha256,
+            self.effective_text_sha256,
+        ):
+            if not _is_sha256(digest):
+                raise ValueError("case arm text digests must be SHA-256 values")
         if self.reference_characters < 1:
             raise ValueError("reference_characters must be positive")
         for name in (
@@ -97,6 +107,7 @@ class PhoneticArmAggregate:
     case_count: int
     exact_count: int
     proposed_exact_count: int
+    first_pass_exact_count: int
     oracle_count: int
     outside_first_pass_case_count: int
     outside_first_pass_recovery_count: int
@@ -135,7 +146,9 @@ class PhoneticArmAggregate:
 
     @property
     def false_correction_rate(self) -> float:
-        return self.false_correction_count / self.case_count
+        if not self.first_pass_exact_count:
+            return 0.0
+        return self.false_correction_count / self.first_pass_exact_count
 
     @property
     def critical_exact_accuracy(self) -> float:
@@ -177,19 +190,24 @@ def evaluate_case_arm(
     pool: FrozenPhoneticCandidatePool,
     decision: PhoneticAblationDecision,
     reference: FrozenSpanReference,
+    *,
+    group_id: str,
 ) -> PhoneticCaseArmMetrics:
     if decision.pool_digest != pool.digest:
         raise ValueError("decision belongs to a different frozen candidate pool")
     proposed = pool.candidate(decision.proposed_candidate_id)
     effective = pool.candidate(decision.effective_candidate_id)
     first_pass = pool.candidate(pool.first_pass_selected_candidate_id)
-    first_pass_surfaces = {candidate.text for candidate in pool.candidates if candidate.is_first_pass}
+    first_pass_surfaces = {
+        candidate.text for candidate in pool.candidates if candidate.is_first_pass
+    }
     pool_surfaces = {candidate.text for candidate in pool.candidates}
     first_edits = edit_distance(first_pass.text, reference.text)
     proposed_edits = edit_distance(proposed.text, reference.text)
     effective_edits = edit_distance(effective.text, reference.text)
     return PhoneticCaseArmMetrics(
         case_id=pool.case_id,
+        group_id=group_id,
         arm_name=decision.arm_name,
         reference_text_sha256=reference.text_sha256,
         first_pass_text_sha256=first_pass.text_sha256,
@@ -207,7 +225,9 @@ def evaluate_case_arm(
             reference.text not in first_pass_surfaces and effective.text == reference.text
         ),
         false_correction=(first_pass.text == reference.text and effective.text != reference.text),
-        corrected_first_pass=(first_pass.text != reference.text and effective.text == reference.text),
+        corrected_first_pass=(
+            first_pass.text != reference.text and effective.text == reference.text
+        ),
         introduced_error_characters=max(0, effective_edits - first_edits),
         corrected_error_characters=max(0, first_edits - effective_edits),
         accepted=decision.status == "accepted",
@@ -231,11 +251,10 @@ def aggregate_arm(rows: tuple[PhoneticCaseArmMetrics, ...]) -> PhoneticArmAggreg
         case_count=len(rows),
         exact_count=sum(row.effective_exact for row in rows),
         proposed_exact_count=sum(row.proposed_exact for row in rows),
+        first_pass_exact_count=sum(row.first_pass_edits == 0 for row in rows),
         oracle_count=sum(row.pool_oracle for row in rows),
         outside_first_pass_case_count=sum(row.reference_outside_first_pass for row in rows),
-        outside_first_pass_recovery_count=sum(
-            row.recovered_outside_first_pass for row in rows
-        ),
+        outside_first_pass_recovery_count=sum(row.recovered_outside_first_pass for row in rows),
         false_correction_count=sum(row.false_correction for row in rows),
         corrected_first_pass_count=sum(row.corrected_first_pass for row in rows),
         critical_case_count=sum(row.critical for row in rows),
@@ -245,12 +264,8 @@ def aggregate_arm(rows: tuple[PhoneticCaseArmMetrics, ...]) -> PhoneticArmAggreg
         total_reference_characters=sum(row.reference_characters for row in rows),
         total_first_pass_edits=sum(row.first_pass_edits for row in rows),
         total_effective_edits=sum(row.effective_edits for row in rows),
-        total_introduced_error_characters=sum(
-            row.introduced_error_characters for row in rows
-        ),
-        total_corrected_error_characters=sum(
-            row.corrected_error_characters for row in rows
-        ),
+        total_introduced_error_characters=sum(row.introduced_error_characters for row in rows),
+        total_corrected_error_characters=sum(row.corrected_error_characters for row in rows),
         mean_margin=sum(row.margin for row in rows) / len(rows),
         mean_generation_latency_ms=sum(row.generation_latency_ms for row in rows) / len(rows),
         mean_selection_latency_ms=sum(row.selection_latency_ms for row in rows) / len(rows),
@@ -266,6 +281,7 @@ class PairedErrorDelta:
     upper_95: float
     resamples: int
     seed: str
+    group_count: int
 
     @property
     def digest(self) -> str:
@@ -283,23 +299,35 @@ def paired_bootstrap_error_delta(
         raise ValueError("paired bootstrap requires equal non-empty arms")
     target_by_case = {row.case_id: row for row in target}
     baseline_by_case = {row.case_id: row for row in baseline}
+    if len(target_by_case) != len(target) or len(baseline_by_case) != len(baseline):
+        raise ValueError("paired bootstrap case IDs must be unique")
     if set(target_by_case) != set(baseline_by_case):
         raise ValueError("paired bootstrap case IDs differ")
     if resamples < 1 or not seed:
         raise ValueError("paired bootstrap requires resamples and seed")
-    case_ids = tuple(sorted(target_by_case))
+    groups: dict[str, list[str]] = {}
+    for case_id in sorted(target_by_case):
+        target_row = target_by_case[case_id]
+        baseline_row = baseline_by_case[case_id]
+        if target_row.group_id != baseline_row.group_id:
+            raise ValueError("paired bootstrap group identities differ between arms")
+        groups.setdefault(target_row.group_id, []).append(case_id)
+    group_ids = tuple(sorted(groups))
 
-    def delta(sample: tuple[str, ...]) -> float:
-        target_edits = sum(target_by_case[case_id].effective_edits for case_id in sample)
-        baseline_edits = sum(baseline_by_case[case_id].effective_edits for case_id in sample)
-        characters = sum(target_by_case[case_id].reference_characters for case_id in sample)
+    def delta(sampled_groups: tuple[str, ...]) -> float:
+        sampled_cases = tuple(
+            case_id for group_id in sampled_groups for case_id in groups[group_id]
+        )
+        target_edits = sum(target_by_case[case_id].effective_edits for case_id in sampled_cases)
+        baseline_edits = sum(baseline_by_case[case_id].effective_edits for case_id in sampled_cases)
+        characters = sum(target_by_case[case_id].reference_characters for case_id in sampled_cases)
         return (target_edits - baseline_edits) / characters
 
-    point = delta(case_ids)
+    point = delta(group_ids)
     randomizer = random.Random(seed)
     values = []
     for _ in range(resamples):
-        sample = tuple(randomizer.choice(case_ids) for _ in case_ids)
+        sample = tuple(randomizer.choice(group_ids) for _ in group_ids)
         values.append(delta(sample))
     values.sort()
     lower_index = max(0, math.floor(0.025 * (len(values) - 1)))
@@ -312,4 +340,5 @@ def paired_bootstrap_error_delta(
         upper_95=values[upper_index],
         resamples=resamples,
         seed=seed,
+        group_count=len(group_ids),
     )

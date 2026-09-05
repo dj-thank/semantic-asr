@@ -3,6 +3,7 @@ from __future__ import annotations
 import wave
 
 import pytest
+from _phonetic_runtime_fixture import model_config, phone_inventory, write_wav
 
 from semantic_asr.phonetic_runtime.audio import load_pcm16_wav
 from semantic_asr.phonetic_runtime.contracts import (
@@ -10,8 +11,6 @@ from semantic_asr.phonetic_runtime.contracts import (
     PhoneticInventory,
     PhoneticRuntimeLimits,
 )
-
-from _phonetic_runtime_fixture import model_config, phone_inventory, write_wav
 
 
 def test_inventory_round_trip_and_blank_contract() -> None:

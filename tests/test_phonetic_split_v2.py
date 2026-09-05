@@ -4,14 +4,13 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from _phonetic_runtime_fixture import write_wav
 
 from semantic_asr.phonetic_runtime.manifest import (
     PhoneticManifestRow,
     PhoneticSplitManifest,
     validate_split_isolation,
 )
-
-from _phonetic_runtime_fixture import write_wav
 
 
 def row(tmp_path: Path, split: str, index: int) -> PhoneticManifestRow:
@@ -57,7 +56,9 @@ def test_four_way_split_isolation_passes() -> None:
     assert len(value.rows_for("test")) == 1
 
 
-def test_validation_and_calibration_may_not_share_speakers_sessions_or_sources(tmp_path: Path) -> None:
+def test_validation_and_calibration_may_not_share_speakers_sessions_or_sources(
+    tmp_path: Path,
+) -> None:
     value = four_way_manifest(tmp_path)
     rows = list(value.rows)
     validation = next(row for row in rows if row.split == "validation")

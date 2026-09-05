@@ -116,9 +116,7 @@ def posterior(kind: str, target: str, source_audio_sha256: str) -> PosteriorSequ
             PosteriorFrame.from_mapping(
                 start_ms=index * 20,
                 end_ms=(index + 1) * 20,
-                probabilities={
-                    symbol: high if symbol == winner else rest for symbol in vocabulary
-                },
+                probabilities={symbol: high if symbol == winner else rest for symbol in vocabulary},
             )
         )
     return PosteriorSequence(

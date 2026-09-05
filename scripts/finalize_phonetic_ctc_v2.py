@@ -43,7 +43,7 @@ def patch_manifest() -> None:
         r".*?\n\ndef load_phonetic_manifest",
         re.DOTALL,
     )
-    replacement = '''def validate_split_isolation(
+    replacement = """def validate_split_isolation(
     manifest: PhoneticSplitManifest,
     *,
     required_splits: tuple[SplitName, ...] = ("train", "validation", "calibration"),
@@ -87,7 +87,7 @@ def patch_manifest() -> None:
                 raise ValueError(f"source leakage between {left} and {right}")
 
 
-def load_phonetic_manifest'''
+def load_phonetic_manifest"""
     if "required_splits: tuple[SplitName, ...]" not in text:
         text, count = pattern.subn(replacement, text, count=1)
         if count != 1:
@@ -103,8 +103,8 @@ def patch_training() -> None:
         "calibration_phone_loss": "validation_phone_loss",
         "calibration_mora_loss": "validation_mora_loss",
         "best_calibration_loss": "best_validation_loss",
-        "calibration_rows = manifest.rows_for(\"calibration\")": (
-            "validation_rows = manifest.rows_for(\"validation\")"
+        'calibration_rows = manifest.rows_for("calibration")': (
+            'validation_rows = manifest.rows_for("validation")'
         ),
         "calibration_total, calibration_phone, calibration_mora, _ = _run_split(\n"
         "            model,\n"
@@ -185,8 +185,10 @@ def _validate_ctc_feasibility(
         if marker not in text:
             raise RuntimeError("multitask CTC loss insertion marker missing")
         text = text.replace(marker, addition + marker, 1)
-    signature_marker = "    if phone_weight < 0.0 or mora_weight < 0.0 or phone_weight + mora_weight <= 0.0:\n"
-    validation = '''    _validate_ctc_feasibility(
+    signature_marker = (
+        "    if phone_weight < 0.0 or mora_weight < 0.0 or phone_weight + mora_weight <= 0.0:\n"
+    )
+    validation = """    _validate_ctc_feasibility(
         name="phone",
         targets=phone_targets,
         target_lengths=phone_target_lengths,
@@ -200,8 +202,8 @@ def _validate_ctc_feasibility(
         output_lengths=output.output_lengths,
         blank_id=mora_blank_id,
     )
-'''
-    if "name=\"phone\",\n        targets=phone_targets" not in text:
+"""
+    if 'name="phone",\n        targets=phone_targets' not in text:
         text = replace_once(
             text,
             signature_marker,
@@ -220,7 +222,9 @@ def patch_artifact() -> None:
     if "import zipfile\n" not in text:
         text = text.replace("import tempfile\n", "import tempfile\nimport zipfile\n", 1)
     if "def _write_deterministic_npz(" not in text:
-        marker = "\ndef _metadata_payload(metadata: DualCTCArtifactMetadata) -> dict[str, object]:\n"
+        marker = (
+            "\ndef _metadata_payload(metadata: DualCTCArtifactMetadata) -> dict[str, object]:\n"
+        )
         addition = '''
 
 def _write_deterministic_npz(path: Path, arrays: dict[str, Any]) -> None:
@@ -264,20 +268,20 @@ def _write_deterministic_npz(path: Path, arrays: dict[str, Any]) -> None:
 def patch_inference() -> None:
     path = "src/semantic_asr/phonetic_runtime/inference.py"
     text = load(path)
-    old = '''        distribution = {
+    old = """        distribution = {
             symbol: max(0.0, value / total)
             for symbol, value in zip(inventory.symbols, row, strict=True)
         }
         renormalizer = sum(distribution.values())
         distribution[inventory.symbols[-1]] += 1.0 - renormalizer
-'''
-    new = '''        normalized = [max(0.0, value) / total for value in row]
+"""
+    new = """        normalized = [max(0.0, value) / total for value in row]
         renormalizer = sum(normalized)
         normalized = [value / renormalizer for value in normalized]
         anchor = max(range(len(normalized)), key=lambda index: normalized[index])
         normalized[anchor] += 1.0 - sum(normalized)
         distribution = dict(zip(inventory.symbols, normalized, strict=True))
-'''
+"""
     if old in text:
         text = text.replace(old, new, 1)
     save(path, text)
@@ -293,14 +297,12 @@ def patch_provider() -> None:
     if "maximum_total_audio_ms" not in text:
         text = text.replace(
             "    maximum_lexicon_entries: int = 2_048\n",
-            "    maximum_lexicon_entries: int = 2_048\n"
-            "    maximum_total_audio_ms: int = 8_000\n",
+            "    maximum_lexicon_entries: int = 2_048\n    maximum_total_audio_ms: int = 8_000\n",
             1,
         )
         text = text.replace(
             '            "maximum_lexicon_entries",\n',
-            '            "maximum_lexicon_entries",\n'
-            '            "maximum_total_audio_ms",\n',
+            '            "maximum_lexicon_entries",\n            "maximum_total_audio_ms",\n',
             1,
         )
     if "utility_artifact_digest" not in text:
@@ -311,18 +313,18 @@ def patch_provider() -> None:
             1,
         )
         text = text.replace(
-            "        if self.mora_calibration.channel != \"mora\":\n"
-            "            raise ValueError(\"mora calibration must emit the mora utility channel\")\n",
-            "        if self.mora_calibration.channel != \"mora\":\n"
-            "            raise ValueError(\"mora calibration must emit the mora utility channel\")\n"
+            '        if self.mora_calibration.channel != "mora":\n'
+            '            raise ValueError("mora calibration must emit the mora utility channel")\n',
+            '        if self.mora_calibration.channel != "mora":\n'
+            '            raise ValueError("mora calibration must emit the mora utility channel")\n'
             "        if self.utility_artifact_digest is not None and not _is_sha256(\n"
             "            self.utility_artifact_digest\n"
             "        ):\n"
-            "            raise ValueError(\"utility_artifact_digest must be a SHA-256 value\")\n",
+            '            raise ValueError("utility_artifact_digest must be a SHA-256 value")\n',
             1,
         )
         class_marker = "    def _selected_spans(self, build: SemanticDeliberationBuild) -> tuple[DeliberationSpan, ...]:\n"
-        classmethod = '''    @classmethod
+        classmethod = """    @classmethod
     def from_utility_artifact(
         cls,
         *,
@@ -342,7 +344,7 @@ def patch_provider() -> None:
             utility_artifact_digest=utility_artifact.digest,
         )
 
-'''
+"""
         if class_marker not in text:
             raise RuntimeError("provider classmethod insertion marker missing")
         text = text.replace(class_marker, classmethod + class_marker, 1)
@@ -353,7 +355,7 @@ def patch_provider() -> None:
             "        total_audio_ms = 0\n",
             1,
         )
-        budget_marker = "            if end_ms <= start_ms:\n                raise ValueError(\"phonetic proposal crop has a non-positive duration\")\n"
+        budget_marker = '            if end_ms <= start_ms:\n                raise ValueError("phonetic proposal crop has a non-positive duration")\n'
         budget = (
             "            crop_duration_ms = end_ms - start_ms\n"
             "            if total_audio_ms + crop_duration_ms > self.config.maximum_total_audio_ms:\n"
@@ -395,7 +397,7 @@ def patch_scripts_and_docs() -> None:
         "evaluates validation loss after each epoch, keeps the\nbest validation checkpoint",
     )
     if "Four-way split boundary" not in text:
-        text += '''
+        text += """
 
 ## Four-way split boundary
 
@@ -424,7 +426,7 @@ alignments fail explicitly; `zero_infinity` is not used to silently turn them in
 Tensor arrays are written in sorted order to a ZIP archive with fixed timestamps, permissions, and
 compression settings. Identical state dictionaries therefore produce byte-identical `weights.npz`
 files and the same weight-file SHA-256.
-'''
+"""
     save(documentation, text)
 
 
@@ -432,7 +434,7 @@ def patch_tests() -> None:
     split_test = "tests/test_phonetic_split_v2.py"
     text = load(split_test).replace(
         "def test_four_way_split_isolation_passes() -> None:\n"
-        "    value = four_way_manifest(Path(pytest.ensuretemp(\"four-way-split\")))",
+        '    value = four_way_manifest(Path(pytest.ensuretemp("four-way-split")))',
         "def test_four_way_split_isolation_passes(tmp_path: Path) -> None:\n"
         "    value = four_way_manifest(tmp_path)",
     )
@@ -472,9 +474,9 @@ def patch_tests() -> None:
             '            row(tmp_path, "test", 4),\n',
             1,
         )
-    if 'validation = dict(payload)' not in text:
+    if "validation = dict(payload)" not in text:
         marker = "    calibration = dict(payload)\n"
-        addition = '''    validation = dict(payload)
+        addition = """    validation = dict(payload)
     validation.update(
         {
             "utteranceId": "validation-1",
@@ -486,16 +488,16 @@ def patch_tests() -> None:
             "split": "validation",
         }
     )
-'''
+"""
         text = replace_once(text, marker, addition + marker, label="manifest validation row")
         text = text.replace(
-            "        json.dumps(payload) + \"\\n\" + json.dumps(calibration) + \"\\n\",",
+            '        json.dumps(payload) + "\\n" + json.dumps(calibration) + "\\n",',
             "        json.dumps(payload)\n"
-            "        + \"\\n\"\n"
+            '        + "\\n"\n'
             "        + json.dumps(validation)\n"
-            "        + \"\\n\"\n"
+            '        + "\\n"\n'
             "        + json.dumps(calibration)\n"
-            "        + \"\\n\",",
+            '        + "\\n",',
             1,
         )
         text = text.replace("assert len(loaded.rows) == 2", "assert len(loaded.rows) == 3")

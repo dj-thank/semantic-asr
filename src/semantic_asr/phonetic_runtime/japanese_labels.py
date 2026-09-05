@@ -215,10 +215,7 @@ def normalize_japanese_reading(value: str) -> str:
         if character in _SMALL_STANDALONE:
             output.append(_SMALL_STANDALONE[character])
             continue
-        if not (
-            0x30A1 <= ord(character) <= 0x30FA
-            or character in {"ー", "ヵ", "ヶ"}
-        ):
+        if not (0x30A1 <= ord(character) <= 0x30FA or character in {"ー", "ヵ", "ヶ"}):
             raise ValueError(
                 f"unsupported character in explicit Japanese reading: {character!r}; "
                 "Kanji readings must be supplied explicitly"
@@ -323,9 +320,7 @@ class JapanesePhoneticLabelProfile:
         )
 
     def phone_inventory(self) -> PhoneticInventory:
-        phones = tuple(
-            sorted({phone for values in _MORA_TO_PHONES.values() for phone in values})
-        )
+        phones = tuple(sorted({phone for values in _MORA_TO_PHONES.values() for phone in values}))
         return PhoneticInventory(
             kind="phone",
             symbols=("<blk>", *phones),

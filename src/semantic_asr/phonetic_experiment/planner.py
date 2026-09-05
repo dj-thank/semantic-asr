@@ -9,7 +9,11 @@ from pathlib import Path
 
 from ..contracts import sha256_json
 from ..deliberation_evidence import _is_sha256
-from ..phonetic_bridge import PhoneticBridgeConfig, propose_text_from_pronunciation
+from ..phonetic_bridge import (
+    FrozenPronunciationLexicon,
+    PhoneticBridgeConfig,
+    propose_text_from_pronunciation,
+)
 from ..phonetic_runtime.calibration_artifact import DualCTCUtilityArtifact
 from ..phonetic_runtime.provider import PhoneMoraPosteriorRuntime
 from .protocol import FirstPassSpanCandidate, PhoneticAblationCase, PhoneticAblationProtocol
@@ -25,7 +29,7 @@ class PlanningCaseView:
     start_ms: int
     end_ms: int
     first_pass_candidates: tuple[FirstPassSpanCandidate, ...]
-    lexicon: object
+    lexicon: FrozenPronunciationLexicon
     planning_digest: str
 
     @classmethod
@@ -160,7 +164,6 @@ class FrozenPhoneticCandidatePool:
                 "moraPosteriorDigest": self.mora_posterior_digest,
                 "candidateDigests": [row.digest for row in self.candidates],
                 "firstPassSelectedCandidateId": self.first_pass_selected_candidate_id,
-                "generationLatencyMs": self.generation_latency_ms,
             }
         )
 
@@ -219,6 +222,8 @@ class FrozenPhoneticCandidatePlanner:
             mora_calibration=self.utility_artifact.mora_profile,
             config=PhoneticBridgeConfig(top_k=len(case.lexicon.entries)),
         )
+        if len(proposals) != len(case.lexicon.entries):
+            raise ValueError("frozen planner did not score every exogenous lexicon entry")
         elapsed_ms = (time.perf_counter_ns() - started) / 1_000_000.0
         by_text: dict[str, list[FirstPassSpanCandidate]] = {}
         for row in case.first_pass_candidates:
@@ -238,9 +243,7 @@ class FrozenPhoneticCandidatePlanner:
                     phone_utility=utilities["phone"],
                     mora_utility=utilities["mora"],
                     discrete_unit_utility=None,
-                    first_pass_candidate_ids=tuple(
-                        row.candidate_id for row in first_pass_rows
-                    ),
+                    first_pass_candidate_ids=tuple(row.candidate_id for row in first_pass_rows),
                     first_pass_posterior=sum(row.posterior for row in first_pass_rows),
                     first_pass_selected=any(row.selected for row in first_pass_rows),
                     proposal_digest=sha256_json(
@@ -248,11 +251,11 @@ class FrozenPhoneticCandidatePlanner:
                             "candidateId": proposal.candidate_id,
                             "entryId": proposal.entry_id,
                             "pronunciationKey": proposal.pronunciation_key,
-                            "utilityDigests": [
-                                utility.digest for utility in proposal.utilities
-                            ],
-                            "phoneScoreDigest": proposal.phone_score.evidence.metadata,
-                            "moraScoreDigest": proposal.mora_score.evidence.metadata,
+                            "utilityDigests": [utility.digest for utility in proposal.utilities],
+                            "phonePosteriorDigest": proposal.phone_score.posterior_digest,
+                            "phonePronunciationDigest": proposal.phone_score.pronunciation_digest,
+                            "moraPosteriorDigest": proposal.mora_score.posterior_digest,
+                            "moraPronunciationDigest": proposal.mora_score.pronunciation_digest,
                         }
                     ),
                 )

@@ -81,9 +81,7 @@ class PhoneticAblationCaseResult:
             raise ValueError("case result requires case ID, decisions, and metrics")
         if len({row.arm_name for row in self.decisions}) != len(self.decisions):
             raise ValueError("case result decision arm names must be unique")
-        if {row.arm_name for row in self.decisions} != {
-            row.arm_name for row in self.metrics
-        }:
+        if {row.arm_name for row in self.decisions} != {row.arm_name for row in self.metrics}:
             raise ValueError("case result decision and metric arms differ")
         for value in (self.planning_digest, self.pool_digest, self.reference_digest):
             if not _is_sha256(value):
@@ -147,7 +145,7 @@ class PhoneticAblationReport:
             }
         )
 
-    def as_dict(self, *, include_text: bool = False) -> dict[str, object]:
+    def as_dict(self, *, include_ranked_candidate_ids: bool = False) -> dict[str, object]:
         cases = []
         for result in self.case_results:
             decisions = []
@@ -166,9 +164,7 @@ class PhoneticAblationReport:
                         "changedEffective": decision.changed_effective,
                         "proposedCandidateId": decision.proposed_candidate_id,
                         "effectiveCandidateId": decision.effective_candidate_id,
-                        "firstPassSelectedCandidateId": (
-                            decision.first_pass_selected_candidate_id
-                        ),
+                        "firstPassSelectedCandidateId": (decision.first_pass_selected_candidate_id),
                         "referenceTextSha256": metric.reference_text_sha256,
                         "firstPassTextSha256": metric.first_pass_text_sha256,
                         "proposedTextSha256": metric.proposed_text_sha256,
@@ -177,26 +173,18 @@ class PhoneticAblationReport:
                         "proposedExact": metric.proposed_exact,
                         "poolOracle": metric.pool_oracle,
                         "referenceOutsideFirstPass": metric.reference_outside_first_pass,
-                        "recoveredOutsideFirstPass": (
-                            metric.recovered_outside_first_pass
-                        ),
+                        "recoveredOutsideFirstPass": (metric.recovered_outside_first_pass),
                         "falseCorrection": metric.false_correction,
                         "correctedFirstPass": metric.corrected_first_pass,
-                        "introducedErrorCharacters": (
-                            metric.introduced_error_characters
-                        ),
+                        "introducedErrorCharacters": (metric.introduced_error_characters),
                         "correctedErrorCharacters": metric.corrected_error_characters,
                         "accepted": metric.accepted,
                         "critical": metric.critical,
                         "generationLatencyMs": metric.generation_latency_ms,
                         "selectionLatencyMs": metric.selection_latency_ms,
                         **(
-                            {
-                                "rankedCandidateIds": [
-                                    row.candidate_id for row in decision.ranked
-                                ]
-                            }
-                            if include_text
+                            {"rankedCandidateIds": [row.candidate_id for row in decision.ranked]}
+                            if include_ranked_candidate_ids
                             else {}
                         ),
                     }
@@ -242,7 +230,12 @@ class PhoneticAblationReport:
             "rawCandidateTextIncluded": False,
         }
 
-    def write(self, path: str | Path, *, include_text: bool = False) -> Path:
+    def write(
+        self,
+        path: str | Path,
+        *,
+        include_ranked_candidate_ids: bool = False,
+    ) -> Path:
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         handle, temporary_name = tempfile.mkstemp(
@@ -253,7 +246,7 @@ class PhoneticAblationReport:
         try:
             with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
                 json.dump(
-                    self.as_dict(include_text=include_text),
+                    self.as_dict(include_ranked_candidate_ids=include_ranked_candidate_ids),
                     stream,
                     ensure_ascii=False,
                     sort_keys=True,
@@ -270,6 +263,16 @@ class PhoneticAblationReport:
         return destination
 
 
+def _bootstrap_group_id(case, protocol: PhoneticAblationProtocol) -> str:
+    if protocol.bootstrap_group == "speaker":
+        return case.speaker_id
+    if protocol.bootstrap_group == "session":
+        return case.session_id
+    if protocol.bootstrap_group == "source":
+        return case.source_id
+    raise ValueError("unknown bootstrap group")
+
+
 def prepare_phonetic_ablation(
     manifest: PhoneticAblationManifest,
     protocol: PhoneticAblationProtocol,
@@ -280,8 +283,7 @@ def prepare_phonetic_ablation(
     if planner.utility_artifact.digest != manifest.utility_artifact_digest:
         raise ValueError("planner utility artifact differs from the registered manifest")
     pools = tuple(
-        planner.plan(PlanningCaseView.from_case(case), protocol=protocol)
-        for case in manifest.cases
+        planner.plan(PlanningCaseView.from_case(case), protocol=protocol) for case in manifest.cases
     )
     return PreparedPhoneticAblation(
         manifest_digest=manifest.digest,
@@ -313,7 +315,13 @@ def evaluate_prepared_phonetic_ablation(
             raise ValueError("prepared pool planning digest differs from the case")
         decisions = tuple(select_phonetic_arm(pool, arm) for arm in protocol.arms)
         metrics = tuple(
-            evaluate_case_arm(pool, decision, case.reference) for decision in decisions
+            evaluate_case_arm(
+                pool,
+                decision,
+                case.reference,
+                group_id=_bootstrap_group_id(case, protocol),
+            )
+            for decision in decisions
         )
         for row in metrics:
             metrics_by_arm[row.arm_name].append(row)
@@ -327,9 +335,7 @@ def evaluate_prepared_phonetic_ablation(
                 metrics=metrics,
             )
         )
-    aggregates = tuple(
-        aggregate_arm(tuple(metrics_by_arm[arm.name])) for arm in protocol.arms
-    )
+    aggregates = tuple(aggregate_arm(tuple(metrics_by_arm[arm.name])) for arm in protocol.arms)
     baseline = tuple(metrics_by_arm[protocol.baseline_arm])
     deltas = tuple(
         paired_bootstrap_error_delta(

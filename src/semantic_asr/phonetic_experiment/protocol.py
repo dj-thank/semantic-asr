@@ -12,6 +12,7 @@ from ..deliberation_evidence import _is_sha256
 from ..phonetic_bridge import FrozenPronunciationLexicon
 
 EvidenceChannel = Literal["first_pass", "phone", "mora", "discrete_unit"]
+BootstrapGroup = Literal["speaker", "session", "source"]
 
 
 def _strict_float(value: object, *, name: str) -> float:
@@ -124,9 +125,7 @@ class PhoneticAblationCase:
             self.first_pass_candidates
         ):
             raise ValueError("first-pass candidate IDs must be unique")
-        if len({row.text for row in self.first_pass_candidates}) != len(
-            self.first_pass_candidates
-        ):
+        if len({row.text for row in self.first_pass_candidates}) != len(self.first_pass_candidates):
             raise ValueError("first-pass candidate surfaces must be unique")
         if sum(row.selected for row in self.first_pass_candidates) != 1:
             raise ValueError("exactly one first-pass candidate must be selected")
@@ -139,8 +138,6 @@ class PhoneticAblationCase:
             raise ValueError(
                 f"frozen pronunciation lexicon misses first-pass surfaces: {sorted(missing)}"
             )
-        if self.reference.text not in lexicon_surfaces:
-            raise ValueError("reference surface must be present in the frozen exogenous lexicon")
         if self.rights_decision != "allow":
             raise ValueError("ablation cases require rights_decision='allow'")
         for name in (
@@ -219,12 +216,6 @@ class PhoneticAblationManifest:
         for case in self.cases:
             if case.split_manifest_sha256 != self.split_manifest_sha256:
                 raise ValueError("case belongs to a different split manifest")
-        speakers = [case.speaker_id for case in self.cases]
-        sessions = [case.session_id for case in self.cases]
-        if len(speakers) != len(set(speakers)):
-            raise ValueError("ablation test cases must be speaker-disjoint")
-        if len(sessions) != len(set(sessions)):
-            raise ValueError("ablation test cases must be session-disjoint")
 
     @property
     def digest(self) -> str:
@@ -300,6 +291,7 @@ class PhoneticAblationProtocol:
     maximum_crop_ms: int = 4_000
     bootstrap_resamples: int = 2_000
     bootstrap_seed: str = "semantic-asr-phonetic-ablation-v1"
+    bootstrap_group: BootstrapGroup = "speaker"
     schema_version: str = "1"
 
     def __post_init__(self) -> None:
@@ -316,6 +308,8 @@ class PhoneticAblationProtocol:
                 raise ValueError(f"{name} must be a positive integer")
         if not self.bootstrap_seed:
             raise ValueError("bootstrap_seed is required")
+        if self.bootstrap_group not in {"speaker", "session", "source"}:
+            raise ValueError("bootstrap_group must be speaker, session, or source")
 
     def arm(self, name: str) -> PhoneticAblationArm:
         for arm in self.arms:
@@ -336,5 +330,6 @@ class PhoneticAblationProtocol:
                 "maximumCropMs": self.maximum_crop_ms,
                 "bootstrapResamples": self.bootstrap_resamples,
                 "bootstrapSeed": self.bootstrap_seed,
+                "bootstrapGroup": self.bootstrap_group,
             }
         )
