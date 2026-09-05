@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import replace
 from pathlib import Path
 
@@ -95,6 +96,7 @@ def profile(
             score.provenance.input_condition_digest if condition is None else condition
         ),
         dataset_split_digest=dataset,
+        parameters={"slope": 0.0, "intercept": math.log(4.0)},
     )
 
 
@@ -143,6 +145,15 @@ def test_probability_requires_a_frozen_registered_profile() -> None:
         0.8
     )
 
+    forged_value = EvidenceScore(
+        0.7,
+        semantics=ScoreSemantics.PROBABILITY,
+        provenance=probability.provenance,
+        calibrated=True,
+    )
+    with pytest.raises(ValueError, match="does not match.*transform"):
+        forged_value.require_probability(registry(row), source_score=source)
+
 
 @pytest.mark.parametrize(
     ("field", "changed", "message"),
@@ -178,6 +189,8 @@ def test_probability_rejects_profile_applicability_mismatch(
         ),
         0.8,
     )
+    # Rebind the score's visible provenance to the original source while retaining
+    # the wrong registered profile receipt. Registry validation must reject it.
     forged = EvidenceScore(
         probability.value,
         semantics=ScoreSemantics.PROBABILITY,
@@ -189,7 +202,7 @@ def test_probability_rejects_profile_applicability_mismatch(
         calibrated=True,
     )
     with pytest.raises(ValueError, match=message):
-        forged.require_probability(registry(wrong))
+        forged.require_probability(registry(wrong), source_score=source)
 
 
 def test_probability_rejects_score_kind_and_calibration_split_mismatch() -> None:
@@ -211,7 +224,7 @@ def test_probability_rejects_score_kind_and_calibration_split_mismatch() -> None
         calibrated=True,
     )
     with pytest.raises(ValueError, match="split"):
-        tampered.require_probability(registry(row))
+        tampered.require_probability(registry(row), source_score=source)
 
 
 def test_bool_nan_inf_invalid_enum_and_mutable_metadata_are_rejected() -> None:
