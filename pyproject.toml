@@ -48,7 +48,7 @@ train = [
   "transformers>=4.51",
 ]
 rerank = [
-  "sentence-transformers>=5,<6",
+  "sentence-transformers>=5,<7",
   "torch>=2.4",
   "transformers>=5,<6",
 ]
