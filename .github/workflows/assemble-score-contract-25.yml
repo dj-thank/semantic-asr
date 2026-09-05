@@ -77,6 +77,45 @@ jobs:
               'legacy unregistered probability expectation',
           )
           path.write_text(text, encoding='utf-8')
+
+          path = Path('tests/test_multilevel_lattice.py')
+          text = path.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              'from semantic_asr.score_semantics import EvidenceScore, ScoreKind\n',
+              'from semantic_asr.score_contract import ScoreNormalization\nfrom semantic_asr.score_semantics import EvidenceScore, ScoreKind\n',
+              'explicit score normalization import',
+          )
+          text = replace_once(
+              text,
+              '                source="another-source",\n            )',
+              '                source="another-source",\n                normalization=ScoreNormalization.MEAN_FRAME,\n            )',
+              'wrong-source mean-frame score',
+          )
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('tests/test_score_contract_migration.py')
+          text = path.read_text(encoding='utf-8')
+          audit = '''
+
+
+def test_repository_defines_one_evidence_score_class() -> None:
+    source_root = Path(__file__).parents[1] / "src" / "semantic_asr"
+    definitions: list[tuple[str, int]] = []
+    for source_path in sorted(source_root.glob("*.py")):
+        for line_number, line in enumerate(
+            source_path.read_text(encoding="utf-8").splitlines(),
+            start=1,
+        ):
+            if line.startswith("class EvidenceScore"):
+                definitions.append((source_path.name, line_number))
+
+    assert len(definitions) == 1, definitions
+    assert definitions[0][0] == "score_contract.py"
+'''
+          if 'test_repository_defines_one_evidence_score_class' in text:
+              raise SystemExit('repository EvidenceScore source audit already exists')
+          path.write_text(text.rstrip() + audit + '\n', encoding='utf-8')
           PY
       - name: Export the canonical public API
         shell: bash
