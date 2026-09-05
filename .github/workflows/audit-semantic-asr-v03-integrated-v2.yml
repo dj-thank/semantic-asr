@@ -1,0 +1,414 @@
+name: Audit integrated Semantic ASR v0.3 recovery tree
+
+on:
+  push:
+    branches:
+      - codex/semantic-asr-v03-integrated-audit-v2
+    paths:
+      - .github/workflows/audit-semantic-asr-v03-integrated-v2.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+  checks: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PYTHONUTF8: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/semantic-asr-v03-integrated-audit-v2
+          fetch-depth: 0
+
+      - name: Synchronize the current integrated head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin codex/semantic-asr-v03-integrated-research
+          git merge --ff-only origin/codex/semantic-asr-v03-integrated-research || {
+            echo 'The integrated branch diverged from the audit branch; refusing to validate a stale tree.' >&2
+            exit 1
+          }
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Reconcile unfinished integrated sources when needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/semantic-asr-v03-audit
+          echo reconcile > /tmp/semantic-asr-v03-audit/current-stage
+          if [ ! -f docs/SEMANTIC_ASR_V03_INTEGRATED_VALIDATION.json ]; then
+            for script in \
+              scripts/_reconcile_v03_document.py \
+              scripts/_reconcile_v03_phonetic.py \
+              scripts/_reconcile_v03_export.py \
+              scripts/_reconcile_v03_public.py; do
+              if [ -f "$script" ]; then
+                python "$script" 2>&1 | tee -a /tmp/semantic-asr-v03-audit/reconcile.log
+              fi
+            done
+          fi
+
+      - name: Remove inherited one-shot workflow files
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/finalize-document-joint.yml \
+            .github/workflows/finalize-document-joint-v3.yml \
+            .github/workflows/validate-document-joint-v03.yml \
+            .github/workflows/reconcile-document-joint-v03.yml \
+            .github/workflows/repair-document-joint-v4.yml \
+            .github/workflows/stabilize-document-lattice-release-v03.yml \
+            .github/workflows/promote-document-lattice-v03.yml \
+            .github/workflows/finalize-document-ranker-v03.yml \
+            .github/workflows/finalize-joint-phonetic-training-v03.yml \
+            .github/workflows/finalize-phonetic-feature-export-v03.yml \
+            .github/workflows/finalize-semantic-asr-v03-integrated.yml \
+            .github/workflows/format-pr17.yml
+
+      - name: Install dependency-free validation environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo install-base > /tmp/semantic-asr-v03-audit/current-stage
+          python -m pip install --upgrade pip 2>&1 | tee /tmp/semantic-asr-v03-audit/install-base.log
+          python -m pip install build 2>&1 | tee -a /tmp/semantic-asr-v03-audit/install-base.log
+          python -m pip install -e '.[dev]' 2>&1 | tee -a /tmp/semantic-asr-v03-audit/install-base.log
+
+      - name: Canonicalize and statically validate the source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo static > /tmp/semantic-asr-v03-audit/current-stage
+          python -m ruff format src tests scripts examples 2>&1 | tee /tmp/semantic-asr-v03-audit/static.log
+          python -m ruff check --fix src tests scripts examples 2>&1 | tee -a /tmp/semantic-asr-v03-audit/static.log
+          python -m ruff format src tests scripts examples 2>&1 | tee -a /tmp/semantic-asr-v03-audit/static.log
+          python -m ruff format --check src tests scripts examples 2>&1 | tee -a /tmp/semantic-asr-v03-audit/static.log
+          python -m ruff check src tests scripts examples 2>&1 | tee -a /tmp/semantic-asr-v03-audit/static.log
+          python -m compileall -q src tests scripts examples 2>&1 | tee -a /tmp/semantic-asr-v03-audit/static.log
+          git diff --check 2>&1 | tee -a /tmp/semantic-asr-v03-audit/static.log
+
+      - name: Run the complete dependency-free suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo dependency-free > /tmp/semantic-asr-v03-audit/current-stage
+          python -m pytest -q --junitxml=/tmp/semantic-asr-v03-audit/dependency-free.xml \
+            2>&1 | tee /tmp/semantic-asr-v03-audit/dependency-free.log
+
+      - name: Exercise all model-free demos, examples, and CLIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo discovery > /tmp/semantic-asr-v03-audit/current-stage
+          {
+            semantic-asr demo --output runs/v03-audit-demo.json
+            semantic-asr research-smoke --output runs/v03-audit-research-smoke.json
+            semantic-asr cascade --help
+            semantic-asr train-ranker --help
+            semantic-asr transcribe-v2 --help
+            python scripts/benchmark_document_deliberation.py --help
+            python scripts/train_document_ranker.py --help
+            python scripts/train_joint_phonetic_head.py --help
+            python scripts/export_phonetic_features.py --help
+            python examples/multilevel_deliberation.py
+            python examples/document_joint_deliberation.py
+          } 2>&1 | tee /tmp/semantic-asr-v03-audit/discovery.log
+
+      - name: Install optional CPU numerical, audio, and training dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo install-optional > /tmp/semantic-asr-v03-audit/current-stage
+          python -m pip install 'torch>=2.4' --index-url https://download.pytorch.org/whl/cpu \
+            2>&1 | tee /tmp/semantic-asr-v03-audit/install-optional.log
+          python -m pip install 'numpy>=1.26' 'safetensors>=0.4' 'soundfile>=0.12' \
+            2>&1 | tee -a /tmp/semantic-asr-v03-audit/install-optional.log
+
+      - name: Run the full optional CPU suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo optional-cpu > /tmp/semantic-asr-v03-audit/current-stage
+          python -m pytest -q --junitxml=/tmp/semantic-asr-v03-audit/optional-cpu.xml \
+            2>&1 | tee /tmp/semantic-asr-v03-audit/optional-cpu.log
+          python - <<'PY'
+          import torch
+          assert torch.empty(0).device.type == 'cpu'
+          print(torch.__version__)
+          PY
+
+      - name: Build and inspect a wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo wheel-build > /tmp/semantic-asr-v03-audit/current-stage
+          rm -rf dist build
+          python -m build --wheel 2>&1 | tee /tmp/semantic-asr-v03-audit/wheel-build.log
+          python - <<'PY'
+          import email
+          import zipfile
+          from pathlib import Path
+
+          wheel = next(Path('dist').glob('*.whl'))
+          with zipfile.ZipFile(wheel) as archive:
+              metadata_name = next(
+                  name for name in archive.namelist()
+                  if name.endswith('.dist-info/METADATA')
+              )
+              metadata = email.message_from_bytes(archive.read(metadata_name))
+          extras = set(metadata.get_all('Provides-Extra', []))
+          assert 'train' in extras, extras
+          assert 'phonetic-export' in extras, extras
+          PY
+
+      - name: Validate the clean wheel and integrated public API
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo clean-wheel > /tmp/semantic-asr-v03-audit/current-stage
+          rm -rf /tmp/semantic-asr-v03-wheel
+          python -m venv /tmp/semantic-asr-v03-wheel
+          /tmp/semantic-asr-v03-wheel/bin/python -m pip install dist/*.whl \
+            2>&1 | tee /tmp/semantic-asr-v03-audit/clean-wheel.log
+          /tmp/semantic-asr-v03-wheel/bin/python - <<'PY'
+          import semantic_asr
+
+          required = (
+              'DocumentDeliberatedResult',
+              'DocumentRankerArtifact',
+              'DocumentRankerGlobalScorer',
+              'JointPhoneticPosteriorExtractor',
+              'JapanesePronunciationPolicy',
+              'PhoneticFeatureExporter',
+              'apply_joint_document_deliberation',
+              'train_document_ranker',
+              'train_joint_phonetic_head',
+          )
+          for name in required:
+              assert hasattr(semantic_asr, name), name
+              assert name in semantic_asr.__all__, name
+          PY
+          /tmp/semantic-asr-v03-wheel/bin/semantic-asr demo \
+            --output runs/v03-audit-wheel-demo.json
+          /tmp/semantic-asr-v03-wheel/bin/semantic-asr research-smoke \
+            --output runs/v03-audit-wheel-smoke.json
+          /tmp/semantic-asr-v03-wheel/bin/python -m pip check
+
+      - name: Write a second independent integrated validation ledger
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo ledger > /tmp/semantic-asr-v03-audit/current-stage
+          python - <<'PY'
+          import hashlib
+          import json
+          import subprocess
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          def counts(path: str):
+              root = ET.parse(path).getroot()
+              suites = [root] if root.tag == 'testsuite' else list(root.findall('testsuite'))
+              return {
+                  key: sum(int(suite.attrib.get(key, 0)) for suite in suites)
+                  for key in ('tests', 'failures', 'errors', 'skipped')
+              }
+
+          wheel = next(Path('dist').glob('*.whl'))
+          payload = {
+              'schemaVersion': '2',
+              'inputHead': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'validatedWorkingTree': subprocess.check_output(
+                  ['git', 'write-tree'], text=True
+              ).strip(),
+              'dependencyFreePytest': counts(
+                  '/tmp/semantic-asr-v03-audit/dependency-free.xml'
+              ),
+              'optionalCpuPytest': counts(
+                  '/tmp/semantic-asr-v03-audit/optional-cpu.xml'
+              ),
+              'ruffFormat': 'passed',
+              'ruffLint': 'passed',
+              'compileall': 'passed',
+              'modelFreeDemos': 'passed',
+              'documentRankerCli': 'passed',
+              'jointPhoneticTrainingCli': 'passed',
+              'phoneticFeatureExportCli': 'passed',
+              'documentJointExample': 'passed',
+              'optionalCpuTrainingAndRuntime': 'passed',
+              'resumableFeatureExport': 'passed',
+              'soundfileMonoBoundary': 'passed',
+              'wheelBuild': 'passed',
+              'cleanWheelImport': 'passed',
+              'wheelSha256': hashlib.sha256(wheel.read_bytes()).hexdigest(),
+              'auditBranch': 'codex/semantic-asr-v03-integrated-audit-v2',
+              'promotionTarget': 'codex/semantic-asr-v03-integrated-research',
+              'supersedesPullRequests': [18, 19, 20, 21],
+              'basePullRequest': 17,
+              'claimBoundary': (
+                  'independent integrated software validation only; no Japanese CER, '
+                  'PER/MER, risk-coverage, latency, energy, or production-promotion claim'
+              ),
+          }
+          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+          payload['digest'] = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+          Path('docs/SEMANTIC_ASR_V03_INTEGRATED_AUDIT_V2.json').write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Commit the validated tree and remove audit-only sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            scripts/_reconcile_v03_document.py \
+            scripts/_reconcile_v03_phonetic.py \
+            scripts/_reconcile_v03_export.py \
+            scripts/_reconcile_v03_public.py \
+            .github/workflows/audit-semantic-asr-v03-integrated-v2.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Record independent integrated v0.3 audit validation'
+          git push origin HEAD:codex/semantic-asr-v03-integrated-audit-v2
+          git fetch origin codex/semantic-asr-v03-integrated-research
+          git merge-base --is-ancestor \
+            origin/codex/semantic-asr-v03-integrated-research HEAD
+          git push origin HEAD:codex/semantic-asr-v03-integrated-research
+
+      - name: Wait for permanent repository checks on the promoted head
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha=$(git rev-parse HEAD)
+          success=0
+          for attempt in $(seq 1 100); do
+            payload=$(gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/dj-thank/semantic-asr/commits/$head_sha/check-runs?per_page=100")
+            total=$(printf '%s' "$payload" | jq '.total_count')
+            pending=$(printf '%s' "$payload" | jq '[.check_runs[] | select(.status != "completed")] | length')
+            failed=$(printf '%s' "$payload" | jq '[.check_runs[] | select(.status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))] | length')
+            names=$(printf '%s' "$payload" | jq -r '[.check_runs[].name] | join("\n")')
+            required=1
+            for marker in \
+              'Core (ubuntu-latest, Python 3.11)' \
+              'Core (ubuntu-latest, Python 3.12)' \
+              'Core (windows-latest, Python 3.12)' \
+              'Optional training and acoustic verifier (CPU)' \
+              'Clean wheel installation'; do
+              if ! printf '%s\n' "$names" | grep -Fq "$marker"; then
+                required=0
+              fi
+            done
+            if [ "$total" -ge 5 ] && [ "$pending" -eq 0 ] \
+              && [ "$failed" -eq 0 ] && [ "$required" -eq 1 ]; then
+              success=1
+              break
+            fi
+            sleep 15
+          done
+          if [ "$success" != "1" ]; then
+            echo 'Permanent checks did not converge to success; PR 22 remains draft.' >&2
+            exit 1
+          fi
+
+      - name: Mark PR 22 ready and close superseded intermediate drafts
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha=$(git rev-parse HEAD)
+          counts=$(python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(
+              Path('docs/SEMANTIC_ASR_V03_INTEGRATED_AUDIT_V2.json').read_text()
+          )
+          dependency = payload['dependencyFreePytest']
+          optional = payload['optionalCpuPytest']
+          print(
+              f"dependency-free {dependency['tests']} tests/{dependency['skipped']} skipped; "
+              f"optional CPU {optional['tests']} tests/{optional['skipped']} skipped"
+          )
+          PY
+          )
+          gh pr comment 22 --repo dj-thank/semantic-asr --body "Independent recovery audit passed on \\`$head_sha\\`.
+
+- $counts
+- Ruff format/lint and compileall: passed
+- model-free demos and document-wide example: passed
+- document-ranker, joint phone/mora training, and feature-export CLIs: passed
+- optional CPU training/runtime and SoundFile boundary tests: passed
+- wheel build, clean install, and permanent repository checks: passed
+
+This validates software and reproducibility contracts only. No Japanese quality or default-profile promotion claim is made."
+          draft=$(gh api repos/dj-thank/semantic-asr/pulls/22 --jq '.draft')
+          if [ "$draft" = "true" ]; then
+            gh pr ready 22 --repo dj-thank/semantic-asr
+          fi
+          for old in 18 19 20 21; do
+            state=$(gh api "repos/dj-thank/semantic-asr/pulls/$old" --jq '.state' 2>/dev/null || true)
+            if [ "$state" = "open" ]; then
+              gh pr close "$old" --repo dj-thank/semantic-asr --comment "Superseded by the independently validated integrated Semantic ASR v0.3 PR #22."
+            fi
+          done
+
+      - name: Preserve a compact failure diagnostic on the audit branch
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          stage=$(cat /tmp/semantic-asr-v03-audit/current-stage 2>/dev/null || echo unknown)
+          git reset --hard HEAD
+          git clean -fdx
+          mkdir -p docs
+          STAGE="$stage" python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          log_dir = Path('/tmp/semantic-asr-v03-audit')
+          summaries = {}
+          for path in sorted(log_dir.glob('*.log')):
+              lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+              summaries[path.name] = lines[-120:]
+          payload = {
+              'schemaVersion': '1',
+              'stage': os.environ['STAGE'],
+              'inputHead': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'logTails': summaries,
+              'claimBoundary': 'failure diagnostic only',
+          }
+          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+          payload['digest'] = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+          Path('docs/SEMANTIC_ASR_V03_INTEGRATED_AUDIT_FAILURE.json').write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/SEMANTIC_ASR_V03_INTEGRATED_AUDIT_FAILURE.json
+          git commit -m 'Record integrated v0.3 audit failure diagnostic'
+          git push origin HEAD:codex/semantic-asr-v03-integrated-audit-v2
