@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from _document_experiment_fixture import AUDIO, RIGHTS, SPLIT, fake_plan, first_pass
+
 from semantic_asr.document_experiment.ngram_scorer import DocumentLanguageScore
 from semantic_asr.document_experiment.promotion import (
     DocumentContextPromotionPolicy,
@@ -17,8 +19,6 @@ from semantic_asr.document_experiment.runner import (
     prepare_document_experiment,
     run_document_context_experiment,
 )
-
-from _document_experiment_fixture import AUDIO, RIGHTS, SPLIT, fake_plan, first_pass
 
 
 class ArmAwareScorer:
@@ -67,9 +67,7 @@ def fixture_manifest() -> DocumentExperimentManifest:
         source_audio_sha256=AUDIO,
         text="".join(windows),
         window_texts=windows,
-        critical_tokens=(
-            CriticalReferenceToken(kind="negation", text="ません"),
-        ),
+        critical_tokens=(CriticalReferenceToken(kind="negation", text="ません"),),
     )
     case = DocumentExperimentCase(
         case_id="case",
@@ -160,7 +158,9 @@ def test_promotion_rejects_gain_shared_by_shuffled_control() -> None:
     )
 
     assert not decision.passed
-    assert any(check.name == "ordered-vs-shuffled" and not check.passed for check in decision.checks)
+    assert any(
+        check.name == "ordered-vs-shuffled" and not check.passed for check in decision.checks
+    )
 
 
 def test_promotion_passes_when_ordered_arm_uniquely_improves_without_regression() -> None:

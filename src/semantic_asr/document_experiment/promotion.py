@@ -185,10 +185,7 @@ def evaluate_document_context_promotion(
         ),
         PromotionCheck(
             name="false-correction-regression",
-            passed=(
-                false_correction_regression
-                <= policy.maximum_false_correction_regression
-            ),
+            passed=(false_correction_regression <= policy.maximum_false_correction_regression),
             observed=false_correction_regression,
             required=policy.maximum_false_correction_regression,
             detail="context-induced false-correction windows regressed",
