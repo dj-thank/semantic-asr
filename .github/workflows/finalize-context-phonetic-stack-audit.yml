@@ -1,0 +1,208 @@
+name: Complete context and phonetic stack audit
+
+on:
+  push:
+    branches:
+      - codex/context-phonetic-stack-audit-38
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: semantic-asr-context-phonetic-stack-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/context-phonetic-stack-audit-38
+          fetch-depth: 0
+      - name: Merge the latest complete stack in dependency order
+        shell: bash
+        run: |
+          git fetch origin \
+            codex/document-context-experiment-v1-38 \
+            codex/audio-phonetic-ctc-v1-38 \
+            codex/audio-phonetic-ctc-v2-38 \
+            codex/japanese-phonetic-labels-v3-38 \
+            codex/phonetic-proposal-ablation-v4-38
+          git merge --no-edit origin/codex/document-context-experiment-v1-38
+          git merge --no-edit origin/codex/audio-phonetic-ctc-v1-38
+          git merge --no-edit origin/codex/audio-phonetic-ctc-v2-38
+          git merge --no-edit origin/codex/japanese-phonetic-labels-v3-38
+          git merge --no-edit origin/codex/phonetic-proposal-ablation-v4-38
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install dependency-free validation environment
+        run: python -m pip install -e '.[dev]'
+      - name: Normalize source and run the complete dependency-free suite
+        id: base
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m ruff format src tests scripts
+          python -m ruff check --fix src tests scripts
+          python -m ruff format src tests scripts
+          python -m ruff format --check src tests scripts
+          python -m ruff check src tests scripts
+          python -m compileall -q src tests scripts
+          python -m pytest -q 2>&1 | tee /tmp/base.log
+          semantic-asr demo --output runs/stack-audit-demo.json
+          semantic-asr research-smoke --output runs/stack-audit-research-smoke.json
+          git diff --check
+      - name: Install CPU PyTorch and NumPy
+        run: |
+          python -m pip install 'torch>=2.4' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'numpy>=1.26'
+      - name: Run complete suite with every optional CPU path enabled
+        id: optional
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q 2>&1 | tee /tmp/optional.log
+      - name: Build wheel and verify clean environment imports
+        id: wheel
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pip install build
+          python -m build --wheel
+          python -m venv /tmp/semantic-asr-stack-wheel
+          /tmp/semantic-asr-stack-wheel/bin/python -m pip install dist/*.whl
+          /tmp/semantic-asr-stack-wheel/bin/python - <<'PY' 2>&1 | tee /tmp/wheel.log
+          import semantic_asr
+          import semantic_asr.document_experiment as document_experiment
+          import semantic_asr.phonetic_experiment as phonetic_experiment
+          import semantic_asr.phonetic_runtime as phonetic_runtime
+
+          required_document = {
+              "DocumentExperimentProtocol",
+              "DocumentExperimentRegistration",
+          }
+          required_runtime = {
+              "DualCTCPosteriorRuntime",
+              "JapanesePhoneticLabelProfile",
+              "SourceAudioPhoneticProposalProvider",
+          }
+          required_phonetic = {
+              "PhoneticAblationProtocol",
+              "PhoneticExperimentRegistration",
+              "PhoneticPromotionPolicy",
+          }
+          assert required_document.issubset(set(document_experiment.__all__))
+          assert required_runtime.issubset(set(phonetic_runtime.__all__))
+          assert required_phonetic.issubset(set(phonetic_experiment.__all__))
+          assert semantic_asr.__version__
+          print("document", sorted(required_document))
+          print("runtime", sorted(required_runtime))
+          print("phonetic", sorted(required_phonetic))
+          PY
+          /tmp/semantic-asr-stack-wheel/bin/semantic-asr demo --output /tmp/stack-wheel-demo.json
+          /tmp/semantic-asr-stack-wheel/bin/semantic-asr research-smoke --output /tmp/stack-wheel-smoke.json
+      - name: Remove one-shot migration and finalizer files after success
+        if: success()
+        shell: bash
+        run: |
+          rm -f .github/workflows/finalize-context-experiment*.yml
+          rm -f .github/workflows/finalize-phonetic-ctc-v1.yml
+          rm -f .github/workflows/finalize-phonetic-ctc-v2.yml
+          rm -f .github/workflows/finalize-japanese-phonetic-labels-v3.yml
+          rm -f .github/workflows/finalize-phonetic-ablation-v4.yml
+          rm -f scripts/finalize_phonetic_ctc_v2.py
+          rm -f scripts/finalize_phonetic_ablation_v4.py
+      - name: Record successful combined audit
+        if: success()
+        shell: bash
+        run: |
+          base_summary=$(tail -n 1 /tmp/base.log)
+          optional_summary=$(tail -n 1 /tmp/optional.log)
+          wheel_summary=$(tail -n 6 /tmp/wheel.log)
+          cat > docs/CONTEXT_PHONETIC_STACK_VALIDATION.md <<EOF
+          # Context and phonetic stack validation ledger
+
+          ## Combined exact-head audit
+
+          Dependency-free suite:
+
+          \`\`\`text
+          $base_summary
+          \`\`\`
+
+          Complete suite with CPU PyTorch and NumPy:
+
+          \`\`\`text
+          $optional_summary
+          \`\`\`
+
+          Clean-wheel API and CLI checks:
+
+          \`\`\`text
+          $wheel_summary
+          \`\`\`
+
+          The exact combined head passed formatting, lint, compileall, the complete model-free
+          suite, every optional CPU PyTorch test, deterministic demos, wheel build, isolated wheel
+          installation, and public API checks for document experiments, source-audio phone/mora
+          runtime, deterministic Japanese labeling, and phonetic proposal ablations.
+
+          This ledger validates software integration only. It is not a Japanese ASR accuracy or
+          deployment-promotion claim.
+          EOF
+          rm -f docs/CONTEXT_PHONETIC_STACK_FAILURE.md
+          rm -f .github/workflows/finalize-context-phonetic-stack-audit.yml
+      - name: Record combined audit failure
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '# Context and phonetic stack audit failure'
+            echo
+            echo '## Dependency-free suite'
+            echo '```text'
+            cat /tmp/base.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo '## Complete CPU suite'
+            echo '```text'
+            cat /tmp/optional.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo '## Clean-wheel check'
+            echo '```text'
+            cat /tmp/wheel.log 2>/dev/null || true
+            echo '```'
+          } > docs/CONTEXT_PHONETIC_STACK_FAILURE.md
+      - name: Commit the exact combined state
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Complete context and phonetic stack audit'
+          git push origin HEAD:codex/context-phonetic-stack-audit-38
+      - name: Mark integration PR ready only after success
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          pr=$(gh pr list --head codex/context-phonetic-stack-audit-38 --state open --json number --jq '.[0].number')
+          if [ -z "$pr" ]; then
+            exit 0
+          fi
+          gh pr ready "$pr" || true
+          base_summary=$(tail -n 1 /tmp/base.log)
+          optional_summary=$(tail -n 1 /tmp/optional.log)
+          gh pr comment "$pr" --body "Combined context + phonetic stack audit passed. Dependency-free: **$base_summary**. Full CPU optional suite: **$optional_summary**. The PR is ready for review. This is software integration validation, not a Japanese accuracy claim."
