@@ -1,4 +1,4 @@
-"""Typed, held-out-normalized evidence for multi-level ASR deliberation."""
+"""Typed held-out-normalized evidence for multi-level ASR deliberation."""
 
 from __future__ import annotations
 
@@ -7,7 +7,12 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from .contracts import sha256_json
-from .score_semantics import EvidenceScore, ScoreKind
+from .score_contract import (
+    EvidenceScore,
+    ScoreNormalization,
+    ScoreSemantics,
+    require_sha256,
+)
 
 UtilityChannel = Literal[
     "first_pass",
@@ -37,8 +42,6 @@ ResolutionMode = Literal[
 ]
 DecisionStatus = Literal["accepted", "provisional"]
 
-# ``mora`` is reserved for an audio-to-mora posterior head. Existing candidate-derived mora
-# features are represented by ``mora_shadow`` and therefore cannot authenticate generated text.
 AUDIO_CHANNELS = frozenset({"asr_acoustic", "phone", "mora", "discrete_unit", "cross_model"})
 INDEPENDENT_AUDIO_CHANNELS = frozenset({"phone", "mora", "discrete_unit"})
 GENERATED_ORIGINS = frozenset({"phonetic-proposal", "context-proposal", "guarded-generation"})
@@ -57,37 +60,20 @@ def _strict_float(value: object, *, name: str) -> float:
 
 
 def _is_sha256(value: str) -> bool:
-    if len(value) != 64:
-        return False
     try:
-        int(value, 16)
-    except ValueError:
+        require_sha256(value, name="digest")
+    except (TypeError, ValueError):
         return False
     return True
 
 
 def _evidence_digest(score: EvidenceScore) -> str:
-    return sha256_json(
-        {
-            "value": score.value,
-            "kind": score.kind.value,
-            "source": score.source,
-            "calibrated": score.calibrated,
-            "calibrationDigest": score.calibration_digest,
-            "higherIsBetter": score.higher_is_better,
-            "metadata": score.metadata,
-        }
-    )
+    return score.digest
 
 
 @dataclass(frozen=True, slots=True)
 class BoundedUtility:
-    """Dimensionless held-out-normalized path utility, never a correctness probability.
-
-    ``factor_weight`` allocates a finite evidence budget across local spans. A whole-hypothesis
-    score projected into ten spans must not count ten times; the builder makes the corresponding
-    factor weights sum to at most one for each projected evidence family.
-    """
+    """Dimensionless held-out-normalized path utility, never a probability."""
 
     channel: UtilityChannel
     value: float
@@ -145,35 +131,117 @@ class BoundedUtility:
         )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class UtilityCalibrationProfile:
     """Frozen affine+tanh mapping fitted on held-out data.
 
-    The mapping only puts heterogeneous scores on a bounded utility scale. It does not turn a log
-    likelihood, raw score or preference into a correctness probability.
+    This profile creates a bounded ranking utility, not a correctness probability.
+    Both the score semantics and normalization must match.
     """
 
     channel: UtilityChannel
     score_source: str
-    score_kind: ScoreKind
+    score_semantics: ScoreSemantics
+    score_normalization: ScoreNormalization
     center: float
     scale: float
     fitted_manifest_sha256: str
     revision: str
-    higher_is_better: bool = True
-    schema_version: str = "1"
+    higher_is_better: bool
+    schema_version: str
 
-    def __post_init__(self) -> None:
-        center = _strict_float(self.center, name="calibration center")
-        scale = _strict_float(self.scale, name="calibration scale")
-        if scale <= 0:
+    def __init__(
+        self,
+        *,
+        channel: UtilityChannel,
+        score_source: str,
+        score_semantics: ScoreSemantics | str | None = None,
+        score_normalization: ScoreNormalization | str | None = None,
+        center: float,
+        scale: float,
+        fitted_manifest_sha256: str,
+        revision: str,
+        higher_is_better: bool = True,
+        schema_version: str = "2",
+        score_kind: object | None = None,
+    ) -> None:
+        if score_semantics is not None and score_kind is not None:
+            raise TypeError("pass score_semantics or legacy score_kind, not both")
+        if score_kind is not None:
+            raw_kind = str(getattr(score_kind, "value", score_kind))
+            if raw_kind == "log_likelihood":
+                if score_normalization is None:
+                    if score_source.startswith(("ctc-phone:", "ctc-mora:")):
+                        score_normalization = ScoreNormalization.MEAN_FRAME
+                    else:
+                        raise ValueError(
+                            "legacy log_likelihood utility profiles require explicit normalization"
+                        )
+                normalization = ScoreNormalization(score_normalization)
+                if normalization == ScoreNormalization.SEQUENCE:
+                    semantics = ScoreSemantics.CUMULATIVE_LOG_LIKELIHOOD
+                elif normalization in {
+                    ScoreNormalization.MEAN_FRAME,
+                    ScoreNormalization.MEAN_TOKEN,
+                    ScoreNormalization.TOKEN_POWER,
+                }:
+                    semantics = ScoreSemantics.AVERAGE_LOG_LIKELIHOOD
+                elif normalization == ScoreNormalization.PATH_NORMALIZED:
+                    semantics = ScoreSemantics.LOG_PROBABILITY
+                else:
+                    raise ValueError("invalid log-likelihood normalization")
+            else:
+                mapping = {
+                    "raw": ScoreSemantics.UNCALIBRATED_SCORE,
+                    "logit": ScoreSemantics.LOGIT,
+                    "preference": ScoreSemantics.PREFERENCE,
+                }
+                try:
+                    semantics = mapping[raw_kind]
+                except KeyError as exc:
+                    raise ValueError(f"unsupported legacy score kind: {raw_kind!r}") from exc
+                normalization = ScoreNormalization(score_normalization or ScoreNormalization.NONE)
+        else:
+            if score_semantics is None:
+                raise TypeError("score_semantics is required")
+            semantics = ScoreSemantics(score_semantics)
+            normalization = ScoreNormalization(score_normalization or ScoreNormalization.NONE)
+        center_value = _strict_float(center, name="calibration center")
+        scale_value = _strict_float(scale, name="calibration scale")
+        if scale_value <= 0:
             raise ValueError("calibration scale must be positive")
-        if not self.score_source or not self.revision:
+        if not score_source or not revision:
             raise ValueError("calibration source and revision are required")
-        if not _is_sha256(self.fitted_manifest_sha256):
-            raise ValueError("fitted_manifest_sha256 must be a SHA-256 value")
-        object.__setattr__(self, "center", center)
-        object.__setattr__(self, "scale", scale)
+        require_sha256(fitted_manifest_sha256, name="fitted_manifest_sha256")
+        if not isinstance(higher_is_better, bool):
+            raise TypeError("higher_is_better must be bool")
+        object.__setattr__(self, "channel", channel)
+        object.__setattr__(self, "score_source", score_source)
+        object.__setattr__(self, "score_semantics", semantics)
+        object.__setattr__(self, "score_normalization", normalization)
+        object.__setattr__(self, "center", center_value)
+        object.__setattr__(self, "scale", scale_value)
+        object.__setattr__(self, "fitted_manifest_sha256", fitted_manifest_sha256)
+        object.__setattr__(self, "revision", revision)
+        object.__setattr__(self, "higher_is_better", higher_is_better)
+        object.__setattr__(self, "schema_version", schema_version)
+
+    @property
+    def score_kind(self) -> str:
+        """Legacy coarse view retained for serialized compatibility."""
+
+        if self.score_semantics in {
+            ScoreSemantics.CUMULATIVE_LOG_LIKELIHOOD,
+            ScoreSemantics.AVERAGE_LOG_LIKELIHOOD,
+            ScoreSemantics.LOG_PROBABILITY,
+        }:
+            return "log_likelihood"
+        mapping = {
+            ScoreSemantics.UNCALIBRATED_SCORE: "raw",
+            ScoreSemantics.LOGIT: "logit",
+            ScoreSemantics.PREFERENCE: "preference",
+        }
+        return mapping.get(self.score_semantics, self.score_semantics.value)
 
     @property
     def digest(self) -> str:
@@ -182,13 +250,15 @@ class UtilityCalibrationProfile:
                 "schemaVersion": self.schema_version,
                 "channel": self.channel,
                 "scoreSource": self.score_source,
-                "scoreKind": self.score_kind.value,
+                "scoreSemantics": self.score_semantics.value,
+                "scoreNormalization": self.score_normalization.value,
                 "center": self.center,
                 "scale": self.scale,
                 "fittedManifestSha256": self.fitted_manifest_sha256,
                 "revision": self.revision,
                 "higherIsBetter": self.higher_is_better,
                 "transform": "tanh-affine-v1",
+                "outputSemantics": ScoreSemantics.BOUNDED_UTILITY.value,
             }
         )
 
@@ -198,10 +268,12 @@ class UtilityCalibrationProfile:
         *,
         factor_weight: float = 1.0,
     ) -> BoundedUtility:
-        if score.source != self.score_source:
+        if score.provenance.scorer != self.score_source:
             raise ValueError("score source does not match the frozen calibration profile")
-        if score.kind != self.score_kind:
-            raise ValueError("score kind does not match the frozen calibration profile")
+        if score.semantics != self.score_semantics:
+            raise ValueError("score semantics do not match the frozen calibration profile")
+        if score.provenance.normalization != self.score_normalization:
+            raise ValueError("score normalization does not match the frozen calibration profile")
         if score.higher_is_better != self.higher_is_better:
             raise ValueError("score direction does not match the frozen calibration profile")
         oriented = float(score.value) if self.higher_is_better else -float(score.value)

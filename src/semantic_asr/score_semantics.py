@@ -1,17 +1,30 @@
+"""Compatibility import path for the canonical Semantic ASR score contract.
+
+New code should import from :mod:`semantic_asr.score_contract` or
+:mod:`semantic_asr.score_types`. ``EvidenceScore`` is the exact same class from
+the canonical module; this file no longer defines a competing numeric type.
+"""
+
 from __future__ import annotations
 
-import math
-from dataclasses import asdict, dataclass
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any
+
+from .score_contract import (
+    CalibrationProfileRegistry,
+    EvidenceScore,
+    ScoreMigrationError,
+    ScoreNormalization,
+    ScoreSemantics,
+)
 
 
 class ScoreKind(StrEnum):
-    """Semantic meaning of a numerical score.
+    """Legacy coarse score names.
 
-    Values intentionally describe *what a number means*, not which component
-    produced it. Raw scores and preferences must be calibrated before they are
-    presented as probabilities.
+    ``LOG_LIKELIHOOD`` is intentionally insufficient by itself. Callers must
+    declare whether the value is cumulative, mean-token, mean-frame, or
+    path-normalized when constructing/migrating that legacy form.
     """
 
     RAW = "raw"
@@ -21,68 +34,21 @@ class ScoreKind(StrEnum):
     PREFERENCE = "preference"
 
 
-@dataclass(frozen=True, slots=True)
-class EvidenceScore:
-    value: float
-    kind: ScoreKind
-    source: str
-    calibrated: bool = False
-    calibration_digest: str | None = None
-    higher_is_better: bool = True
-    metadata: dict[str, Any] | None = None
-
-    def __post_init__(self) -> None:
-        if not self.source:
-            raise ValueError("score source is required")
-        if not math.isfinite(float(self.value)):
-            raise ValueError("score value must be finite")
-        if self.kind == ScoreKind.PROBABILITY and not 0.0 <= float(self.value) <= 1.0:
-            raise ValueError("probability score must be in [0, 1]")
-        if self.calibration_digest and not self.calibrated:
-            raise ValueError("calibration digest requires calibrated=True")
-        if self.calibrated and self.kind != ScoreKind.PROBABILITY:
-            raise ValueError("only probability scores may be marked calibrated")
-
-    @property
-    def is_probability(self) -> bool:
-        return self.kind == ScoreKind.PROBABILITY
-
-    @property
-    def usable_as_probability(self) -> bool:
-        return self.is_probability and self.calibrated
-
-    def require_probability(self) -> float:
-        if not self.usable_as_probability:
-            raise ValueError(
-                f"{self.source} is {self.kind.value}, not a held-out calibrated probability"
-            )
-        return float(self.value)
-
-    def as_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
-        payload["kind"] = self.kind.value
-        return payload
-
-    @classmethod
-    def from_dict(cls, row: dict[str, Any]) -> EvidenceScore:
-        values = dict(row)
-        values["kind"] = ScoreKind(values["kind"])
-        if values.get("metadata") is not None:
-            values["metadata"] = dict(values["metadata"])
-        return cls(**values)
-
-
 def probability_score(
     value: float,
     *,
     source: str,
-    calibration_digest: str,
-    metadata: dict[str, Any] | None = None,
+    calibration_digest: str | None = None,
+    metadata: Mapping[str, object] | None = None,
 ) -> EvidenceScore:
-    if not calibration_digest:
-        raise ValueError("calibration_digest is required for probability_score")
+    """Construct a receipt-bearing legacy probability.
+
+    The value still cannot be consumed as a correctness probability without a
+    frozen :class:`CalibrationProfileRegistry`.
+    """
+
     return EvidenceScore(
-        value=float(value),
+        value,
         kind=ScoreKind.PROBABILITY,
         source=source,
         calibrated=True,
@@ -95,14 +61,23 @@ def uncalibrated_preference(
     value: float,
     *,
     source: str,
-    metadata: dict[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
 ) -> EvidenceScore:
-    """Record a ranker's stated preference without pretending it is probability."""
-
     return EvidenceScore(
-        value=float(value),
+        value,
         kind=ScoreKind.PREFERENCE,
         source=source,
-        calibrated=False,
         metadata=metadata,
     )
+
+
+__all__ = [
+    "CalibrationProfileRegistry",
+    "EvidenceScore",
+    "ScoreKind",
+    "ScoreMigrationError",
+    "ScoreNormalization",
+    "ScoreSemantics",
+    "probability_score",
+    "uncalibrated_preference",
+]

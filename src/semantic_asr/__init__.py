@@ -119,7 +119,20 @@ from .phonetic_evidence import (
     ctc_pronunciation_score,
     rank_candidate_pronunciations,
 )
-from .score_semantics import EvidenceScore, ScoreKind
+from .score_contract import (
+    SCORE_SCHEMA_VERSION,
+    CalibrationProfile,
+    CalibrationProfileRegistry,
+    EvidenceScore,
+    ScoreContractError,
+    ScoreDomain,
+    ScoreMigrationError,
+    ScoreNormalization,
+    ScoreProvenance,
+    ScoreSemantics,
+    require_same_score_domain,
+)
+from .score_semantics import ScoreKind
 from .semantic_deliberation import (
     ProjectedCandidate,
     SemanticDeliberationBuild,
@@ -177,6 +190,15 @@ __all__ = [
     "DocumentPathHypothesis",
     "DocumentPromptFormat",
     "EvidenceScore",
+    "SCORE_SCHEMA_VERSION",
+    "CalibrationProfile",
+    "CalibrationProfileRegistry",
+    "ScoreContractError",
+    "ScoreDomain",
+    "ScoreMigrationError",
+    "ScoreNormalization",
+    "ScoreProvenance",
+    "ScoreSemantics",
     "FrozenPronunciationLexicon",
     "FrozenWindowContext",
     "FusionConfig",
@@ -241,6 +263,7 @@ __all__ = [
     "pronunciation_feature_vector",
     "propose_text_from_pronunciation",
     "rank_candidate_pronunciations",
+    "require_same_score_domain",
     "run_candidate_cascade",
     "select_adaptive_k",
     "semantic_minimum_bayes_risk",
