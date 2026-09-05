@@ -1,0 +1,612 @@
+name: Finalize joint phonetic training
+
+on:
+  push:
+    branches:
+      - codex/train-joint-phonetic-head-v03
+    paths:
+      - .github/workflows/finalize-joint-phonetic-training-v03.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/train-joint-phonetic-head-v03
+          fetch-depth: 0
+
+      - name: Wait for and merge the validated document-ranker base
+        shell: bash
+        run: |
+          ready=0
+          for attempt in $(seq 1 56); do
+            git fetch origin codex/trainable-document-ranker-v03
+            if git show origin/codex/trainable-document-ranker-v03:docs/DOCUMENT_RANKER_VALIDATION.json > /tmp/ranker-ledger.json 2>/dev/null; then
+              if python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('/tmp/ranker-ledger.json').read_text(encoding='utf-8'))
+          raise SystemExit(0 if int(payload.get('schemaVersion', 0)) >= 1 else 1)
+          PY
+              then
+                ready=1
+                break
+              fi
+            fi
+            sleep 15
+          done
+          if [ "$ready" != "1" ]; then
+            echo 'Validated document-ranker base did not appear; leaving PR 20 draft.' >&2
+            exit 1
+          fi
+          git merge --no-edit origin/codex/trainable-document-ranker-v03
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Enforce exact integer targets and CTC feasibility in manifests
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/semantic_asr/phonetic_dataset.py')
+          text = path.read_text(encoding='utf-8')
+          if 'def minimum_ctc_frames(' not in text:
+              marker = '''def file_sha256(path: str | Path) -> str:
+              digest = hashlib.sha256()
+              with Path(path).open("rb") as handle:
+                  while chunk := handle.read(1024 * 1024):
+                      digest.update(chunk)
+              return digest.hexdigest()
+              '''
+              replacement = marker + '''
+
+              def minimum_ctc_frames(target: Sequence[int]) -> int:
+                  if not target:
+                      raise ValueError("CTC target must not be empty")
+                  return len(target) + sum(
+                      left == right for left, right in zip(target, target[1:], strict=False)
+                  )
+
+
+              def _positive_integer(value: object, *, name: str) -> int:
+                  if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                      raise ValueError(f"{name} must be a positive integer")
+                  return value
+
+
+              def _target_ids(value: object, *, name: str) -> tuple[int, ...]:
+                  if not isinstance(value, list) or not value:
+                      raise ValueError(f"{name} must be a non-empty JSON integer array")
+                  if any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in value):
+                      raise ValueError(f"{name} must contain non-negative integer IDs")
+                  return tuple(value)
+              '''
+              if marker not in text:
+                  raise SystemExit('phonetic dataset helper anchor missing')
+              text = text.replace(marker, replacement, 1)
+
+          if 'schema_version must be \'1\'' not in text:
+              marker = '''    def __post_init__(self) -> None:
+              if not self.utterance_id or not self.feature_path:
+              '''
+              replacement = '''    def __post_init__(self) -> None:
+              if self.schema_version != "1":
+                  raise ValueError("schema_version must be '1'")
+              if not self.utterance_id or not self.feature_path:
+              '''
+              if marker not in text:
+                  raise SystemExit('feature item post-init anchor missing')
+              text = text.replace(marker, replacement, 1)
+
+          old = '''        for name in ("frame_count", "feature_dimension"):
+              value = getattr(self, name)
+              if isinstance(value, bool) or value < 1:
+                  raise ValueError(f"{name} must be a positive integer")
+          '''
+          new = '''        for name in ("frame_count", "feature_dimension"):
+              value = getattr(self, name)
+              if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                  raise ValueError(f"{name} must be a positive integer")
+          '''
+          if old in text:
+              text = text.replace(old, new, 1)
+
+          if 'phone target requires more CTC frames' not in text:
+              marker = '''        if not self.speaker_id or not self.source_id or not self.feature_revision:
+              raise ValueError("speaker, source, and feature revision are required")
+          '''
+              replacement = '''        if self.frame_count < minimum_ctc_frames(self.phone_targets):
+              raise ValueError("phone target requires more CTC frames than available")
+              if self.frame_count < minimum_ctc_frames(self.mora_targets):
+                  raise ValueError("mora target requires more CTC frames than available")
+              if not self.speaker_id or not self.source_id or not self.feature_revision:
+                  raise ValueError("speaker, source, and feature revision are required")
+              '''
+              if marker not in text:
+                  raise SystemExit('CTC feasibility insertion anchor missing')
+              text = text.replace(marker, replacement, 1)
+
+          text = text.replace(
+              '        frame_count=int(row["frameCount"]),\n'
+              '        feature_dimension=int(row["featureDimension"]),',
+              '        frame_count=_positive_integer(row["frameCount"], name="frameCount"),\n'
+              '        feature_dimension=_positive_integer(\n'
+              '            row["featureDimension"], name="featureDimension"\n'
+              '        ),',
+          )
+          text = text.replace(
+              '        phone_targets=tuple(int(value) for value in row["phoneTargets"]),  # type: ignore[union-attr]\n'
+              '        mora_targets=tuple(int(value) for value in row["moraTargets"]),  # type: ignore[union-attr]',
+              '        phone_targets=_target_ids(row["phoneTargets"], name="phoneTargets"),\n'
+              '        mora_targets=_target_ids(row["moraTargets"], name="moraTargets"),',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Correct validation metric ranges and calibration split usage
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import textwrap
+
+          path = Path('src/semantic_asr/phonetic_training.py')
+          text = path.read_text(encoding='utf-8')
+          pattern = re.compile(
+              r'@dataclass\(frozen=True, slots=True\)\nclass PhoneticValidationMetrics:.*?(?=\n\n@dataclass\(frozen=True, slots=True\)|\n\ndef )',
+              re.S,
+          )
+          replacement = '''
+          @dataclass(frozen=True, slots=True)
+          class PhoneticValidationMetrics:
+              phone_error_rate: float
+              mora_error_rate: float
+              phone_candidate_auc: float
+              mora_candidate_auc: float
+              critical_false_accept_rate: float
+              validation_sample_count: int
+
+              def __post_init__(self) -> None:
+                  for name in ("phone_error_rate", "mora_error_rate"):
+                      value = _strict_real(getattr(self, name), name=name)
+                      if value < 0.0:
+                          raise ValueError(f"{name} must be non-negative")
+                      object.__setattr__(self, name, value)
+                  for name in (
+                      "phone_candidate_auc",
+                      "mora_candidate_auc",
+                      "critical_false_accept_rate",
+                  ):
+                      value = _strict_real(getattr(self, name), name=name)
+                      if not 0.0 <= value <= 1.0:
+                          raise ValueError(f"{name} must be in [0, 1]")
+                      object.__setattr__(self, name, value)
+                  if (
+                      isinstance(self.validation_sample_count, bool)
+                      or self.validation_sample_count < 1
+                  ):
+                      raise ValueError("validation_sample_count must be positive")
+          '''
+          match = pattern.search(text)
+          if match is None:
+              raise SystemExit('PhoneticValidationMetrics class not found')
+          text = text[: match.start()] + textwrap.dedent(replacement).lstrip() + text[match.end() :]
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('src/semantic_asr/phonetic_trainer_optional.py')
+          text = path.read_text(encoding='utf-8')
+          if 'calibration: PhoneticSequenceCalibration | None = None,' not in text:
+              text = text.replace(
+                  '    fit_calibration: bool = False,\n'
+                  '    target_true_accept_rate: float = 0.95,',
+                  '    fit_calibration: bool = False,\n'
+                  '    calibration: PhoneticSequenceCalibration | None = None,\n'
+                  '    target_true_accept_rate: float = 0.95,',
+                  1,
+              )
+          if 'fit_calibration and calibration is not None' not in text:
+              text = text.replace(
+                  '    if not 0.0 < target_true_accept_rate <= 1.0:\n'
+                  '        raise ValueError("target_true_accept_rate must be in (0, 1]")',
+                  '    if not 0.0 < target_true_accept_rate <= 1.0:\n'
+                  '        raise ValueError("target_true_accept_rate must be in (0, 1]")\n'
+                  '    if fit_calibration and calibration is not None:\n'
+                  '        raise ValueError("cannot fit and apply sequence calibration simultaneously")\n'
+                  '    if calibration is not None and calibration.calibration_manifest_sha256 == manifest.manifest_sha256:\n'
+                  '        raise ValueError("locked evaluation must not reuse its own manifest as calibration")',
+                  1,
+              )
+          old = '''    phone_threshold, phone_false_accept = _threshold(
+              phone_positive,
+              phone_negative,
+              true_accept_rate=target_true_accept_rate,
+          )
+              mora_threshold, mora_false_accept = _threshold(
+                  mora_positive,
+                  mora_negative,
+                  true_accept_rate=target_true_accept_rate,
+              )
+              calibration = (
+                  PhoneticSequenceCalibration(
+                      phone_threshold=phone_threshold,
+                      mora_threshold=mora_threshold,
+                      target_true_accept_rate=target_true_accept_rate,
+                      calibration_manifest_sha256=manifest.manifest_sha256,
+                      revision=calibration_revision,
+                      phone_false_accept_rate=phone_false_accept,
+                      mora_false_accept_rate=mora_false_accept,
+                  )
+                  if fit_calibration
+                  else None
+              )
+          '''
+          new = '''    if fit_calibration:
+              phone_threshold, phone_false_accept = _threshold(
+                  phone_positive,
+                  phone_negative,
+                  true_accept_rate=target_true_accept_rate,
+              )
+              mora_threshold, mora_false_accept = _threshold(
+                  mora_positive,
+                  mora_negative,
+                  true_accept_rate=target_true_accept_rate,
+              )
+              used_calibration = PhoneticSequenceCalibration(
+                  phone_threshold=phone_threshold,
+                  mora_threshold=mora_threshold,
+                  target_true_accept_rate=target_true_accept_rate,
+                  calibration_manifest_sha256=manifest.manifest_sha256,
+                  revision=calibration_revision,
+                  phone_false_accept_rate=phone_false_accept,
+                  mora_false_accept_rate=mora_false_accept,
+              )
+              elif calibration is not None:
+                  used_calibration = calibration
+                  phone_false_accept = (
+                      sum(value >= calibration.phone_threshold for value in phone_negative)
+                      / len(phone_negative)
+                      if phone_negative
+                      else 0.0
+                  )
+                  mora_false_accept = (
+                      sum(value >= calibration.mora_threshold for value in mora_negative)
+                      / len(mora_negative)
+                      if mora_negative
+                      else 0.0
+                  )
+              else:
+                  used_calibration = None
+                  phone_false_accept = 0.0
+                  mora_false_accept = 0.0
+          '''
+          if old not in text:
+              raise SystemExit('phonetic threshold block not found')
+          text = text.replace(old, new, 1)
+          text = text.replace('        calibration=calibration,', '        calibration=used_calibration,', 1)
+          if 'int(self.calibration_manifest_sha256, 16)' not in text:
+              text = text.replace(
+                  '        if len(self.calibration_manifest_sha256) != 64:\n'
+                  '            raise ValueError("calibration_manifest_sha256 must be a SHA-256 value")',
+                  '        if len(self.calibration_manifest_sha256) != 64:\n'
+                  '            raise ValueError("calibration_manifest_sha256 must be a SHA-256 value")\n'
+                  '        try:\n'
+                  '            int(self.calibration_manifest_sha256, 16)\n'
+                  '        except ValueError as exc:\n'
+                  '            raise ValueError("calibration_manifest_sha256 must be hexadecimal") from exc',
+                  1,
+              )
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('scripts/train_joint_phonetic_head.py')
+          text = path.read_text(encoding='utf-8')
+          if 'calibration=calibration_result.calibration,' not in text:
+              text = text.replace(
+                  '        fit_calibration=False,\n'
+                  '        target_true_accept_rate=args.target_true_accept_rate,',
+                  '        fit_calibration=False,\n'
+                  '        calibration=calibration_result.calibration,\n'
+                  '        target_true_accept_rate=args.target_true_accept_rate,',
+                  1,
+              )
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Add optional training dependencies and public API
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import textwrap
+
+          path = Path('pyproject.toml')
+          text = path.read_text(encoding='utf-8')
+          match = re.search(r'(?ms)^train\s*=\s*\[(.*?)^\]', text)
+          if match is None:
+              raise SystemExit('train optional dependency block not found')
+          body = match.group(1)
+          additions = []
+          if 'numpy' not in body:
+              additions.append('  "numpy>=1.26",\n')
+          if 'safetensors' not in body:
+              additions.append('  "safetensors>=0.4",\n')
+          if additions:
+              body = ''.join(additions) + body
+              text = text[: match.start(1)] + body + text[match.end(1) :]
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('src/semantic_asr/__init__.py')
+          text = path.read_text(encoding='utf-8')
+          for module in (
+              'joint_phonetic_runtime_optional',
+              'phonetic_dataset',
+              'phonetic_trainer_optional',
+          ):
+              text = re.sub(
+                  rf'\nfrom \.{module} import \(.*?\n\)\n',
+                  '\n',
+                  text,
+                  flags=re.S,
+              )
+          imports = '''
+          from .joint_phonetic_runtime_optional import (
+              FrozenAudioFeatureConfig,
+              FrozenFeatureMatrix,
+              JointPhoneticPosteriorExtractor,
+              TransformersAudioFeatureBackend,
+          )
+          from .phonetic_dataset import (
+              PhoneticDatasetResourcePolicy,
+              PhoneticFeatureItem,
+              PhoneticFeatureManifest,
+              file_sha256,
+              load_feature_array,
+              load_phonetic_feature_manifest,
+              minimum_ctc_frames,
+              validate_phonetic_split_disjointness,
+          )
+          from .phonetic_trainer_optional import (
+              PhoneticEvaluationResult,
+              PhoneticOptimizationConfig,
+              PhoneticSequenceCalibration,
+              PhoneticTrainingHistory,
+              build_joint_phonetic_artifact,
+              evaluate_joint_phonetic_head,
+              save_joint_phonetic_weights,
+              train_joint_phonetic_head,
+          )
+          '''
+          anchor = 'from .japanese import mora_sequence, split_mora, to_katakana\n'
+          if anchor not in text:
+              raise SystemExit('phonetic root import anchor missing')
+          text = text.replace(anchor, textwrap.dedent(imports).lstrip() + anchor, 1)
+          start = '# joint-phonetic-training-v03-public-api-start'
+          end = '# joint-phonetic-training-v03-public-api-end'
+          text = re.sub(
+              rf'\n{re.escape(start)}.*?{re.escape(end)}\n',
+              '\n',
+              text,
+              flags=re.S,
+          )
+          names = (
+              'FrozenAudioFeatureConfig',
+              'FrozenFeatureMatrix',
+              'JointPhoneticPosteriorExtractor',
+              'PhoneticDatasetResourcePolicy',
+              'PhoneticEvaluationResult',
+              'PhoneticFeatureItem',
+              'PhoneticFeatureManifest',
+              'PhoneticOptimizationConfig',
+              'PhoneticSequenceCalibration',
+              'PhoneticTrainingHistory',
+              'TransformersAudioFeatureBackend',
+              'build_joint_phonetic_artifact',
+              'evaluate_joint_phonetic_head',
+              'file_sha256',
+              'load_feature_array',
+              'load_phonetic_feature_manifest',
+              'minimum_ctc_frames',
+              'save_joint_phonetic_weights',
+              'train_joint_phonetic_head',
+              'validate_phonetic_split_disjointness',
+          )
+          extension = (
+              '\n' + start + '\n__all__.extend(\n    name for name in '
+              + repr(names)
+              + ' if name not in __all__\n)\n'
+              + end + '\n'
+          )
+          version = '\n__version__ = "0.2.0"\n'
+          if version not in text:
+              raise SystemExit('phonetic root version marker missing')
+          text = text.replace(version, extension + version, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Extend permanent optional CPU and CLI validation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/ci.yml')
+          text = path.read_text(encoding='utf-8')
+          install_anchor = "          python -m pip install 'torch>=2.4' --index-url https://download.pytorch.org/whl/cpu\n"
+          extras = "          python -m pip install 'numpy>=1.26' 'safetensors>=0.4'\n"
+          if extras.strip() not in text:
+              if install_anchor not in text:
+                  raise SystemExit('CPU torch install anchor missing')
+              text = text.replace(install_anchor, install_anchor + extras, 1)
+          test_anchor = (
+              'python -m pytest -q tests/test_training_optional.py '
+              'tests/test_acoustic_verifier_optional.py '
+              'tests/test_phonetic_heads_optional.py'
+          )
+          extended = (
+              test_anchor
+              + ' tests/test_joint_phonetic_runtime_optional.py '
+              + 'tests/test_train_joint_phonetic_head_cli_optional.py'
+          )
+          if 'tests/test_train_joint_phonetic_head_cli_optional.py' not in text:
+              if test_anchor not in text:
+                  raise SystemExit('optional phonetic test anchor missing')
+              text = text.replace(test_anchor, extended, 1)
+          command = '          python scripts/train_joint_phonetic_head.py --help\n'
+          cli_anchor = '          python scripts/train_document_ranker.py --help\n'
+          if command.strip() not in text:
+              if cli_anchor not in text:
+                  raise SystemExit('phonetic CLI discovery anchor missing')
+              text = text.replace(cli_anchor, cli_anchor + command, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Format, lint, compile, and run dependency-free validation
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+          python -m pip install -e '.[dev]'
+          python -m ruff format src tests scripts examples
+          python -m ruff check --fix src tests scripts examples
+          python -m ruff format src tests scripts examples
+          python -m ruff format --check src tests scripts examples
+          python -m ruff check src tests scripts examples
+          python -m compileall -q src tests scripts examples
+          python -m pytest -q --junitxml=phonetic-training-tests.xml
+          python scripts/train_joint_phonetic_head.py --help
+          python -m build --wheel
+          git diff --check
+
+      - name: Run optional CPU training, runtime, and CLI tests
+        run: |
+          python -m pip install 'torch>=2.4' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'numpy>=1.26' 'safetensors>=0.4'
+          python -m pytest -q \
+            tests/test_phonetic_heads_optional.py \
+            tests/test_joint_phonetic_runtime_optional.py \
+            tests/test_train_joint_phonetic_head_cli_optional.py \
+            tests/test_phonetic_dataset.py
+
+      - name: Validate clean wheel public API
+        run: |
+          python -m venv .phonetic-wheel
+          .phonetic-wheel/bin/python -m pip install dist/*.whl
+          .phonetic-wheel/bin/python - <<'PY'
+          import semantic_asr
+          required = (
+              'JointPhoneticPosteriorExtractor',
+              'PhoneticFeatureManifest',
+              'PhoneticOptimizationConfig',
+              'train_joint_phonetic_head',
+          )
+          for name in required:
+              assert hasattr(semantic_asr, name), name
+              assert name in semantic_asr.__all__, name
+          PY
+          .phonetic-wheel/bin/semantic-asr demo --output runs/phonetic-wheel-demo.json
+
+      - name: Write joint phonetic training validation ledger
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import subprocess
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          root = ET.parse('phonetic-training-tests.xml').getroot()
+          suites = [root] if root.tag == 'testsuite' else list(root.findall('testsuite'))
+          counts = {
+              key: sum(int(suite.attrib.get(key, 0)) for suite in suites)
+              for key in ('tests', 'failures', 'errors', 'skipped')
+          }
+          wheel = next(Path('dist').glob('*.whl'))
+          base = json.loads(
+              Path('docs/DOCUMENT_RANKER_VALIDATION.json').read_text(encoding='utf-8')
+          )
+          payload = {
+              'schemaVersion': '1',
+              'baseRankerValidationDigest': base['digest'],
+              'validatedHead': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'validatedTree': subprocess.check_output(
+                  ['git', 'write-tree'], text=True
+              ).strip(),
+              'dependencyFreePytest': counts,
+              'optionalCpuPyTorch': 'passed',
+              'tinyJointTrainingCli': 'passed',
+              'jointRuntimeAdapter': 'passed',
+              'ruffFormat': 'passed',
+              'ruffLint': 'passed',
+              'compileall': 'passed',
+              'wheelBuild': 'passed',
+              'cleanWheelImport': 'passed',
+              'wheelSha256': hashlib.sha256(wheel.read_bytes()).hexdigest(),
+              'claimBoundary': (
+                  'training and runtime software validation only; no Japanese ASR quality claim'
+              ),
+          }
+          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+          payload['digest'] = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+          Path('docs/PHONETIC_TRAINING_VALIDATION.json').write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Remove temporary workflow and commit validated training stack
+        shell: bash
+        run: |
+          rm -f .github/workflows/finalize-joint-phonetic-training-v03.yml
+          rm -f phonetic-training-tests.xml
+          rm -rf .phonetic-wheel
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests scripts docs pyproject.toml .github/workflows
+          git commit -m 'Validate joint phone and mora CTC training stack'
+          git push origin HEAD:codex/train-joint-phonetic-head-v03
+
+      - name: Comment on and mark PR 20 ready only after validation passes
+        shell: bash
+        run: |
+          head_sha=$(git rev-parse HEAD)
+          tests=$(python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('docs/PHONETIC_TRAINING_VALIDATION.json').read_text())
+          row = payload['dependencyFreePytest']
+          print(f"{row['tests']} tests, {row['skipped']} skipped")
+          PY
+          )
+          gh api repos/dj-thank/semantic-asr/issues/20/comments \
+            -f body="Success-gated joint phonetic training validation passed on \\`$head_sha\\`.
+
+- dependency-free suite: $tests
+- Ruff format and lint: passed
+- compileall: passed
+- tiny CPU phone/mora CTC training CLI: passed
+- calibration-only thresholds and locked-test application: passed
+- safetensors export and hash validation: passed
+- shared frozen-encoder runtime adapter: passed
+- clean-wheel public API import: passed
+- PR #19 validated base was required and incorporated
+
+This validates the training/runtime contracts only. No Japanese CER, PER/MER frontier, or default-profile promotion is claimed."
+          draft=$(gh api repos/dj-thank/semantic-asr/pulls/20 --jq '.draft')
+          if [ "$draft" = "true" ]; then
+            gh pr ready 20 --repo dj-thank/semantic-asr
+          fi
