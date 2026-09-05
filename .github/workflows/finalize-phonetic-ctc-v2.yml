@@ -1,0 +1,505 @@
+name: Four-way dual CTC hardening audit
+
+on:
+  push:
+    branches:
+      - codex/audio-phonetic-ctc-v2-38
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: semantic-asr-phonetic-ctc-v2-finalizer
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/audio-phonetic-ctc-v2-38
+          fetch-depth: 0
+      - name: Synchronize all lower stack branches
+        shell: bash
+        run: |
+          git fetch origin \
+            codex/document-context-experiment-v1-38 \
+            codex/audio-phonetic-ctc-v1-38
+          git merge --no-edit origin/codex/document-context-experiment-v1-38
+          git merge --no-edit origin/codex/audio-phonetic-ctc-v1-38
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Apply idempotent v2 migration and inherited hardening
+        shell: bash
+        run: |
+          python scripts/finalize_phonetic_ctc_v2.py
+          python - <<'PY'
+          from __future__ import annotations
+
+          import re
+          from pathlib import Path
+
+
+          def load(path: str) -> str:
+              return Path(path).read_text(encoding="utf-8")
+
+
+          def save(path: str, text: str) -> None:
+              Path(path).write_text(text.rstrip() + "\n", encoding="utf-8")
+
+
+          calibration_path = "src/semantic_asr/phonetic_runtime/calibration.py"
+          calibration = load(calibration_path)
+          if "from ..score_semantics import ScoreKind\n" not in calibration:
+              calibration = calibration.replace(
+                  "from ..phonetic_evidence import (\n",
+                  "from ..score_semantics import ScoreKind\nfrom ..phonetic_evidence import (\n",
+                  1,
+              )
+          calibration = re.sub(
+              r"score_kind=next\(\n(?:\s+.*\n)+?\s+\),\n\s+center=center,",
+              "score_kind=ScoreKind.LOG_LIKELIHOOD,\n        center=center,",
+              calibration,
+              count=1,
+          )
+          save(calibration_path, calibration)
+
+          calibration_test_path = "tests/test_phonetic_runtime_calibration.py"
+          calibration_test = load(calibration_test_path)
+          old = '''    invalid = PhoneticCalibrationExample(
+              example_id="invalid",
+              posterior=base.posterior,
+              candidates=tuple(
+                  PhoneticCalibrationCandidate(
+                      candidate_id=row.candidate_id,
+                      text=row.text,
+                      symbols=row.symbols,
+                      correct=False,
+                  )
+                  for row in base.candidates
+              ),
+          )
+
+              with pytest.raises(ValueError, match="exactly one correct"):
+                  invalid
+          '''
+          new = '''    with pytest.raises(ValueError, match="exactly one correct"):
+              PhoneticCalibrationExample(
+                  example_id="invalid",
+                  posterior=base.posterior,
+                  candidates=tuple(
+                      PhoneticCalibrationCandidate(
+                          candidate_id=row.candidate_id,
+                          text=row.text,
+                          symbols=row.symbols,
+                          correct=False,
+                      )
+                      for row in base.candidates
+                  ),
+              )
+          '''
+          if old in calibration_test:
+              calibration_test = calibration_test.replace(old, new, 1)
+          save(calibration_test_path, calibration_test)
+
+          provider_test_path = "tests/test_phonetic_runtime_provider.py"
+          provider_test = load(provider_test_path)
+          if "from semantic_asr.deliberation_lattice import DocumentContext\n" not in provider_test:
+              provider_test = provider_test.replace(
+                  "from semantic_asr.deliberation_evidence import UtilityCalibrationProfile\n",
+                  "from semantic_asr.deliberation_evidence import UtilityCalibrationProfile\n"
+                  "from semantic_asr.deliberation_lattice import DocumentContext\n",
+                  1,
+              )
+          provider_test = provider_test.replace(
+              "context=None,  # type: ignore[arg-type]",
+              "context=DocumentContext()",
+          )
+          save(provider_test_path, provider_test)
+
+          manifest_path = "src/semantic_asr/phonetic_runtime/manifest.py"
+          manifest = load(manifest_path)
+          old_validate = '''    def validate_inventories(
+              self,
+              phone_inventory: PhoneticInventory,
+              mora_inventory: PhoneticInventory,
+          ) -> None:
+              for row in self.rows:
+                  phone_inventory.encode(row.phone_symbols)
+                  mora_inventory.encode(row.mora_symbols)
+                  if row.sample_rate != phone_inventory_sample_rate(self):
+                      raise ValueError("phonetic manifest mixes sample rates")
+          '''
+          new_validate = '''    def validate_inventories(
+              self,
+              phone_inventory: PhoneticInventory,
+              mora_inventory: PhoneticInventory,
+          ) -> None:
+              if phone_inventory.kind != "phone" or mora_inventory.kind != "mora":
+                  raise ValueError("phonetic inventories are assigned to the wrong target columns")
+              sample_rate = phone_inventory_sample_rate(self)
+              for row in self.rows:
+                  if row.sample_rate != sample_rate:
+                      raise ValueError("phonetic manifest mixes sample rates")
+                  phone_inventory.encode(row.phone_symbols)
+                  mora_inventory.encode(row.mora_symbols)
+          '''
+          if old_validate in manifest:
+              manifest = manifest.replace(old_validate, new_validate, 1)
+          row_marker = "            if not isinstance(payload, dict):\n                raise TypeError(f\"line {line_number}: manifest row must be a JSON object\")\n"
+          if "unknown phonetic manifest row keys" not in manifest:
+              if row_marker not in manifest:
+                  raise SystemExit("manifest row schema marker missing")
+              manifest = manifest.replace(
+                  row_marker,
+                  row_marker
+                  + "            required_keys = {\n"
+                  + "                \"utteranceId\", \"audioPath\", \"sourceAudioSha256\",\n"
+                  + "                \"sampleRate\", \"phoneSymbols\", \"moraSymbols\",\n"
+                  + "                \"speakerId\", \"sessionId\", \"sourceId\", \"licenseId\",\n"
+                  + "                \"rightsDecision\", \"split\",\n"
+                  + "            }\n"
+                  + "            optional_keys = {\"transcriptSha256\"}\n"
+                  + "            missing = required_keys - set(payload)\n"
+                  + "            unknown = set(payload) - required_keys - optional_keys\n"
+                  + "            if missing or unknown:\n"
+                  + "                raise ValueError(\n"
+                  + "                    f\"line {line_number}: unknown phonetic manifest row keys; \"\n"
+                  + "                    f\"missing={sorted(missing)}, unknown={sorted(unknown)}\"\n"
+                  + "                )\n",
+                  1,
+              )
+          metadata_marker = "    if not isinstance(metadata, dict):\n        raise TypeError(\"phonetic manifest metadata must be a JSON object\")\n"
+          if "phonetic manifest metadata keys are not exact" not in manifest:
+              if metadata_marker not in manifest:
+                  raise SystemExit("manifest metadata schema marker missing")
+              manifest = manifest.replace(
+                  metadata_marker,
+                  metadata_marker
+                  + "    allowed_metadata = {\"name\", \"revision\", \"manifestSha256\"}\n"
+                  + "    required_metadata = {\"name\", \"revision\"}\n"
+                  + "    if not required_metadata.issubset(metadata) or set(metadata) - allowed_metadata:\n"
+                  + "        raise ValueError(\"phonetic manifest metadata keys are not exact\")\n",
+                  1,
+              )
+          save(manifest_path, manifest)
+
+          training_path = "src/semantic_asr/phonetic_runtime/training.py"
+          training = load(training_path)
+          if "validate_split_isolation" not in training.split("\n\n", 6)[0:6]:
+              training = training.replace(
+                  "from .manifest import PhoneticManifestRow, PhoneticSplitManifest\n",
+                  "from .manifest import (\n"
+                  "    PhoneticManifestRow,\n"
+                  "    PhoneticSplitManifest,\n"
+                  "    validate_split_isolation,\n"
+                  ")\n",
+                  1,
+              )
+          if "validate_split_isolation(manifest)" not in training:
+              training = training.replace(
+                  "    manifest.validate_inventories(phone_inventory, mora_inventory)\n",
+                  "    validate_split_isolation(manifest)\n"
+                  "    manifest.validate_inventories(phone_inventory, mora_inventory)\n",
+                  1,
+              )
+          training = training.replace(
+              '"bestCalibrationLoss": self.best_validation_loss,',
+              '"bestValidationLoss": self.best_validation_loss,',
+          )
+          save(training_path, training)
+
+          model_path = "src/semantic_asr/phonetic_runtime/torch_model.py"
+          model = load(model_path)
+          if "valid_feature_mask" not in model:
+              marker = "        return features, frame_lengths\n"
+              if marker not in model:
+                  raise SystemExit("frontend mask marker missing")
+              model = model.replace(
+                  marker,
+                  "        valid_feature_mask = ~_padding_mask(frame_lengths, features.shape[1])\n"
+                  "        features = features.masked_fill(~valid_feature_mask.unsqueeze(-1), 0.0)\n"
+                  + marker,
+                  1,
+              )
+          model = model.replace(
+              "        output.output_lengths,\n        phone_target_lengths,\n",
+              "        output.output_lengths.cpu(),\n        phone_target_lengths.cpu(),\n",
+              1,
+          ).replace(
+              "        output.output_lengths,\n        mora_target_lengths,\n",
+              "        output.output_lengths.cpu(),\n        mora_target_lengths.cpu(),\n",
+              1,
+          )
+          save(model_path, model)
+
+          provider_path = "src/semantic_asr/phonetic_runtime/provider.py"
+          provider = load(provider_path)
+          if "maximum_lexicon_entries" not in provider:
+              provider = provider.replace(
+                  "    maximum_proposals_per_span: int = 6\n",
+                  "    maximum_proposals_per_span: int = 6\n"
+                  "    maximum_lexicon_entries: int = 2_048\n",
+                  1,
+              )
+              provider = provider.replace(
+                  '        for name in ("maximum_spans", "maximum_proposals_per_span"):\n',
+                  '        for name in (\n'
+                  '            "maximum_spans",\n'
+                  '            "maximum_proposals_per_span",\n'
+                  '            "maximum_lexicon_entries",\n'
+                  '            "maximum_total_audio_ms",\n'
+                  '        ):\n',
+                  1,
+              )
+          if "span lexicon exceeds maximum_lexicon_entries" not in provider:
+              provider = provider.replace(
+                  "            if lexicon is None:\n                continue\n",
+                  "            if lexicon is None:\n"
+                  "                continue\n"
+                  "            if len(lexicon.entries) > self.config.maximum_lexicon_entries:\n"
+                  "                raise ValueError(\n"
+                  "                    \"span lexicon exceeds maximum_lexicon_entries; \"\n"
+                  "                    \"use a frozen local selector\"\n"
+                  "                )\n",
+                  1,
+              )
+          save(provider_path, provider)
+
+          evaluation_path = "src/semantic_asr/phonetic_runtime/evaluation.py"
+          evaluation = load(evaluation_path)
+          evaluation = evaluation.replace(
+              '        if self.split not in {"train", "calibration", "test"}:',
+              '        if self.split not in {"train", "validation", "calibration", "test"}:',
+          )
+          if "runtime_profile_digest must be a SHA-256 value" not in evaluation:
+              evaluation = evaluation.replace(
+                  "from ..contracts import sha256_json\n",
+                  "from ..contracts import sha256_json\n"
+                  "from ..deliberation_evidence import _is_sha256\n",
+                  1,
+              ).replace(
+                  "        if not self.utterance_id:\n            raise ValueError(\"utterance_id is required\")\n",
+                  "        if not self.utterance_id:\n"
+                  "            raise ValueError(\"utterance_id is required\")\n"
+                  "        for digest in (\n"
+                  "            self.source_audio_sha256,\n"
+                  "            self.phone_posterior_digest,\n"
+                  "            self.mora_posterior_digest,\n"
+                  "        ):\n"
+                  "            if not _is_sha256(digest):\n"
+                  "                raise ValueError(\"utterance evaluation digests must be SHA-256 values\")\n",
+                  1,
+              ).replace(
+                  "        if not self.utterances:\n            raise ValueError(\"phonetic evaluation requires utterances\")\n",
+                  "        if not self.utterances:\n"
+                  "            raise ValueError(\"phonetic evaluation requires utterances\")\n"
+                  "        if not _is_sha256(self.runtime_profile_digest):\n"
+                  "            raise ValueError(\"runtime_profile_digest must be a SHA-256 value\")\n"
+                  "        if not _is_sha256(self.manifest_digest):\n"
+                  "            raise ValueError(\"manifest_digest must be a SHA-256 value\")\n",
+                  1,
+              )
+          save(evaluation_path, evaluation)
+
+          init_path = "src/semantic_asr/phonetic_runtime/__init__.py"
+          init = load(init_path)
+          if "from .calibration_artifact import DualCTCUtilityArtifact\n" not in init:
+              init = init.replace(
+                  "from .calibration import (\n",
+                  "from .calibration_artifact import DualCTCUtilityArtifact\n"
+                  "from .calibration import (\n",
+                  1,
+              )
+          if '    "DualCTCUtilityArtifact",\n' not in init:
+              init = init.replace(
+                  '    "DualCTCTrainingResult",\n',
+                  '    "DualCTCTrainingResult",\n    "DualCTCUtilityArtifact",\n',
+                  1,
+              )
+          save(init_path, init)
+
+          manifest_test_path = "tests/test_phonetic_runtime_manifest.py"
+          manifest_test = load(manifest_test_path)
+          old_rows = "        rows=(train, calibration),\n"
+          if old_rows in manifest_test:
+              manifest_test = manifest_test.replace(
+                  "    calibration = row(tmp_path, \"calibration\", 2)\n",
+                  "    validation = row(tmp_path, \"validation\", 2)\n"
+                  "    calibration = row(tmp_path, \"calibration\", 3)\n",
+                  1,
+              ).replace(old_rows, "        rows=(train, validation, calibration),\n", 1)
+          save(manifest_test_path, manifest_test)
+
+          ci_path = ".github/workflows/ci.yml"
+          ci = load(ci_path)
+          if "test_phonetic_ctc_feasibility_optional.py" not in ci:
+              ci = ci.replace(
+                  "          python -m pip install 'torch>=2.4' --index-url https://download.pytorch.org/whl/cpu\n",
+                  "          python -m pip install 'torch>=2.4' --index-url https://download.pytorch.org/whl/cpu\n"
+                  "          python -m pip install 'numpy>=1.26'\n",
+                  1,
+              )
+              existing = (
+                  "          python -m pytest -q tests/test_training_optional.py "
+                  "tests/test_acoustic_verifier_optional.py\n"
+              )
+              replacement = '''          python -m pytest -q \
+            tests/test_training_optional.py \
+            tests/test_acoustic_verifier_optional.py \
+            tests/test_phonetic_torch_model_optional.py \
+            tests/test_phonetic_artifact_inference_optional.py \
+            tests/test_phonetic_training_optional.py \
+            tests/test_phonetic_ctc_feasibility_optional.py
+'''
+              if existing in ci:
+                  ci = ci.replace(existing, replacement, 1)
+          save(ci_path, ci)
+          PY
+      - name: Install base validation environment
+        run: python -m pip install -e '.[dev]'
+      - name: Format, lint, compile, and run dependency-free suite
+        id: base
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m ruff format src tests scripts
+          python -m ruff check --fix src tests scripts
+          python -m ruff format src tests scripts
+          python -m ruff format --check src tests scripts
+          python -m ruff check src tests scripts
+          python -m compileall -q src tests scripts
+          python -m pytest -q 2>&1 | tee /tmp/base.log
+          git diff --check
+      - name: Install CPU PyTorch and NumPy
+        run: |
+          python -m pip install 'torch>=2.4' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'numpy>=1.26'
+      - name: Run complete phonetic execution suite
+        id: optional
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q \
+            tests/test_phonetic_torch_model_optional.py \
+            tests/test_phonetic_artifact_inference_optional.py \
+            tests/test_phonetic_training_optional.py \
+            tests/test_phonetic_ctc_feasibility_optional.py \
+            2>&1 | tee /tmp/optional.log
+      - name: Build and clean-install wheel
+        id: wheel
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pip install build
+          python -m build --wheel
+          python -m venv /tmp/semantic-asr-phonetic-v2-wheel
+          /tmp/semantic-asr-phonetic-v2-wheel/bin/python -m pip install dist/*.whl
+          /tmp/semantic-asr-phonetic-v2-wheel/bin/python - <<'PY' 2>&1 | tee /tmp/wheel.log
+          import semantic_asr.phonetic_runtime as runtime
+          required = {
+              "DualCTCPosteriorRuntime",
+              "DualCTCTrainingConfig",
+              "DualCTCUtilityArtifact",
+              "SourceAudioPhoneticProposalProvider",
+              "fit_ctc_utility_calibration",
+          }
+          assert required.issubset(set(runtime.__all__))
+          print(sorted(required))
+          PY
+      - name: Record successful audit
+        if: success()
+        shell: bash
+        run: |
+          base_summary=$(tail -n 1 /tmp/base.log)
+          optional_summary=$(tail -n 1 /tmp/optional.log)
+          wheel_summary=$(tail -n 1 /tmp/wheel.log)
+          cat > docs/PHONETIC_CTC_V2_VALIDATION.md <<EOF
+          # Dual phone/mora CTC v2 validation ledger
+
+          ## Four-way split and feasibility audit
+
+          Dependency-free suite:
+
+          \`\`\`text
+          $base_summary
+          \`\`\`
+
+          CPU PyTorch execution suite:
+
+          \`\`\`text
+          $optional_summary
+          \`\`\`
+
+          Clean-wheel API check:
+
+          \`\`\`text
+          $wheel_summary
+          \`\`\`
+
+          The exact committed source passed four-way train/validation/calibration/test isolation,
+          repeated-label CTC feasibility checks, non-silent CTC loss behavior, deterministic NPZ
+          artifact bytes, runtime-bound utility artifacts, source-audio evidence budgets, model
+          forward/backward, one-epoch training, artifact round-trip, posterior inference, report
+          privacy controls, formatting, lint, compileall, and clean-wheel import.
+
+          This is software validation only. It is not a Japanese PER, MER, CER, or end-to-end
+          improvement claim.
+          EOF
+          rm -f docs/PHONETIC_CTC_V2_FAILURE.md
+          rm -f .github/workflows/finalize-phonetic-ctc-v2.yml
+          rm -f scripts/finalize_phonetic_ctc_v2.py
+      - name: Record failed audit
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '# Dual phone/mora CTC v2 validation failure'
+            echo
+            echo '## Dependency-free suite'
+            echo '```text'
+            cat /tmp/base.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo '## CPU PyTorch suite'
+            echo '```text'
+            cat /tmp/optional.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo '## Wheel check'
+            echo '```text'
+            cat /tmp/wheel.log 2>/dev/null || true
+            echo '```'
+          } > docs/PHONETIC_CTC_V2_FAILURE.md
+      - name: Commit exact audit state
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Complete dual CTC v2 hardening audit'
+          git push origin HEAD:codex/audio-phonetic-ctc-v2-38
+      - name: Mark PR ready and publish exact counts
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          pr=$(gh pr list --head codex/audio-phonetic-ctc-v2-38 --state open --json number --jq '.[0].number')
+          if [ -z "$pr" ]; then
+            exit 0
+          fi
+          gh pr ready "$pr" || true
+          base_summary=$(tail -n 1 /tmp/base.log)
+          optional_summary=$(tail -n 1 /tmp/optional.log)
+          gh pr comment "$pr" --body "Dual CTC v2 hardening audit passed. Base: **$base_summary**. CPU PyTorch: **$optional_summary**. The PR is ready for review. This is software validation, not a Japanese accuracy claim."
