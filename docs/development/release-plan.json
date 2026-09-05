@@ -77,13 +77,19 @@
       ],
       "source_paths": [
         "src/semantic_asr/longform.py",
-        "scripts/apply_pr_review_fixes_v3.py"
+        "docs/development/CLEANUP_2026-09-05.md"
       ],
       "new_test_paths": [
         "tests/test_architecture_boundaries.py"
       ],
-      "state": "planned",
-      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/27"
+      "state": "partial",
+      "issue_url": "https://github.com/dj-thank/semantic-asr/issues/27",
+      "historical_paths": [
+        "scripts/apply_pr_review_fixes_v3.py",
+        "scripts/apply_v02_post_review.py",
+        "scripts/repair_pr_review_test.py"
+      ],
+      "completion_note": "Three one-shot source-mutating repair scripts removed after reference audit; semantic module classification and package-boundary refactor remain open."
     },
     {
       "issue": 28,
@@ -371,5 +377,6 @@
     19,
     24,
     25
-  ]
+  ],
+  "maintenance_note": "Issue 27 historical paths remain recoverable at audit_commit; current source_paths point to the cleanup evidence. Other issue states remain the original dated snapshot."
 }
