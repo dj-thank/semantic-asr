@@ -84,14 +84,10 @@ def _provenance_from_dict(
         scorer=_strict_str(row.get("scorer"), name="scorer"),
         model=None if row.get("model") is None else _strict_str(row["model"], name="model"),
         revision=(
-            None
-            if row.get("revision") is None
-            else _strict_str(row["revision"], name="revision")
+            None if row.get("revision") is None else _strict_str(row["revision"], name="revision")
         ),
         runtime=(
-            None
-            if row.get("runtime") is None
-            else _strict_str(row["runtime"], name="runtime")
+            None if row.get("runtime") is None else _strict_str(row["runtime"], name="runtime")
         ),
         runtime_version=(
             None
@@ -139,20 +135,14 @@ def _validate_score(self: contract.EvidenceScore) -> None:
     semantics = contract.ScoreSemantics(self.semantics)
     normalization = _normalization(self.provenance.normalization)
     allowed: dict[contract.ScoreSemantics, set[contract.ScoreNormalization]] = {
-        contract.ScoreSemantics.CUMULATIVE_LOG_LIKELIHOOD: {
-            contract.ScoreNormalization.SEQUENCE
-        },
+        contract.ScoreSemantics.CUMULATIVE_LOG_LIKELIHOOD: {contract.ScoreNormalization.SEQUENCE},
         contract.ScoreSemantics.AVERAGE_LOG_LIKELIHOOD: {
             contract.ScoreNormalization.MEAN_TOKEN,
             contract.ScoreNormalization.MEAN_FRAME,
             contract.ScoreNormalization.TOKEN_POWER,
         },
-        contract.ScoreSemantics.LOG_PROBABILITY: {
-            contract.ScoreNormalization.PATH_NORMALIZED
-        },
-        contract.ScoreSemantics.BOUNDED_UTILITY: {
-            contract.ScoreNormalization.BOUNDED
-        },
+        contract.ScoreSemantics.LOG_PROBABILITY: {contract.ScoreNormalization.PATH_NORMALIZED},
+        contract.ScoreSemantics.BOUNDED_UTILITY: {contract.ScoreNormalization.BOUNDED},
     }
     if semantics in allowed and normalization not in allowed[semantics]:
         raise ValueError(

@@ -86,9 +86,7 @@ def _aliased(
     names = (camel,) if snake is None else (camel, snake)
     present = [name for name in names if name in row]
     if len(present) == 2 and row[present[0]] != row[present[1]]:
-        raise contract.ScoreMigrationError(
-            f"conflicting aliases {present[0]!r} and {present[1]!r}"
-        )
+        raise contract.ScoreMigrationError(f"conflicting aliases {present[0]!r} and {present[1]!r}")
     if present:
         return row[present[0]]
     if required:
@@ -96,9 +94,7 @@ def _aliased(
     return default
 
 
-def _reject_unknown(
-    row: Mapping[str, object], *, allowed: set[str], name: str
-) -> None:
+def _reject_unknown(row: Mapping[str, object], *, allowed: set[str], name: str) -> None:
     unknown = sorted(set(row) - allowed)
     if unknown:
         raise contract.ScoreMigrationError(f"{name} contains unknown fields: {unknown}")
@@ -137,10 +133,10 @@ class FrozenDict(Mapping[str, object]):
     def __delitem__(self, _key: str) -> None:
         raise TypeError("score metadata is immutable")
 
-    def __copy__(self) -> "FrozenDict":
+    def __copy__(self) -> FrozenDict:
         return self
 
-    def __deepcopy__(self, _memo: dict[int, object]) -> "FrozenDict":
+    def __deepcopy__(self, _memo: dict[int, object]) -> FrozenDict:
         return self
 
 
@@ -169,9 +165,7 @@ def _freeze(value: object, *, path: str, active: set[int]) -> object:
             raise ValueError(f"{path} contains a recursive sequence")
         active.add(identity)
         try:
-            return tuple(
-                _freeze(item, path=f"{path}[]", active=active) for item in value
-            )
+            return tuple(_freeze(item, path=f"{path}[]", active=active) for item in value)
         finally:
             active.remove(identity)
     raise TypeError(f"{path} contains a non-JSON value: {type(value).__name__}")

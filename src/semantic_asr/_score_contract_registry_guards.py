@@ -54,9 +54,7 @@ def _registry_validate_probability(
         "calibrationSplit": profile.split_name,
         "calibrationProfileDigest": profile.digest,
     }
-    mismatched_metadata = [
-        key for key, wanted in checks.items() if metadata.get(key) != wanted
-    ]
+    mismatched_metadata = [key for key, wanted in checks.items() if metadata.get(key) != wanted]
     if mismatched_metadata:
         raise ValueError(
             "probability calibration split/receipt metadata mismatch: "
@@ -100,9 +98,7 @@ def _registry_validate_probability(
         )
     expected_probability = profile.expected_probability(source_score)
     if not math.isclose(score.value, expected_probability, rel_tol=0.0, abs_tol=1e-12):
-        raise ValueError(
-            "probability value does not match the registered calibration transform"
-        )
+        raise ValueError("probability value does not match the registered calibration transform")
     return profile
 
 

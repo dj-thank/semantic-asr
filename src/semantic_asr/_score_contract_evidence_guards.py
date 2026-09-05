@@ -54,8 +54,7 @@ def _raw(
             elif metadata_rows.get("lengthNormalizationAlpha") not in {None, 1, 1.0}:
                 normalization = contract.ScoreNormalization.TOKEN_POWER
             elif any(
-                metadata_rows.get(key) is not None
-                for key in ("tokenCount", "candidateTokenCount")
+                metadata_rows.get(key) is not None for key in ("tokenCount", "candidateTokenCount")
             ):
                 normalization = contract.ScoreNormalization.MEAN_TOKEN
     if score_domain is not None:
@@ -83,9 +82,7 @@ def _raw(
         }
         mismatches = [name for name, pair in expected.items() if pair[0] != pair[1]]
         if mismatches:
-            raise ValueError(
-                "score does not match supplied score domain: " + ", ".join(mismatches)
-            )
+            raise ValueError("score does not match supplied score domain: " + ", ".join(mismatches))
         score_domain_digest = score_domain.digest
     return cls(
         value,
@@ -143,13 +140,9 @@ def _score_from_dict(
                 "canonical score schema does not match payload shape"
             )
         if schema == contract.LEGACY_RICH_SCHEMA_VERSION and not canonical_shape:
-            raise contract.ScoreMigrationError(
-                "legacy rich schema does not match payload shape"
-            )
+            raise contract.ScoreMigrationError("legacy rich schema does not match payload shape")
         if schema == contract.LEGACY_SIMPLE_SCHEMA_VERSION and not simple_shape:
-            raise contract.ScoreMigrationError(
-                "legacy simple schema does not match payload shape"
-            )
+            raise contract.ScoreMigrationError("legacy simple schema does not match payload shape")
     if canonical_shape:
         allowed = {
             "schemaVersion",
@@ -165,9 +158,7 @@ def _score_from_dict(
         provenance = _strict_mapping(row.get("provenance"), name="score provenance")
         return cls(
             row["value"],
-            semantics=contract.ScoreSemantics(
-                _strict_str(row.get("semantics"), name="semantics")
-            ),
+            semantics=contract.ScoreSemantics(_strict_str(row.get("semantics"), name="semantics")),
             provenance=contract.ScoreProvenance.from_dict(provenance),
             calibrated=_strict_bool(row.get("calibrated", False), name="calibrated"),
             higher_is_better=_strict_bool(

@@ -44,9 +44,7 @@ def _profile_from_dict(
         name="schemaVersion",
     )
     if schema != "semantic-asr.calibration-profile.v1":
-        raise contract.ScoreMigrationError(
-            f"unsupported calibration profile schema: {schema!r}"
-        )
+        raise contract.ScoreMigrationError(f"unsupported calibration profile schema: {schema!r}")
     parameters = _strict_mapping(row.get("parameters", {}), name="parameters")
     metadata = _strict_mapping(row.get("metadata", {}), name="metadata")
     return cls(
@@ -60,15 +58,9 @@ def _profile_from_dict(
             _strict_str(row.get("sourceSemantics"), name="sourceSemantics")
         ),
         scorer=_strict_str(row.get("scorer"), name="scorer"),
-        model=(
-            None
-            if row.get("model") is None
-            else _strict_str(row["model"], name="model")
-        ),
+        model=(None if row.get("model") is None else _strict_str(row["model"], name="model")),
         revision=(
-            None
-            if row.get("revision") is None
-            else _strict_str(row["revision"], name="revision")
+            None if row.get("revision") is None else _strict_str(row["revision"], name="revision")
         ),
         normalization=_normalization(row.get("normalization", "none")),
         score_domain_digest=_optional_digest(
@@ -102,9 +94,7 @@ def _registry_from_dict(
         name="schemaVersion",
     )
     if schema != "semantic-asr.calibration-registry.v1":
-        raise contract.ScoreMigrationError(
-            f"unsupported calibration registry schema: {schema!r}"
-        )
+        raise contract.ScoreMigrationError(f"unsupported calibration registry schema: {schema!r}")
     rows = _strict_list(row.get("profiles"), name="profiles")
     profiles = []
     for index, profile in enumerate(rows):
@@ -156,14 +146,11 @@ def _profile_assert_applicable(
             self.metadata.get("inputEvidenceDigest"),
         ),
     }
-    expected.update(
-        {name: pair for name, pair in optional.items() if pair[1] is not None}
-    )
+    expected.update({name: pair for name, pair in optional.items() if pair[1] is not None})
     mismatches = [name for name, pair in expected.items() if pair[0] != pair[1]]
     if mismatches:
         raise ValueError(
-            "calibration profile is not applicable to this score: "
-            + ", ".join(mismatches)
+            "calibration profile is not applicable to this score: " + ", ".join(mismatches)
         )
 
 
