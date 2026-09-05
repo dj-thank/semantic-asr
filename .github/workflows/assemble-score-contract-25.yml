@@ -50,19 +50,21 @@ jobs:
           text = path.read_text(encoding='utf-8')
           text = replace_once(
               text,
-              '''                and legacy_source.startswith("ctc-")
-              and (metadata or {}).get("frameCount") is not None
-          ):
-              # Lossless adapter for the repository's historical CTC producer:
-              # its stored value is explicitly mean-frame likelihood and carries
-              # frameCount in the receipt.
-          ''',
-              '''                and legacy_source.startswith(("ctc-phone:", "ctc-mora:"))
-          ):
-              # Lossless adapter for the repository's reserved historical CTC producers:
-              # both stored the candidate sequence value as mean-frame likelihood.
-          ''',
-              'reserved CTC migration rule',
+              'legacy_source.startswith("ctc-")',
+              'legacy_source.startswith(("ctc-phone:", "ctc-mora:"))',
+              'reserved CTC source condition',
+          )
+          text = replace_once(
+              text,
+              '                and (metadata or {}).get("frameCount") is not None\n',
+              '',
+              'legacy CTC frame-count guard',
+          )
+          text = replace_once(
+              text,
+              '            # its stored value is explicitly mean-frame likelihood and carries\n            # frameCount in the receipt.\n',
+              '            # both reserved producers stored candidate values as mean-frame likelihood.\n',
+              'legacy CTC explanation',
           )
           text = replace_once(
               text,
