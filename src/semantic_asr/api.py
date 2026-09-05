@@ -32,10 +32,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .adapters import ASRAdapter
+from .audio import pcm_to_float32, require_integer
 from .candidate_pool import lenient_surface_key
 from .context_catalog import ContextCatalog, ContextSelection, load_context_catalog
 from .longform import LongformResult, SemanticASRTranscriber
-from .outputs import write_outputs
+from .outputs import publish_output_documents, render_output_documents
 from .pipeline import EffortName, effort_profile
 from .planner import EvidenceBudget
 from .revisions import FASTER_WHISPER_MODEL_REVISIONS
@@ -70,17 +71,29 @@ class RuntimeProfile:
     # Platt mapping (a, b) from logit(top posterior) to P(lenient CER == 0) fitted on the
     # ReazonSpeech calibration split (n=119, 1-30 s clips, lenient surface pooling, default
     # fusion). Test split: ECE 0.180 -> 0.029, AUROC 0.80. None disables confidence.
-    confidence_calibration: tuple[float, float] | None = (0.1211, -0.6687)
-    confidence_note: str = (
-        "calibrated on 1-30 s clips of ReazonSpeech (2026-09-03); long-form windows are "
-        "28 s spans, so treat the value as a relative ranking signal, not a guarantee"
-    )
+    confidence_calibration: tuple[float, float] | None = None
+    confidence_note: str = "No calibration has been established for this runtime profile."
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("profile name is required")
-        if self.beam_size < 1 or self.hypotheses < 1:
-            raise ValueError("beam_size and hypotheses must be positive")
+        for name in ("beam_size", "hypotheses", "window_ms"):
+            require_integer(getattr(self, name), name=name, minimum=1)
+        require_integer(self.overlap_ms, name="overlap_ms")
+        if not isinstance(self.loop_guard, bool):
+            raise TypeError("loop_guard must be a boolean")
+        if isinstance(self.patience, bool):
+            raise TypeError("patience must be a real number, not a boolean")
+        if self.confidence_calibration is not None:
+            if not isinstance(self.confidence_calibration, tuple):
+                raise TypeError("confidence_calibration must be an immutable (slope, intercept)")
+            if len(self.confidence_calibration) != 2 or any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                for value in self.confidence_calibration
+            ):
+                raise ValueError("confidence calibration requires two finite coefficients")
         if self.hypotheses > self.beam_size:
             raise ValueError("hypotheses cannot exceed beam_size")
         if self.window_ms <= 0 or self.overlap_ms < 0 or self.overlap_ms >= self.window_ms:
@@ -97,7 +110,9 @@ class RuntimeProfile:
 
     @property
     def digest(self) -> str:
-        payload = json.dumps(asdict(self), ensure_ascii=False, sort_keys=True).encode("utf-8")
+        payload = json.dumps(
+            asdict(self), ensure_ascii=False, sort_keys=True, allow_nan=False
+        ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
 
@@ -109,6 +124,11 @@ PROFILES: dict[str, RuntimeProfile] = {
             "measured default for machines without a supported GPU."
         ),
         model_revision=FASTER_WHISPER_MODEL_REVISIONS["large-v3-turbo"],
+        confidence_calibration=(0.1211, -0.6687),
+        confidence_note=(
+            "Calibrated on 1-30 s ReazonSpeech clips (2026-09-03), not arbitrary domains. "
+            "Only the matching unprompted CPU decoder is eligible; not a guarantee."
+        ),
     ),
     "cpu-ja-quality-v1": RuntimeProfile(
         name="cpu-ja-quality-v1",
@@ -215,16 +235,16 @@ def utterances_from_segments(
     *,
     overlap_tolerance_ms: int = 250,
 ) -> tuple[Utterance, ...]:
-    """Flatten decoder spans into monotonic absolute-time utterances.
+    """Render positive-duration captions without silently changing the observation.
 
-    Malformed or non-finite timestamp rows are ignored. Relative timestamps are
-    clamped to their source window, duplicate overlap rows are removed only when
-    their normalized text is an exact prefix match, and a later row may replace a
-    truncated prefix from the previous window.
+    Timestamp rows must reconstruct the selected text (ignoring whitespace only).
+    Invalid, incomplete or internally overlapping spans fall back to the complete
+    observed window. Only different, overlapping windows may deduplicate text.
+    Conflicting observations retain positive overlapping cues if trimming would
+    otherwise delete text; timestamps are not independent proof of a transcript.
     """
 
-    if overlap_tolerance_ms < 0:
-        raise ValueError("overlap_tolerance_ms must be non-negative")
+    require_integer(overlap_tolerance_ms, name="overlap_tolerance_ms")
 
     def relative_ms(value: Any, *, default: int) -> int | None:
         if value is None:
@@ -263,6 +283,12 @@ def utterances_from_segments(
                     text,
                 )
             )
+        rows.sort(key=lambda row: (row[0], row[1]))
+        reconstructed = "".join(text for _, _, text in rows)
+        same_text = "".join(reconstructed.split()) == "".join(segment.observed.split())
+        ordered = all(left[1] <= right[0] for left, right in zip(rows, rows[1:], strict=False))
+        if not same_text or not ordered:
+            rows = []
         if not rows:
             text = segment.observed.strip()
             if text and window_end > window_start:
@@ -270,7 +296,11 @@ def utterances_from_segments(
         rows.sort(key=lambda row: (row[0], row[1]))
 
         for start_ms, end_ms, text in rows:
-            if output and start_ms < output[-1].end_ms - overlap_tolerance_ms:
+            if (
+                output
+                and output[-1].segment_index != segment.index
+                and start_ms < output[-1].end_ms - overlap_tolerance_ms
+            ):
                 previous = output[-1]
                 previous_key = lenient_surface_key(previous.text)
                 current_key = lenient_surface_key(text)
@@ -283,10 +313,8 @@ def utterances_from_segments(
                 ):
                     output.pop()
                     start_ms = min(start_ms, previous.start_ms)
-                else:
+                elif end_ms > previous.end_ms:
                     start_ms = max(start_ms, previous.end_ms)
-            if end_ms <= start_ms:
-                continue
             output.append(
                 Utterance(
                     index=len(output) + 1,
@@ -341,7 +369,32 @@ class TranscriptResult:
     def provisional_segment_count(self) -> int:
         return sum(1 for segment in self.segments if segment.status != "accepted")
 
+    def verify(self) -> None:
+        self.longform.verify()
+        for name in (
+            "source_audio_sha256",
+            "duration_ms",
+            "observed_text",
+            "normalized_text",
+            "evidence_sha256",
+        ):
+            if getattr(self, name) != getattr(self.longform, name):
+                raise ValueError(f"facade {name} does not match verified long-form evidence")
+        if len(self.segments) != len(self.longform.segments):
+            raise ValueError("facade segments do not match long-form evidence")
+        for segment, raw in zip(self.segments, self.longform.segments, strict=True):
+            if (
+                segment.observed != raw.observed.text
+                or segment.normalized != raw.normalized.text
+                or segment.start_ms != raw.window.start_ms
+                or segment.end_ms != raw.window.end_ms
+            ):
+                raise ValueError("facade segment does not match long-form evidence")
+        if self.utterances != utterances_from_segments(self.longform, self.segments):
+            raise ValueError("facade utterances do not match observed evidence")
+
     def as_dict(self) -> dict[str, Any]:
+        self.verify()
         return {
             "profile": asdict(self.profile),
             "profileDigest": self.profile.digest,
@@ -366,23 +419,21 @@ class TranscriptResult:
     ) -> dict[str, str]:
         """Write the standard artifact set plus an utterance-level SRT and facade JSON."""
 
-        outputs = write_outputs(self.longform, output_dir, overwrite=overwrite, formats=formats)
+        self.verify()
+        documents = render_output_documents(self.longform, output_dir, formats=formats)
         root = Path(output_dir)
-        stem = Path(self.source_name).stem
+        stem = Path(self.longform.source_name).stem
         if self.utterances and (formats is None or "srt" in formats):
-            target = root / f"{stem}.utterances.srt"
-            if overwrite or not target.exists():
-                target.write_text(render_utterance_srt(self.utterances), encoding="utf-8")
-                outputs["utterances_srt"] = str(target)
+            documents["utterances_srt"] = (
+                root / f"{stem}.utterances.srt",
+                render_utterance_srt(self.utterances),
+            )
         if formats is None or "json" in formats:
-            target = root / f"{stem}.transcript.json"
-            if overwrite or not target.exists():
-                target.write_text(
-                    json.dumps(self.as_dict(), ensure_ascii=False, indent=2, default=str) + "\n",
-                    encoding="utf-8",
-                )
-                outputs["transcript_json"] = str(target)
-        return outputs
+            documents["transcript_json"] = (
+                root / f"{stem}.transcript.json",
+                json.dumps(self.as_dict(), ensure_ascii=False, indent=2, allow_nan=False) + "\n",
+            )
+        return publish_output_documents(documents, overwrite=overwrite)
 
 
 def build_adapter(profile: RuntimeProfile) -> ASRAdapter:
@@ -403,7 +454,7 @@ def build_adapter(profile: RuntimeProfile) -> ASRAdapter:
 def calibrated_confidence(profile: RuntimeProfile, top_posterior: Any) -> float | None:
     """Map the fusion top posterior to a calibrated correctness probability."""
 
-    if profile.confidence_calibration is None:
+    if profile.confidence_calibration is None or isinstance(top_posterior, bool):
         return None
     try:
         posterior = float(top_posterior)
@@ -414,7 +465,31 @@ def calibrated_confidence(profile: RuntimeProfile, top_posterior: Any) -> float 
     posterior = min(max(posterior, 1e-6), 1.0 - 1e-6)
     slope, intercept = profile.confidence_calibration
     logit = math.log(posterior / (1.0 - posterior))
-    return 1.0 / (1.0 + math.exp(-(slope * logit + intercept)))
+    value = slope * logit + intercept
+    if value >= 0:
+        return 1.0 / (1.0 + math.exp(-value))
+    exp_value = math.exp(value)
+    return exp_value / (1.0 + exp_value)
+
+
+def _confidence_eligible(
+    profile: RuntimeProfile, adapter: ASRAdapter, *, language: str, prompted: bool
+) -> bool:
+    from .advanced_adapters import PathPreservingFasterWhisperAdapter
+
+    measured = PROFILES["cpu-ja-v1"]
+    return (
+        profile.digest == measured.digest
+        and isinstance(adapter, PathPreservingFasterWhisperAdapter)
+        and not prompted
+        and language == measured.language
+        and getattr(adapter, "model_name", None) == measured.model
+        and getattr(adapter, "model_revision", None) == measured.model_revision
+        and getattr(adapter, "device", None) == measured.device
+        and getattr(adapter, "compute_type", None) == measured.compute_type
+        and getattr(adapter, "patience", None) == measured.patience
+        and getattr(getattr(adapter, "loop_guard", None), "enabled", None) is measured.loop_guard
+    )
 
 
 def _segment_status(segment: Any) -> str:
@@ -435,7 +510,7 @@ def _segment_status(segment: Any) -> str:
 
 
 def _mono_float32(audio: Any, np: Any) -> Any:
-    array = np.asarray(audio, dtype=np.float32)
+    array = pcm_to_float32(audio, np)
     if array.ndim == 2:
         first, second = (int(value) for value in array.shape)
         if first == 1:
@@ -467,6 +542,9 @@ def _mono_float32(audio: Any, np: Any) -> Any:
 def _materialise_audio(audio: Any, *, sample_rate: int = 16_000) -> tuple[Path, Path | None]:
     """Return a readable audio path; arrays are written to a temporary 16 kHz WAV."""
 
+    require_integer(sample_rate, name="sample_rate", minimum=1)
+    if sample_rate != 16_000:
+        raise ValueError("array audio must already be sampled at 16000 Hz")
     if isinstance(audio, (str, os.PathLike)):
         path = Path(audio).expanduser().resolve()
         if not path.is_file():
@@ -478,7 +556,7 @@ def _materialise_audio(audio: Any, *, sample_rate: int = 16_000) -> tuple[Path, 
         raise TypeError("array audio input requires numpy; pass a file path instead") from exc
     array = _mono_float32(audio, np)
     clipped = np.clip(array, -1.0, 1.0)
-    pcm = np.rint(clipped * 32767.0).astype("<i2")
+    pcm = np.clip(np.rint(clipped * 32768.0), -32768, 32767).astype("<i2")
     with tempfile.NamedTemporaryFile(prefix="semantic-asr-", suffix=".wav", delete=False) as handle:
         name = handle.name
     path = Path(name)
@@ -553,6 +631,7 @@ def _validate_warm_transcriber(
         "evidence_budget_ms": getattr(
             getattr(transcriber, "evidence_budget", None), "total_cost_ms", None
         ),
+        "maximumEvidenceActions": getattr(transcriber, "maximum_evidence_actions", None),
         "maximum_evidence_actions": getattr(
             getattr(transcriber, "evidence_budget", None), "max_actions", None
         ),
@@ -647,6 +726,13 @@ def transcribe(
             with contextlib.suppress(OSError):
                 temporary.unlink()
 
+    base = transcriber.base_adapter
+    confidence_eligible = _confidence_eligible(
+        resolved,
+        base,
+        language=language or resolved.language,
+        prompted=bool(effective_hotwords or initial_prompt),
+    )
     segments = tuple(
         TranscriptSegment(
             index=index,
@@ -655,8 +741,10 @@ def transcribe(
             observed=segment.observed.text,
             normalized=segment.normalized.text,
             status=_segment_status(segment),
-            confidence=calibrated_confidence(
-                resolved, dict(segment.diagnostics).get("topPosterior")
+            confidence=(
+                calibrated_confidence(resolved, dict(segment.diagnostics).get("topPosterior"))
+                if confidence_eligible
+                else None
             ),
             diagnostics=dict(segment.diagnostics),
         )
@@ -671,7 +759,10 @@ def transcribe(
         "maximumEvidenceActions": transcriber.evidence_budget.max_actions,
         "adapter": getattr(base, "name", type(base).__name__),
         "model": getattr(base, "model_name", resolved.model),
-        "modelRevision": getattr(base, "model_revision", None) or resolved.model_revision,
+        "modelRevision": getattr(base, "model_revision", None),
+        "requestedModelRevision": resolved.model_revision,
+        "confidenceCalibrationApplied": confidence_eligible,
+        "confidenceCalibrationScope": resolved.confidence_note,
         "modelArtifactSha256": getattr(base, "model_artifact_sha256", None),
         "runtimeRevision": getattr(base, "runtime_revision", None),
         "device": getattr(base, "device", resolved.device),

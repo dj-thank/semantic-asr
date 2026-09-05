@@ -168,9 +168,36 @@ def join_japanese_fragments(fragments: Iterable[str], *, max_overlap: int = 160)
         suffix = fragment[overlap:]
         if not suffix:
             continue
-        if output[-1:] in "、。！？!?" and suffix[:1] == output[-1:]:
+        if max_overlap > 0 and output[-1:] in "、。！？!?" and suffix[:1] == output[-1:]:
             suffix = suffix[1:]
         output += (" " if _ascii_boundary(output, suffix) else "") + suffix
+    return output
+
+
+def join_timed_fragments(
+    fragments: Iterable[tuple[int, int, str]], *, max_overlap: int = 160
+) -> str:
+    """Join ordered windows, permitting textual deduplication only in time overlap.
+
+    Matching strings in separate audio intervals are repetitions, not duplicates.
+    Within overlapping windows this remains a text-boundary heuristic, not a forced
+    alignment. The original per-window evidence is always retained by the caller.
+    """
+    from .audio import require_integer
+
+    require_integer(max_overlap, name="max_overlap")
+    output = ""
+    previous_start = -1
+    previous_end = 0
+    previous_text = ""
+    for start, end, text in fragments:
+        require_integer(start, name="start_ms")
+        require_integer(end, name="end_ms", minimum=1)
+        if end <= start or start < previous_start:
+            raise ValueError("timed fragments must have positive, ordered time ranges")
+        allowed = min(max_overlap, len(previous_text)) if start < previous_end else 0
+        output = join_japanese_fragments((output, text), max_overlap=allowed)
+        previous_start, previous_end, previous_text = start, end, str(text or "").strip()
     return output
 
 
