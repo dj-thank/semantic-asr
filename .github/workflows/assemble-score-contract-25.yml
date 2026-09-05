@@ -34,6 +34,54 @@ jobs:
           Path('src/semantic_asr/score_contract.py').write_bytes(bz2.decompress(compressed))
           PY
           test "$(sha256sum src/semantic_asr/score_contract.py | cut -d' ' -f1)" = "e49eac2fcc0d1bb0581a671151744c6586af8669922fa1ee5c544d96fae34e27"
+      - name: Apply lossless repository migration rules
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one {label}, found {count}')
+              return text.replace(old, new)
+
+          path = Path('src/semantic_asr/score_contract.py')
+          text = path.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              '''                and legacy_source.startswith("ctc-")
+              and (metadata or {}).get("frameCount") is not None
+          ):
+              # Lossless adapter for the repository's historical CTC producer:
+              # its stored value is explicitly mean-frame likelihood and carries
+              # frameCount in the receipt.
+          ''',
+              '''                and legacy_source.startswith(("ctc-phone:", "ctc-mora:"))
+          ):
+              # Lossless adapter for the repository's reserved historical CTC producers:
+              # both stored the candidate sequence value as mean-frame likelihood.
+          ''',
+              'reserved CTC migration rule',
+          )
+          text = replace_once(
+              text,
+              'raise ValueError("use an applicable calibration profile to construct probabilities")',
+              'raise ValueError("use an applicable calibrator profile to construct probabilities")',
+              'probability construction error',
+          )
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('tests/test_v02_ranker.py')
+          text = path.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              '    assert calibrated.require_probability() == pytest.approx(0.72)\n',
+              '    with pytest.raises(ValueError, match="Registry"):\n        calibrated.require_probability()\n',
+              'legacy unregistered probability expectation',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
       - name: Export the canonical public API
         shell: bash
         run: |
