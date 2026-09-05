@@ -603,6 +603,10 @@ def run_document_context_experiment(
     failures: list[tuple[str, str, str]] = []
     for case in manifest.cases:
         prepared = by_case[case.case_id]
+        if prepared.case.digest != case.digest:
+            raise ValueError("prepared case differs from the frozen manifest case")
+        if len(prepared.candidates.paths) > protocol.maximum_candidate_documents:
+            raise ValueError("prepared candidate set exceeds the protocol limit")
         for arm in protocol.arms:
             try:
                 results.append(_run_case_arm(prepared, arm, scorers, protocol))
