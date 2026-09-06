@@ -356,10 +356,14 @@ def test_truncated_audio_rejected(driver, tmp_path):
         driver.research_input(research_args(path))
 
 
-def test_actual_post_candidate_driver_trains_and_evaluates_synthetic_rows(driver, tmp_path):
+def test_actual_post_candidate_driver_trains_and_evaluates_synthetic_rows(
+    driver, monkeypatch, tmp_path
+):
     """Real CLI optimization/evaluation; synthetic candidates, not real ASR inference."""
     from semantic_asr.contracts import CandidateEvidence
 
+    # Cloud setup activation does not persist into the agent session.
+    monkeypatch.setenv("PATH", "")
     rows = []
     for index, split in enumerate(("train", "calibration", "test")):
         for number in range(4):
@@ -408,3 +412,22 @@ def test_actual_post_candidate_driver_trains_and_evaluates_synthetic_rows(driver
     assert report["sample_count"] == 4
     assert (output / "ranker.json").stat().st_size > 100
     assert (output / "calibration.json").stat().st_size > 100
+
+
+def test_model_free_optimization_uses_current_teacher_contract(driver, tmp_path):
+    output = tmp_path / "optimization.json"
+    driver.run_stage(
+        "optimization",
+        [sys.executable, "scripts/run_v02_model_free_validation.py", "--output", str(output)],
+        tmp_path,
+        {"stages": []},
+        time.monotonic() + 30,
+        10 * 1024 * 1024,
+    )
+    result = json.loads(output.read_text(encoding="utf-8"))
+    consensus = result["teacherConsensus"]
+    assert consensus["usable_for_distillation"]
+    assert set(consensus["active_teachers"]) == {"teacher-8b", "teacher-12b"}
+    assert consensus["teacher_entropies"]["teacher-8b"] != 0.18
+    assert consensus["teacher_entropies"]["teacher-12b"] != 0.22
+    assert result["progressiveReranking"]["early_exit"]

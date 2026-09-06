@@ -189,6 +189,7 @@ def run_stage(
         TOKENIZERS_PARALLELISM="false",
     )
     env.pop("PYTHONPATH", None)
+    env["PATH"] = sysconfig.get_path("scripts") + os.pathsep + env.get("PATH", "")
     process = None
     try:
         with (output / f"{name}.log").open("wb") as log:
