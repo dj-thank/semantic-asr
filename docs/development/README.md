@@ -70,3 +70,10 @@ train weights, publish an integrated phonetic model, or establish world-leading 
 Subsequent #42/#43/#44 have separate implementation and limited training evidence.
 Those outcomes need the evidence specified in the work queue. Historical research
 remains in its original dated documents; do not overwrite its conclusions.
+
+## Codex execution entry
+
+[Codex handoff and bounded pipeline](CODEX_AUTOPILOT.md) connects README intentions to
+acceptance criteria, executable model-free verification, and the next #30 driver task.
+Run `python scripts/codex_verify.py --plan` from the repository root. This does not
+complete the real-audio research loop or change the reserved issue ownership above.
