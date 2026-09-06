@@ -17,7 +17,8 @@ jobs:
         with:
           python-version: '3.12'
       - name: Download development tool wheels only
-        run: python -m pip download --only-binary=:all: --dest tools ruff build wheel 'setuptools>=77'
+        run: |
+          python -m pip download --only-binary=:all: --dest tools ruff build wheel 'setuptools>=77'
       - uses: actions/upload-artifact@v7
         with:
           name: pr50-offline-tools-${{ github.sha }}
