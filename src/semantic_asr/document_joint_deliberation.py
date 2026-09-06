@@ -1,0 +1,43 @@
+"""Compatibility import for the canonical joint document-lattice engine."""
+
+from .document_joint_engine import (
+    DocumentArcReceipt,
+    DocumentDeliberatedResult,
+    DocumentDeliberatedSegment,
+    DocumentDeliberationConfig,
+    DocumentDeliberationDecision,
+    DocumentFailureReceipt,
+    DocumentNormalizedTranscript,
+    DocumentObservedTranscript,
+    DocumentPassThroughResult,
+    DocumentPathCandidate,
+    DocumentProposalProvider,
+    JointDocumentSemanticASRTranscriber,
+    OverlapPolicy,
+    OverlapReceipt,
+    WindowPathOption,
+    apply_joint_document_deliberation,
+    resolve_window_overlap,
+    with_joint_document_deliberation,
+)
+
+__all__ = [
+    "DocumentArcReceipt",
+    "DocumentDeliberatedResult",
+    "DocumentDeliberatedSegment",
+    "DocumentDeliberationConfig",
+    "DocumentDeliberationDecision",
+    "DocumentFailureReceipt",
+    "DocumentNormalizedTranscript",
+    "DocumentObservedTranscript",
+    "DocumentPassThroughResult",
+    "DocumentPathCandidate",
+    "DocumentProposalProvider",
+    "JointDocumentSemanticASRTranscriber",
+    "OverlapPolicy",
+    "OverlapReceipt",
+    "WindowPathOption",
+    "apply_joint_document_deliberation",
+    "resolve_window_overlap",
+    "with_joint_document_deliberation",
+]
