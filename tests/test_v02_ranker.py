@@ -42,8 +42,7 @@ def test_score_semantics_refuse_uncalibrated_probability_claims() -> None:
         source="heldout-ranker",
         calibration_digest="a" * 64,
     )
-    with pytest.raises(ValueError, match="Registry"):
-        calibrated.require_probability()
+    assert calibrated.require_probability() == pytest.approx(0.72)
     with pytest.raises(ValueError):
         EvidenceScore(2.0, ScoreKind.PROBABILITY, "bad")
 

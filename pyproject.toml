@@ -21,14 +21,6 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-# Separate reproducible environment: the existing rerank extra targets Transformers 5.
-phonetic = [
-  "numpy>=1.26",
-  "torch>=2.6",
-  "transformers>=4.52,<5",
-  "faster-whisper>=1.2,<2",
-  "pyopenjtalk-plus>=0.4.1",
-]
 asr = [
   "faster-whisper>=1.2,<2",
   "numpy>=1.26",

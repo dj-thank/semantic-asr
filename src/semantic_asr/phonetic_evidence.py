@@ -14,7 +14,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from .audio import require_integer
 from .contracts import sha256_json
 from .score_semantics import EvidenceScore, ScoreKind
 
@@ -70,8 +69,8 @@ class PosteriorFrame:
     probabilities: tuple[tuple[str, float], ...]
 
     def __post_init__(self) -> None:
-        require_integer(self.start_ms, name="frame start_ms")
-        require_integer(self.end_ms, name="frame end_ms", minimum=1)
+        if isinstance(self.start_ms, bool) or isinstance(self.end_ms, bool):
+            raise TypeError("frame timestamps must be integers")
         if self.start_ms < 0 or self.end_ms <= self.start_ms:
             raise ValueError("posterior frame requires 0 <= start_ms < end_ms")
         if not self.probabilities:
@@ -151,7 +150,6 @@ class PosteriorSequence:
             if symbols != allowed:
                 raise ValueError("every posterior frame must cover the frozen vocabulary exactly")
         object.__setattr__(self, "vocabulary", vocabulary)
-        object.__setattr__(self, "frames", tuple(self.frames))
 
     @property
     def digest(self) -> str:
@@ -194,7 +192,6 @@ class CandidatePronunciation:
             raise ValueError("source_text_sha256 does not match the exact candidate text")
         if not self.producer or not self.producer_revision:
             raise ValueError("pronunciation producer provenance is required")
-        object.__setattr__(self, "symbols", tuple(self.symbols))
 
     @classmethod
     def create(
@@ -300,17 +297,13 @@ def ctc_pronunciation_score(
     posterior: PosteriorSequence,
     pronunciation: CandidatePronunciation,
     *,
-    probability_floor: float = 0.0,
+    probability_floor: float = 1e-12,
 ) -> CTCPronunciationScore:
     """Compute ``log P(symbols | audio)`` with the exact CTC forward recurrence."""
 
     floor = _strict_float(probability_floor, name="probability_floor")
-    if floor != 0.0:
-        raise ValueError("exact CTC requires probability_floor=0; smoothing fabricates support")
-
-    def log_probability(value: float) -> float:
-        return math.log(value) if value > 0 else -math.inf
-
+    if not 0.0 < floor < 1.0:
+        raise ValueError("probability_floor must be in (0, 1)")
     if posterior.kind != pronunciation.kind:
         raise ValueError("posterior and pronunciation kinds must match")
     if posterior.blank_symbol in pronunciation.symbols:
@@ -326,9 +319,9 @@ def ctc_pronunciation_score(
 
     previous = [-math.inf] * len(expanded)
     first = posterior.frames[0]
-    previous[0] = log_probability(first.probability(blank))
+    previous[0] = math.log(max(first.probability(blank), floor))
     if len(expanded) > 1:
-        previous[1] = log_probability(first.probability(expanded[1]))
+        previous[1] = math.log(max(first.probability(expanded[1]), floor))
 
     for frame in posterior.frames[1:]:
         current = [-math.inf] * len(expanded)
@@ -338,7 +331,9 @@ def ctc_pronunciation_score(
                 predecessors.append(previous[index - 1])
             if index > 1 and symbol != blank and symbol != expanded[index - 2]:
                 predecessors.append(previous[index - 2])
-            current[index] = _logsumexp(predecessors) + log_probability(frame.probability(symbol))
+            current[index] = _logsumexp(predecessors) + math.log(
+                max(frame.probability(symbol), floor)
+            )
         previous = current
 
     final_states = previous[-2:] if len(expanded) > 1 else previous
@@ -382,7 +377,7 @@ def rank_candidate_pronunciations(
     posterior: PosteriorSequence,
     pronunciations: Sequence[CandidatePronunciation],
     *,
-    probability_floor: float = 0.0,
+    probability_floor: float = 1e-12,
 ) -> tuple[CTCPronunciationScore, ...]:
     """Rank fixed candidates without generating or rewriting transcript text."""
 

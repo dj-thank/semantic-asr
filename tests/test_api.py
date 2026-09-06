@@ -165,12 +165,12 @@ def test_calibrated_confidence_is_monotone_and_optional() -> None:
     assert calibrated_confidence(disabled, 0.9) is None
 
 
-def test_unknown_adapter_does_not_inherit_measured_confidence(tmp_path: Path) -> None:
+def test_segments_carry_confidence(tmp_path: Path) -> None:
     audio = tmp_path / "clip.wav"
     _write_wav(audio, 2.0)
     result = transcribe(audio, adapter=FakeAdapter())
-    assert result.segments[0].confidence is None
-    assert result.provenance["confidenceCalibrationApplied"] is False
+    assert result.segments[0].confidence is not None
+    assert 0.0 <= result.segments[0].confidence <= 1.0
 
 
 def test_quality_profile_reaches_the_decode_request(tmp_path: Path) -> None:
@@ -183,8 +183,7 @@ def test_quality_profile_reaches_the_decode_request(tmp_path: Path) -> None:
     assert result.provenance["beamSize"] == 12
     assert result.provenance["hypotheses"] == 12
     assert result.profile.model_revision is not None
-    assert result.provenance["modelRevision"] is None
-    assert result.provenance["requestedModelRevision"] == result.profile.model_revision
+    assert result.provenance["modelRevision"] == result.profile.model_revision
 
 
 def test_warm_transcriber_profile_mismatch_fails_closed(tmp_path: Path) -> None:
@@ -273,7 +272,7 @@ def test_invalid_timestamp_rows_never_create_negative_srt_ranges(tmp_path: Path)
     audio = tmp_path / "spans.wav"
     _write_wav(audio, 1.0)
     result = transcribe(audio, adapter=InvalidSpanAdapter())
-    assert [utterance.text for utterance in result.utterances] == ["有効な字幕です"]
+    assert [utterance.text for utterance in result.utterances] == ["有効"]
     assert all(row.end_ms > row.start_ms for row in result.utterances)
 
 

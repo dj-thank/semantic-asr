@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from .audio import require_integer
 from .contracts import RankedCandidate
 from .semantic_lattice import SemanticIsland, SemanticLattice
 
@@ -25,15 +23,10 @@ class EvidenceBudget:
     minimum_utility: float = 0.00004
 
     def __post_init__(self) -> None:
-        require_integer(self.total_cost_ms, name="total_cost_ms")
-        require_integer(self.max_actions, name="max_actions")
-        if (
-            isinstance(self.minimum_utility, bool)
-            or not isinstance(self.minimum_utility, (int, float))
-            or not math.isfinite(self.minimum_utility)
-            or self.minimum_utility < 0
-        ):
-            raise ValueError("minimum utility must be finite and non-negative")
+        if self.total_cost_ms < 0 or self.max_actions < 0:
+            raise ValueError("evidence budget values must be non-negative")
+        if self.minimum_utility < 0:
+            raise ValueError("minimum utility must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,10 +196,6 @@ def plan_evidence(
         for action in _candidate_actions(lattice, global_uncertainty=global_uncertainty)
         if action.kind in enabled_set
     ]
-    teachers = [action for action in actions if action.kind == "local-teacher"]
-    if teachers:
-        teacher = min(teachers, key=lambda a: (-a.utility, a.action_id))
-        actions = [a for a in actions if a.kind != "local-teacher" or a is teacher]
     actions.sort(
         key=lambda action: (
             -action.utility,

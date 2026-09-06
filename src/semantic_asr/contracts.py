@@ -303,7 +303,21 @@ class NormalizedTranscript:
         rejected_edits: tuple[str, ...] = (),
         semantic_change_warnings: tuple[str, ...] = (),
     ) -> NormalizedTranscript:
-        result = cls(
+        observed.verify()
+        if selected_candidate_id is not None:
+            selected = next(
+                (
+                    candidate
+                    for candidate in observed.candidates
+                    if candidate.candidate_id == selected_candidate_id
+                ),
+                None,
+            )
+            if selected is None:
+                raise ValueError("normalization selected a candidate outside observed evidence")
+            if mode == "rank-only" and text != selected.text:
+                raise ValueError("rank-only normalization cannot rewrite candidate text")
+        return cls(
             text=text,
             observed_evidence_sha256=observed.evidence_sha256,
             mode=mode,
@@ -311,27 +325,3 @@ class NormalizedTranscript:
             rejected_edits=rejected_edits,
             semantic_change_warnings=semantic_change_warnings,
         )
-        result.verify(observed)
-        return result
-
-    def verify(self, observed: ObservedTranscript) -> None:
-        observed.verify()
-        if self.observed_evidence_sha256 != observed.evidence_sha256:
-            raise ValueError("normalization is linked to different observed evidence")
-        if self.mode not in {"deterministic", "rank-only", "guarded-rewrite"}:
-            raise ValueError("unsupported normalization mode")
-        if self.mode == "rank-only" and self.selected_candidate_id is None:
-            raise ValueError("rank-only normalization requires a selected candidate ID")
-        if self.selected_candidate_id is not None:
-            selected = next(
-                (
-                    candidate
-                    for candidate in observed.candidates
-                    if candidate.candidate_id == self.selected_candidate_id
-                ),
-                None,
-            )
-            if selected is None:
-                raise ValueError("normalization selected a candidate outside observed evidence")
-            if self.mode == "rank-only" and self.text != selected.text:
-                raise ValueError("rank-only normalization cannot rewrite candidate text")

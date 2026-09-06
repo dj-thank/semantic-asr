@@ -1,24 +1,110 @@
-"""Canonical score types and deterministic held-out calibrators."""
-
 from __future__ import annotations
 
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
+from enum import StrEnum
 from typing import Protocol, Self
 
-from .score_contract import (
-    CalibrationProfile,
-    CalibrationProfileRegistry,
-    EvidenceScore,
-    ScoreNormalization,
-    ScoreProvenance,
-    ScoreSemantics,
-    require_sha256,
-)
-
 _EPS = 1e-12
+
+
+class ScoreSemantics(StrEnum):
+    """Meaning of a numeric score.
+
+    Numeric range alone never determines semantics. In particular, a model-authored
+    value in ``[0, 1]`` is still a preference unless it passed a declared calibrator.
+    """
+
+    CUMULATIVE_LOG_LIKELIHOOD = "cumulative_log_likelihood"
+    AVERAGE_LOG_LIKELIHOOD = "average_log_likelihood"
+    LOG_PROBABILITY = "log_probability"
+    PROBABILITY = "probability"
+    LOGIT = "logit"
+    UNCALIBRATED_SCORE = "uncalibrated_score"
+    PREFERENCE = "preference"
+    LOSS = "loss"
+    COST = "cost"
+
+
+@dataclass(frozen=True, slots=True)
+class ScoreProvenance:
+    scorer: str
+    model: str | None = None
+    revision: str | None = None
+    runtime: str | None = None
+    runtime_version: str | None = None
+    configuration_digest: str | None = None
+    calibration_digest: str | None = None
+    input_evidence_digest: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.scorer.strip():
+            raise ValueError("scorer is required")
+
+    @property
+    def digest(self) -> str:
+        payload = json.dumps(
+            asdict(self),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceScore:
+    value: float
+    semantics: ScoreSemantics
+    provenance: ScoreProvenance
+    calibrated: bool = False
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(float(self.value)):
+            raise ValueError("score value must be finite")
+        if self.semantics == ScoreSemantics.PROBABILITY:
+            if not 0.0 <= float(self.value) <= 1.0:
+                raise ValueError("probability must be in [0, 1]")
+            if not self.calibrated:
+                raise ValueError("probability must be produced by an explicit calibrator")
+        elif self.calibrated:
+            raise ValueError("only probability scores may be marked calibrated")
+
+    @classmethod
+    def raw(
+        cls,
+        value: float,
+        *,
+        semantics: ScoreSemantics,
+        scorer: str,
+        model: str | None = None,
+        revision: str | None = None,
+        runtime: str | None = None,
+        runtime_version: str | None = None,
+        configuration_digest: str | None = None,
+        input_evidence_digest: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> Self:
+        if semantics == ScoreSemantics.PROBABILITY:
+            raise ValueError("use a fitted calibrator to construct probabilities")
+        return cls(
+            value=float(value),
+            semantics=semantics,
+            provenance=ScoreProvenance(
+                scorer=scorer,
+                model=model,
+                revision=revision,
+                runtime=runtime,
+                runtime_version=runtime_version,
+                configuration_digest=configuration_digest,
+                input_evidence_digest=input_evidence_digest,
+                metadata=dict(metadata or {}),
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,32 +115,16 @@ class CalibrationExample:
     weight: float = 1.0
 
     def __post_init__(self) -> None:
-        if isinstance(self.score, bool) or not math.isfinite(float(self.score)):
-            raise ValueError("calibration score must be finite and non-boolean")
-        if (
-            isinstance(self.weight, bool)
-            or not math.isfinite(float(self.weight))
-            or self.weight <= 0
-        ):
+        if not math.isfinite(float(self.score)):
+            raise ValueError("calibration score must be finite")
+        if not math.isfinite(float(self.weight)) or self.weight <= 0:
             raise ValueError("calibration weight must be finite and positive")
 
 
 class FittedCalibrator(Protocol):
     name: str
 
-    def probability(
-        self,
-        score: EvidenceScore,
-        *,
-        profile: CalibrationProfile | None = None,
-    ) -> EvidenceScore: ...
-
-    def profile_for(
-        self,
-        score: EvidenceScore,
-        *,
-        dataset_split_digest: str | None = None,
-    ) -> CalibrationProfile: ...
+    def probability(self, score: EvidenceScore) -> EvidenceScore: ...
 
     @property
     def digest(self) -> str: ...
@@ -72,82 +142,6 @@ def _clip_probability(value: float) -> float:
     return min(1.0 - _EPS, max(_EPS, float(value)))
 
 
-def _legacy_probability(
-    *,
-    source_score: EvidenceScore,
-    value: float,
-    calibration_digest: str,
-    dataset_digest: str,
-    calibrator: str,
-) -> EvidenceScore:
-    """Create a receipt-bearing legacy probability.
-
-    It is intentionally not registry-applicable because no frozen applicability
-    profile is attached. Decision code must call ``require_probability`` with a
-    registry, which rejects this compatibility form.
-    """
-
-    provenance = ScoreProvenance(
-        scorer=source_score.provenance.scorer,
-        model=source_score.provenance.model,
-        revision=source_score.provenance.revision,
-        runtime=source_score.provenance.runtime,
-        runtime_version=source_score.provenance.runtime_version,
-        normalization=source_score.provenance.normalization,
-        score_domain_digest=source_score.provenance.score_domain_digest,
-        configuration_digest=source_score.provenance.configuration_digest,
-        calibration_digest=calibration_digest,
-        input_evidence_digest=source_score.provenance.input_evidence_digest,
-        input_condition_digest=source_score.provenance.input_condition_digest,
-        metadata={
-            **source_score.provenance.metadata,
-            "sourceSemantics": source_score.semantics.value,
-            "sourceScoreDigest": source_score.digest,
-            "calibrationDatasetDigest": dataset_digest,
-            "calibrator": calibrator,
-            "legacyUnregisteredCalibration": True,
-        },
-    )
-    return EvidenceScore(
-        value=value,
-        semantics=ScoreSemantics.PROBABILITY,
-        provenance=provenance,
-        calibrated=True,
-    )
-
-
-def _profile_for_calibrator(
-    *,
-    score: EvidenceScore,
-    calibration_digest: str,
-    dataset_split_digest: str,
-    method: str,
-    name: str,
-    source_semantics: ScoreSemantics,
-    parameters: dict[str, object],
-    parameters_digest: str,
-) -> CalibrationProfile:
-    require_sha256(dataset_split_digest, name="dataset_split_digest")
-    if score.semantics != source_semantics:
-        raise ValueError(f"calibrator expects {source_semantics}, got {score.semantics}")
-    return CalibrationProfile(
-        calibration_digest=calibration_digest,
-        name=name,
-        method=method,
-        source_semantics=source_semantics,
-        scorer=score.provenance.scorer,
-        model=score.provenance.model,
-        revision=score.provenance.revision,
-        normalization=score.provenance.normalization,
-        score_domain_digest=score.provenance.score_domain_digest,
-        configuration_digest=score.provenance.configuration_digest,
-        input_condition_digest=score.provenance.input_condition_digest,
-        dataset_split_digest=dataset_split_digest,
-        parameters=parameters,
-        metadata={"parametersDigest": parameters_digest},
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class PlattCalibrator:
     """A held-out logistic calibrator fitted without third-party dependencies."""
@@ -161,7 +155,6 @@ class PlattCalibrator:
     name: str = "platt-v1"
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "source_semantics", ScoreSemantics(self.source_semantics))
         if self.source_semantics == ScoreSemantics.PROBABILITY:
             raise ValueError("source semantics should describe the uncalibrated input")
         if not all(
@@ -201,6 +194,8 @@ class PlattCalibrator:
         )
         slope = 0.0
 
+        # Full-batch gradient descent is intentionally deterministic. The feature is
+        # standardized so the same learning rate is stable across decoder score domains.
         mean = sum(example.weight * example.score for example in examples) / total_weight
         variance = (
             sum(example.weight * (example.score - mean) ** 2 for example in examples) / total_weight
@@ -218,10 +213,12 @@ class PlattCalibrator:
                 grad_intercept += example.weight * error
             grad_slope = grad_slope / total_weight + l2 * slope
             grad_intercept /= total_weight
+            # Mild inverse-square-root decay avoids oscillation without hidden state.
             rate = learning_rate / math.sqrt(1.0 + step / 200.0)
             slope -= rate * grad_slope
             intercept -= rate * grad_intercept
 
+        # Fold standardization into the persisted affine transform.
         folded_slope = slope / scale
         folded_intercept = intercept - slope * mean / scale
         return cls(
@@ -233,43 +230,32 @@ class PlattCalibrator:
             l2=l2,
         )
 
-    def profile_for(
-        self,
-        score: EvidenceScore,
-        *,
-        dataset_split_digest: str | None = None,
-    ) -> CalibrationProfile:
-        return _profile_for_calibrator(
-            score=score,
-            calibration_digest=self.digest,
-            dataset_split_digest=dataset_split_digest or self.dataset_digest,
-            method="platt",
-            name=self.name,
-            source_semantics=self.source_semantics,
-            parameters={"slope": self.slope, "intercept": self.intercept},
-            parameters_digest=self.digest,
-        )
-
-    def probability(
-        self,
-        score: EvidenceScore,
-        *,
-        profile: CalibrationProfile | None = None,
-    ) -> EvidenceScore:
+    def probability(self, score: EvidenceScore) -> EvidenceScore:
         if score.semantics != self.source_semantics:
             raise ValueError(f"calibrator expects {self.source_semantics}, got {score.semantics}")
         value = _sigmoid(self.slope * score.value + self.intercept)
-        if profile is None:
-            return _legacy_probability(
-                source_score=score,
-                value=value,
-                calibration_digest=self.digest,
-                dataset_digest=self.dataset_digest,
-                calibrator=self.name,
-            )
-        if profile.calibration_digest != self.digest:
-            raise ValueError("calibration profile does not match this Platt artifact")
-        return profile.probability(score, value)
+        provenance = ScoreProvenance(
+            scorer=score.provenance.scorer,
+            model=score.provenance.model,
+            revision=score.provenance.revision,
+            runtime=score.provenance.runtime,
+            runtime_version=score.provenance.runtime_version,
+            configuration_digest=score.provenance.configuration_digest,
+            calibration_digest=self.digest,
+            input_evidence_digest=score.provenance.input_evidence_digest,
+            metadata={
+                **score.provenance.metadata,
+                "sourceSemantics": score.semantics.value,
+                "calibrationDatasetDigest": self.dataset_digest,
+                "calibrator": self.name,
+            },
+        )
+        return EvidenceScore(
+            value=value,
+            semantics=ScoreSemantics.PROBABILITY,
+            provenance=provenance,
+            calibrated=True,
+        )
 
     @property
     def digest(self) -> str:
@@ -301,7 +287,6 @@ class IsotonicCalibrator:
     name: str = "isotonic-pav-v1"
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "source_semantics", ScoreSemantics(self.source_semantics))
         if not self.thresholds or len(self.thresholds) != len(self.probabilities):
             raise ValueError("thresholds and probabilities must have equal non-zero length")
         if tuple(sorted(self.thresholds)) != self.thresholds:
@@ -313,8 +298,6 @@ class IsotonicCalibrator:
             for left, right in zip(self.probabilities, self.probabilities[1:], strict=False)
         ):
             raise ValueError("isotonic probabilities must be monotone")
-        if not self.dataset_digest:
-            raise ValueError("dataset digest is required")
 
     @classmethod
     def fit(
@@ -327,7 +310,8 @@ class IsotonicCalibrator:
         if len(examples) < 4:
             raise ValueError("at least four held-out examples are required")
         ordered = sorted(examples, key=lambda example: (example.score, example.correct))
-        blocks: list[list[float]] = []
+        # Merge identical x values before PAV.
+        blocks: list[list[float]] = []  # [min_x, max_x, weighted_y, weight]
         for example in ordered:
             if blocks and example.score == blocks[-1][1]:
                 blocks[-1][2] += example.weight * float(example.correct)
@@ -364,49 +348,35 @@ class IsotonicCalibrator:
             dataset_digest=dataset_digest,
         )
 
-    def profile_for(
-        self,
-        score: EvidenceScore,
-        *,
-        dataset_split_digest: str | None = None,
-    ) -> CalibrationProfile:
-        return _profile_for_calibrator(
-            score=score,
-            calibration_digest=self.digest,
-            dataset_split_digest=dataset_split_digest or self.dataset_digest,
-            method="isotonic-pav",
-            name=self.name,
-            source_semantics=self.source_semantics,
-            parameters={
-                "thresholds": self.thresholds,
-                "probabilities": self.probabilities,
-            },
-            parameters_digest=self.digest,
-        )
-
-    def probability(
-        self,
-        score: EvidenceScore,
-        *,
-        profile: CalibrationProfile | None = None,
-    ) -> EvidenceScore:
+    def probability(self, score: EvidenceScore) -> EvidenceScore:
         if score.semantics != self.source_semantics:
             raise ValueError(f"calibrator expects {self.source_semantics}, got {score.semantics}")
         index = 0
         while index < len(self.thresholds) - 1 and score.value > self.thresholds[index]:
             index += 1
         value = self.probabilities[index]
-        if profile is None:
-            return _legacy_probability(
-                source_score=score,
-                value=value,
-                calibration_digest=self.digest,
-                dataset_digest=self.dataset_digest,
-                calibrator=self.name,
-            )
-        if profile.calibration_digest != self.digest:
-            raise ValueError("calibration profile does not match this isotonic artifact")
-        return profile.probability(score, value)
+        provenance = ScoreProvenance(
+            scorer=score.provenance.scorer,
+            model=score.provenance.model,
+            revision=score.provenance.revision,
+            runtime=score.provenance.runtime,
+            runtime_version=score.provenance.runtime_version,
+            configuration_digest=score.provenance.configuration_digest,
+            calibration_digest=self.digest,
+            input_evidence_digest=score.provenance.input_evidence_digest,
+            metadata={
+                **score.provenance.metadata,
+                "sourceSemantics": score.semantics.value,
+                "calibrationDatasetDigest": self.dataset_digest,
+                "calibrator": self.name,
+            },
+        )
+        return EvidenceScore(
+            value=value,
+            semantics=ScoreSemantics.PROBABILITY,
+            provenance=provenance,
+            calibrated=True,
+        )
 
     @property
     def digest(self) -> str:
@@ -444,18 +414,3 @@ def calibration_dataset_digest(examples: list[CalibrationExample]) -> str:
             allow_nan=False,
         ).encode("utf-8")
     ).hexdigest()
-
-
-__all__ = [
-    "CalibrationExample",
-    "CalibrationProfile",
-    "CalibrationProfileRegistry",
-    "EvidenceScore",
-    "FittedCalibrator",
-    "IsotonicCalibrator",
-    "PlattCalibrator",
-    "ScoreNormalization",
-    "ScoreProvenance",
-    "ScoreSemantics",
-    "calibration_dataset_digest",
-]

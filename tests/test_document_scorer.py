@@ -8,11 +8,7 @@ from semantic_asr.document_scorer import (
     GlobalScoreNormalization,
     SequenceScorerGlobalAdapter,
 )
-from semantic_asr.score_types import (
-    EvidenceScore,
-    ScoreNormalization,
-    ScoreSemantics,
-)
+from semantic_asr.score_types import EvidenceScore, ScoreSemantics
 from semantic_asr.sequence_scorers import SequenceScoreResult
 
 MANIFEST = "a" * 64
@@ -45,7 +41,6 @@ class FakeSequenceScorer:
                         total / count,
                         semantics=ScoreSemantics.AVERAGE_LOG_LIKELIHOOD,
                         scorer=self.name,
-                        normalization=ScoreNormalization.MEAN_TOKEN,
                     ),
                     token_count=count,
                 )

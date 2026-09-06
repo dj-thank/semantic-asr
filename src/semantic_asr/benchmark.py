@@ -11,7 +11,6 @@ from pathlib import Path
 from statistics import fmean
 from typing import Any, Literal
 
-from .audio import require_integer
 from .cascade import CascadeConfig, run_candidate_cascade
 from .contracts import CandidateEvidence
 from .evaluation import (
@@ -24,7 +23,6 @@ from .evaluation import (
     reference_annotation_counts,
     spoken_reference_surface,
 )
-from .experiment import _finite_metric
 from .mbr import critical_units
 
 SplitName = Literal["train", "calibration", "test"]
@@ -90,9 +88,6 @@ class BootstrapInterval:
     confidence: float
     iterations: int
     unit: str = "group"
-    eligible_samples: int = 0
-    group_count: int = 0
-    excluded_samples: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,46 +352,32 @@ def paired_group_bootstrap(
     confidence: float = 0.95,
     seed: int = 17,
 ) -> BootstrapInterval | None:
-    """Paired utterance-mean difference (left minus right), clustered by group.
-
-    Jointly undefined annotated rows remain explicitly excluded; asymmetric
-    missingness or non-finite metrics are errors. Evaluate each callback once.
-    """
-    require_integer(iterations, name="iterations", minimum=1)
-    require_integer(seed, name="seed")
-    if not rows or not 0 < _finite_metric(confidence, name="confidence") < 1:
+    if not rows or iterations < 1 or not 0 < confidence < 1:
         raise ValueError("invalid paired bootstrap configuration")
-    by_group: dict[str, list[float]] = defaultdict(list)
-    seen: set[str] = set()
-    excluded = 0
-    for row in rows:
-        if row.sample_id in seen:
-            raise ValueError("duplicate sample ID in paired group bootstrap")
-        seen.add(row.sample_id)
-        if not isinstance(row.group_id, str) or not row.group_id.strip():
-            raise ValueError("group_id is required")
-        left_value, right_value = left(row), right(row)
-        if left_value is None and right_value is None:
-            excluded += 1
-            continue
+
+    def _difference(row: BenchmarkRow) -> float:
+        left_value = left(row)
+        right_value = right(row)
         if left_value is None or right_value is None:
-            raise ValueError("asymmetric missing metric in paired group bootstrap")
-        difference = _finite_metric(left_value, name="left") - _finite_metric(
-            right_value, name="right"
-        )
-        by_group[row.group_id].append(_finite_metric(difference, name="difference"))
-    if not by_group:
+            raise ValueError("bootstrap metric is undefined for an ineligible row")
+        return left_value - right_value
+
+    eligible = [row for row in rows if left(row) is not None and right(row) is not None]
+    if not eligible:
         return None
-    # Summarize each group once. Resampling no longer rebuilds complete row lists
-    # or repeatedly invokes potentially expensive metric callbacks.
-    totals = [(math.fsum(values), len(values)) for _, values in sorted(by_group.items())]
-    count = sum(n for _, n in totals)
-    observed = math.fsum(value for value, _ in totals) / count
+    by_group: dict[str, list[BenchmarkRow]] = defaultdict(list)
+    for row in eligible:
+        by_group[row.group_id].append(row)
+    group_ids = sorted(by_group)
+    observed = fmean(_difference(row) for row in eligible)
     rng = random.Random(seed)
     samples: list[float] = []
     for _ in range(iterations):
-        drawn = [rng.choice(totals) for _ in totals]
-        samples.append(math.fsum(value for value, _ in drawn) / sum(n for _, n in drawn))
+        sampled_rows: list[BenchmarkRow] = []
+        for _group in group_ids:
+            sampled_id = rng.choice(group_ids)
+            sampled_rows.extend(by_group[sampled_id])
+        samples.append(fmean(_difference(row) for row in sampled_rows))
     alpha = (1.0 - confidence) / 2.0
     return BootstrapInterval(
         estimate=observed,
@@ -404,9 +385,6 @@ def paired_group_bootstrap(
         upper=_percentile(samples, 1.0 - alpha),
         confidence=confidence,
         iterations=iterations,
-        eligible_samples=count,
-        group_count=len(totals),
-        excluded_samples=excluded,
     )
 
 

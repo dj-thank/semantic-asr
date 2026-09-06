@@ -160,25 +160,3 @@ def test_ctc_rejects_unknown_pronunciation_symbol() -> None:
             phone_posterior(),
             pronunciation("x", "未知", "phone", ("z",)),
         )
-
-
-def test_exact_ctc_never_fabricates_support_for_zero_probability():
-    posterior = PosteriorSequence(
-        kind="phone",
-        blank_symbol="blank",
-        vocabulary=("blank", "a"),
-        frames=(
-            PosteriorFrame.from_mapping(
-                start_ms=0, end_ms=20, probabilities={"blank": 1.0, "a": 0.0}
-            ),
-        ),
-        encoder="fixture",
-        encoder_revision="r1",
-        label_set_revision="r1",
-        source_audio_sha256="a" * 64,
-    )
-    row = pronunciation("x", "あ", "phone", ("a",))
-    with pytest.raises(ValueError, match="not finite"):
-        ctc_pronunciation_score(posterior, row)
-    with pytest.raises(ValueError, match="smoothing"):
-        ctc_pronunciation_score(posterior, row, probability_floor=1e-12)

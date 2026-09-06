@@ -93,10 +93,7 @@ def test_overlap_rows_complete_truncated_utterances() -> None:
     class _Obs:
         def __init__(self, spans):
             self.selected_candidate_id = "a"
-            self.text = "".join(span["text"] for span in spans)
-            self.candidates = (
-                CandidateEvidence("a", self.text, metadata={"utteranceSpans": spans}),
-            )
+            self.candidates = (CandidateEvidence("a", "x", metadata={"utteranceSpans": spans}),)
 
     class _Seg:
         def __init__(self, start, end, spans):
@@ -126,8 +123,8 @@ def test_overlap_rows_complete_truncated_utterances() -> None:
         )
 
     segments = [
-        TranscriptSegment(1, 0, 28_000, _LF.segments[0].observed.text, "…", "accepted"),
-        TranscriptSegment(2, 26_800, 54_800, _LF.segments[1].observed.text, "…", "accepted"),
+        TranscriptSegment(1, 0, 28_000, "…", "…", "accepted"),
+        TranscriptSegment(2, 26_800, 54_800, "…", "…", "accepted"),
     ]
     rows = utterances_from_segments(_LF(), segments)
     assert [row.text for row in rows] == [

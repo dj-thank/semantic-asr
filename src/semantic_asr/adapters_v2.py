@@ -8,7 +8,6 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .audio import decode_audio_window, require_integer, validate_audio_span
 from .candidate_pool import CandidatePath, CandidatePool
 from .revisions import (
     FASTER_WHISPER_MODEL_REVISIONS,
@@ -51,20 +50,14 @@ class DecodeVariant:
     def __post_init__(self) -> None:
         if not self.variant_id:
             raise ValueError("variant_id is required")
-        for name in ("beam_size", "hypotheses"):
-            require_integer(getattr(self, name), name=name, minimum=1)
-        for name in ("sampling_topk", "no_repeat_ngram_size"):
-            require_integer(getattr(self, name), name=name)
-        for name in ("patience", "length_penalty", "sampling_temperature", "repetition_penalty"):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise TypeError(f"{name} must be a real number")
-            if not math.isfinite(value):
-                raise ValueError(f"{name} must be finite")
-        if self.patience <= 0 or self.length_penalty <= 0 or self.repetition_penalty <= 0:
-            raise ValueError("patience, length_penalty and repetition_penalty must be positive")
-        if self.sampling_temperature < 0:
-            raise ValueError("sampling_temperature must be non-negative")
+        if self.beam_size < 1 or self.hypotheses < 1 or self.sampling_topk < 0:
+            raise ValueError("beam_size/hypotheses must be positive and topk non-negative")
+        if self.patience <= 0 or self.length_penalty <= 0:
+            raise ValueError("patience and length_penalty must be positive")
+        if self.sampling_temperature < 0 or self.repetition_penalty <= 0:
+            raise ValueError("invalid sampling or repetition settings")
+        if self.no_repeat_ngram_size < 0:
+            raise ValueError("no_repeat_ngram_size must be non-negative")
 
     @property
     def digest(self) -> str:
@@ -90,7 +83,12 @@ class PathDecodeRequest:
             self.variants
         ):
             raise ValueError("variants must be non-empty with unique IDs")
-        validate_audio_span(self.start_ms, self.end_ms)
+        if self.start_ms is not None and self.start_ms < 0:
+            raise ValueError("start_ms must be non-negative")
+        if self.end_ms is not None and self.end_ms < 0:
+            raise ValueError("end_ms must be non-negative")
+        if self.start_ms is not None and self.end_ms is not None and self.end_ms <= self.start_ms:
+            raise ValueError("end_ms must be greater than start_ms")
 
 
 class FasterWhisperPathAdapter:
@@ -214,12 +212,12 @@ class FasterWhisperPathAdapter:
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise RuntimeError("faster-whisper runtime dependencies are unavailable") from exc
 
-        waveform = decode_audio_window(
-            request.audio_path,
-            start_ms=request.start_ms,
-            end_ms=request.end_ms,
-            decoder=decode_audio,
-        )
+        waveform = decode_audio(request.audio_path, sampling_rate=16_000)
+        if request.start_ms is not None or request.end_ms is not None:
+            start_sample = max(0, int((request.start_ms or 0) * 16))
+            end_ms = request.end_ms if request.end_ms is not None else len(waveform) / 16
+            end_sample = min(len(waveform), int(end_ms * 16))
+            waveform = waveform[start_sample:end_sample]
         duration_seconds = len(waveform) / 16_000
         if duration_seconds <= 0:
             raise ValueError("decode request contains no audio")

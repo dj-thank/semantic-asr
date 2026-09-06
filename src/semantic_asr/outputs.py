@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -80,64 +78,27 @@ def render_markdown(result: LongformResult) -> str:
 
 
 def atomic_write(path: str | Path, content: str, *, overwrite: bool = False) -> Path:
-    """Publish one complete UTF-8 file without racing an existing destination.
-
-    The temporary file is unique even between threads in one process. Exclusive
-    publication uses a hard link in the same directory; unsupported filesystems
-    fail safely rather than silently falling back to a racy exists/replace pair.
-    """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    if os.path.lexists(target) and not overwrite:
+    if target.exists() and not overwrite:
         raise FileExistsError(f"output already exists: {target}")
-    fd, name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
-    temporary = Path(name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        if overwrite:
-            os.replace(temporary, target)
-        else:
-            os.link(temporary, target)
-    finally:
-        temporary.unlink(missing_ok=True)
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    temporary.write_text(content, encoding="utf-8", newline="\n")
+    os.replace(temporary, target)
     return target
 
 
-def publish_output_documents(
-    documents: Mapping[str, tuple[Path, str]], *, overwrite: bool = False
-) -> dict[str, str]:
-    """Preflight the whole set, then publish each file atomically.
-
-    This is not a filesystem-wide transaction: a crash or a concurrently-created
-    destination can leave a partial set. Existing files are never silently skipped
-    or overwritten, and known conflicts/serialization failures precede any writes.
-    """
-    paths = [path for path, _ in documents.values()]
-    if len(set(paths)) != len(paths):
-        raise ValueError("output document destinations must be unique")
-    for path in paths:
-        if path.is_dir() or (os.path.lexists(path) and not overwrite):
-            raise FileExistsError(f"output already exists: {path}")
-    return {
-        name: str(atomic_write(path, content, overwrite=overwrite))
-        for name, (path, content) in documents.items()
-    }
-
-
-def render_output_documents(
+def write_outputs(
     result: LongformResult,
     output_dir: str | Path,
     *,
+    overwrite: bool = False,
     formats: set[str] | None = None,
-) -> dict[str, tuple[Path, str]]:
-    formats = {"json", "observed", "normalized", "md", "srt", "vtt"} if formats is None else formats
+) -> dict[str, str]:
+    formats = formats or {"json", "observed", "normalized", "md", "srt", "vtt"}
     unknown = formats - {"json", "observed", "normalized", "md", "srt", "vtt"}
     if unknown:
         raise ValueError(f"unknown output formats: {sorted(unknown)}")
-    result.verify()
     root = Path(output_dir)
     stem = Path(result.source_name).stem
     payload: dict[str, Any] = result.as_dict()
@@ -150,7 +111,7 @@ def render_output_documents(
     renderers = {
         "json": (
             root / f"{stem}.semantic-asr.json",
-            lambda: json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
+            lambda: json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n",
         ),
         "observed": (
             root / f"{stem}.observed.txt",
@@ -164,15 +125,9 @@ def render_output_documents(
         "srt": (root / f"{stem}.srt", lambda: render_srt(result)),
         "vtt": (root / f"{stem}.vtt", lambda: render_vtt(result)),
     }
-    return {name: (renderers[name][0], renderers[name][1]()) for name in sorted(formats)}
-
-
-def write_outputs(
-    result: LongformResult,
-    output_dir: str | Path,
-    *,
-    overwrite: bool = False,
-    formats: set[str] | None = None,
-) -> dict[str, str]:
-    documents = render_output_documents(result, output_dir, formats=formats)
-    return publish_output_documents(documents, overwrite=overwrite)
+    outputs: dict[str, str] = {}
+    for name in sorted(formats):
+        path, renderer = renderers[name]
+        atomic_write(path, renderer(), overwrite=overwrite)
+        outputs[name] = str(path)
+    return outputs
