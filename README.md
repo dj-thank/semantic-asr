@@ -10,6 +10,19 @@ observedTranscript != normalizedTranscript
 
 発話者が実際に「昨日、学校を行きました」と話した場合、言語モデルが「昨日、学校に行きました」を好んでも、前者を消しません。
 
+## Codexで開発・自動検証を引き継ぐ
+
+[Codex引き継ぎと自動パイプライン](docs/development/CODEX_HANDOFF.md)に、環境設定、
+一つの検証コマンド、明示許可付きの実音声実行、未完Issueの順序と受入条件をまとめています。
+
+```bash
+python scripts/codex_pipeline.py plan
+```
+
+モデル不要の検証はPR/mainのCIでも実行します。実音声処理は外部データ・固定モデル・
+有限予算・ローカル利用の明示許可が必要で、自動公開やモデルの既定化はしません。
+**パイプラインの完走、実際の認識品質向上、productionへの昇格は別の判定です。**
+
 ## v0.2の中心
 
 ```text
