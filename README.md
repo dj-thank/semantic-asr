@@ -110,7 +110,7 @@ number/date/time/currency/negation/entity loss
 preservation disagreement
 ```
 
-FusionとMBRRが不一致なら、既定ではMBRへ即座に置き換えず、追加音響証拠または`provisional`を要求します。
+FusionとMBRが不一致なら、既定ではMBRへ即座に置き換えず、追加音響証拠または`provisional`を要求します。
 
 ### Adaptive K
 
@@ -503,20 +503,3 @@ CIはmodel-free test、synthetic ranker optimization、Linux/Windows、Python 3.
 ## ライセンス
 
 Apache License 2.0。詳細は[`LICENSE`](LICENSE)を参照してください。
-
-## Codexで開発と検証を引き継ぐ
-
-READMEの意図と未完了の実音声自動パイプラインを、
-[Codex引き継ぎ手順](docs/development/CODEX_AUTOPILOT.md)に結び付けています。
-`AGENTS.md`とrepo skillに加え、CodexとCIが同じ検証入口を使います。
-
-```bash
-python -m pip install -e '.[dev]'
-python scripts/codex_verify.py --plan
-python scripts/codex_verify.py --output-dir ../semantic-asr-evidence/run-001
-```
-
-format/lint・テスト・保存判定replay・synthetic学習・隔離wheel build・checkout外の
-wheel実行までを順に検証し、失敗時に停止してsourceと結果のhashを記録します。
-これは新規実音声の推論・本学習・精度改善の実測とは別です。実音声cycleのstage、
-権利・分割・freeze・有限budgetの受入条件とCodexへの実装依頼は引き継ぎ手順を参照してください。

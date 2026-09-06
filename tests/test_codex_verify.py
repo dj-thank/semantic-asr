@@ -25,7 +25,9 @@ def repo(tmp_path):
     root.mkdir()
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
-    subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.email", "test@example.invalid"], check=True
+    )
     (root / "source.py").write_text("x = 1\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(root), "add", "."], check=True)
     subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
@@ -46,8 +48,12 @@ def test_unknown_profile_rejected(tmp_path):
 
 @pytest.mark.parametrize("where", ["root", "checkout", "child", "existing"])
 def test_bad_output_rejected(repo, tmp_path, where):
-    output = {"root": Path(repo.anchor), "checkout": repo,
-              "child": repo / "new", "existing": tmp_path}[where]
+    output = {
+        "root": Path(repo.anchor),
+        "checkout": repo,
+        "child": repo / "new",
+        "existing": tmp_path,
+    }[where]
     with pytest.raises(ValueError):
         runner.safe_output(repo, output)
 
@@ -70,13 +76,17 @@ def test_dirty_source_is_hashed_not_hidden(repo):
     assert before["effective_source_sha256"] != dirty["effective_source_sha256"]
     assert dirty["dirty"] is True
     (repo / "new.py").write_text("y = 3\n", encoding="utf-8")
-    assert runner.source_identity(repo)["effective_source_sha256"] != dirty["effective_source_sha256"]
+    assert (
+        runner.source_identity(repo)["effective_source_sha256"] != dirty["effective_source_sha256"]
+    )
 
 
 def test_failure_stops_later_commands_and_records_evidence(repo, tmp_path, monkeypatch):
     output = tmp_path / "evidence"
-    stages = [runner.Stage("fail", (sys.executable, "-c", "raise SystemExit(7)"), repo),
-              runner.Stage("never", (sys.executable, "-c", "raise AssertionError"), repo)]
+    stages = [
+        runner.Stage("fail", (sys.executable, "-c", "raise SystemExit(7)"), repo),
+        runner.Stage("never", (sys.executable, "-c", "raise AssertionError"), repo),
+    ]
     monkeypatch.setattr(runner, "commands", lambda *args: stages)
     assert runner.verify(repo, output, "installed", 30, 10) == 1
     report = json.loads((output / "report.json").read_text())
@@ -92,9 +102,11 @@ def test_failure_stops_later_commands_and_records_evidence(repo, tmp_path, monke
 
 
 def test_success_does_not_imply_research_completion(repo, tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "commands", lambda *args: [
-        runner.Stage("ok", (sys.executable, "-c", "print('OK')"), repo)
-    ])
+    monkeypatch.setattr(
+        runner,
+        "commands",
+        lambda *args: [runner.Stage("ok", (sys.executable, "-c", "print('OK')"), repo)],
+    )
     output = tmp_path / "evidence"
     assert runner.verify(repo, output, "installed", 30, 10) == 0
     report = json.loads((output / "report.json").read_text())
@@ -104,10 +116,21 @@ def test_success_does_not_imply_research_completion(repo, tmp_path, monkeypatch)
 
 
 def test_source_modification_is_failure(repo, tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "commands", lambda *args: [
-        runner.Stage("modify", (sys.executable, "-c",
-            "from pathlib import Path; Path('source.py').write_text('x = 2\\n')"), repo)
-    ])
+    monkeypatch.setattr(
+        runner,
+        "commands",
+        lambda *args: [
+            runner.Stage(
+                "modify",
+                (
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; Path('source.py').write_text('x = 2\\n')",
+                ),
+                repo,
+            )
+        ],
+    )
     output = tmp_path / "evidence"
     assert runner.verify(repo, output, "installed", 30, 10) == 1
     assert json.loads((output / "report.json").read_text())["status"] == "source-changed"
@@ -122,9 +145,13 @@ def test_invalid_budgets_do_not_create_output(repo, tmp_path, total, stage):
 
 
 def test_timeout_is_nonzero_and_recorded(repo, tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "commands", lambda *args: [
-        runner.Stage("timeout", (sys.executable, "-c", "import time; time.sleep(20)"), repo)
-    ])
+    monkeypatch.setattr(
+        runner,
+        "commands",
+        lambda *args: [
+            runner.Stage("timeout", (sys.executable, "-c", "import time; time.sleep(20)"), repo)
+        ],
+    )
     output = tmp_path / "evidence"
     assert runner.verify(repo, output, "installed", 1, 1) == 124
     report = json.loads((output / "report.json").read_text())
@@ -147,13 +174,18 @@ def test_failure_to_start_is_explicit(tmp_path):
 def test_junit_retains_skips_and_expected_failures(tmp_path):
     xml = tmp_path / "pytest.xml"
     xml.write_text(
-        '<testsuites><testsuite><testcase/><testcase><failure/></testcase>'
+        "<testsuites><testsuite><testcase/><testcase><failure/></testcase>"
         '<testcase><skipped type="pytest.skip"/></testcase>'
         '<testcase><skipped type="pytest.xfail"/></testcase>'
-        '<testcase><error/></testcase></testsuite></testsuites>', encoding="utf-8"
+        "<testcase><error/></testcase></testsuite></testsuites>",
+        encoding="utf-8",
     )
     assert runner.test_counts(xml) == {
-        "tests": 5, "failures": 1, "errors": 1, "skipped": 2, "xfail": 1
+        "tests": 5,
+        "failures": 1,
+        "errors": 1,
+        "skipped": 2,
+        "xfail": 1,
     }
     assert runner.test_counts(tmp_path / "missing") is None
 
@@ -186,10 +218,18 @@ def test_fixed_commands_do_not_download_models_or_run_real_audio(tmp_path):
 
 def test_model_offline_environment_and_wheel_pythonpath_removal(tmp_path, monkeypatch):
     monkeypatch.setenv("PYTHONPATH", str(tmp_path / "should-not-leak"))
-    stage = runner.Stage("wheel-env-probe", (sys.executable, "-c", (
-        "import os; assert 'PYTHONPATH' not in os.environ; "
-        "assert os.environ['HF_HUB_OFFLINE'] == '1'"
-    )), tmp_path)
+    stage = runner.Stage(
+        "wheel-env-probe",
+        (
+            sys.executable,
+            "-c",
+            (
+                "import os; assert 'PYTHONPATH' not in os.environ; "
+                "assert os.environ['HF_HUB_OFFLINE'] == '1'"
+            ),
+        ),
+        tmp_path,
+    )
     assert runner.run_stage(stage, tmp_path / "env.log", 10) == ("passed", 0)
 
 
@@ -212,9 +252,11 @@ def test_real_cli_entry_creates_demo_and_smoke(tmp_path, monkeypatch):
 
 
 def test_zero_exit_without_required_artifact_is_failure(repo, tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "commands", lambda *args: [
-        runner.Stage("demo", (sys.executable, "-c", "pass"), repo)
-    ])
+    monkeypatch.setattr(
+        runner,
+        "commands",
+        lambda *args: [runner.Stage("demo", (sys.executable, "-c", "pass"), repo)],
+    )
     output = tmp_path / "evidence"
     assert runner.verify(repo, output, "installed", 30, 10) == 1
     assert json.loads((output / "report.json").read_text())["status"] == "missing-artifact"
@@ -222,10 +264,21 @@ def test_zero_exit_without_required_artifact_is_failure(repo, tmp_path, monkeypa
 
 def test_invalid_junit_does_not_pass(repo, tmp_path, monkeypatch):
     output = tmp_path / "evidence"
-    monkeypatch.setattr(runner, "commands", lambda *args: [
-        runner.Stage("tests", (sys.executable, "-c",
-            f"from pathlib import Path; Path({str(output / 'pytest.xml')!r}).write_text('<testsuites/>')"),
-            repo)
-    ])
+    target = repr(str(output / "pytest.xml"))
+    monkeypatch.setattr(
+        runner,
+        "commands",
+        lambda *args: [
+            runner.Stage(
+                "tests",
+                (
+                    sys.executable,
+                    "-c",
+                    f"from pathlib import Path; Path({target}).write_text('<testsuites/>')",
+                ),
+                repo,
+            )
+        ],
+    )
     assert runner.verify(repo, output, "installed", 30, 10) == 1
     assert json.loads((output / "report.json").read_text())["status"] == "invalid-test-evidence"

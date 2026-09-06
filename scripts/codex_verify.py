@@ -8,6 +8,7 @@ external output directory. Only report.json is intended for CI publication.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import importlib.metadata
 import json
@@ -91,16 +92,36 @@ def commands(root: Path, output: Path, profile: str, python: str = sys.executabl
     tests = CPU_TESTS if profile == "cpu" else ("tests",)
     stages = []
     if profile == "core":
-        stages.append(Stage("base-environment", (python, "-c", (
-            "import importlib.util; "
-            "assert importlib.util.find_spec('torch') is None, "
-            "'core evidence requires an environment without PyTorch'"
-        )), root))
+        stages.append(
+            Stage(
+                "base-environment",
+                (
+                    python,
+                    "-c",
+                    (
+                        "import importlib.util; "
+                        "assert importlib.util.find_spec('torch') is None, "
+                        "'core evidence requires an environment without PyTorch'"
+                    ),
+                ),
+                root,
+            )
+        )
     elif profile == "cpu":
-        stages.append(Stage("cpu-environment", (python, "-c", (
-            "import torch, numpy, safetensors; "
-            "assert torch.empty(0).device.type == 'cpu'; print(torch.__version__)"
-        )), root))
+        stages.append(
+            Stage(
+                "cpu-environment",
+                (
+                    python,
+                    "-c",
+                    (
+                        "import torch, numpy, safetensors; "
+                        "assert torch.empty(0).device.type == 'cpu'; print(torch.__version__)"
+                    ),
+                ),
+                root,
+            )
+        )
     for name, args in (
         ("format", ("-m", "ruff", "format", "--check", "src", "tests", "scripts")),
         ("lint", ("-m", "ruff", "check", "src", "tests", "scripts")),
@@ -119,9 +140,13 @@ def commands(root: Path, output: Path, profile: str, python: str = sys.executabl
         ("transcribe-help", ("transcribe-v2", "--help")),
     ):
         stages.append(Stage(name, (*cli, *args), root))
-    stages.append(Stage("wheel-build", (
-        python, "-m", "build", "--wheel", "--outdir", str(output / "wheelhouse")
-    ), root))
+    stages.append(
+        Stage(
+            "wheel-build",
+            (python, "-m", "build", "--wheel", "--outdir", str(output / "wheelhouse")),
+            root,
+        )
+    )
     return stages
 
 
@@ -140,18 +165,38 @@ def wheel_commands(output: Path, python: str = sys.executable) -> list[Stage]:
     )
     return [
         Stage("wheel-venv", (python, "-m", "venv", str(env)), output),
-        Stage("wheel-install", (
-            str(executable), "-m", "pip", "install", "--no-index", "--no-deps", str(wheels[0])
-        ), output),
+        Stage(
+            "wheel-install",
+            (str(executable), "-m", "pip", "install", "--no-index", "--no-deps", str(wheels[0])),
+            output,
+        ),
         Stage("wheel-import", (str(executable), "-I", "-c", probe), output),
-        Stage("wheel-demo", (
-            str(executable), "-I", "-m", "semantic_asr", "demo",
-            "--output", str(output / "wheel-demo.json")
-        ), output),
-        Stage("wheel-smoke", (
-            str(executable), "-I", "-m", "semantic_asr", "research-smoke",
-            "--output", str(output / "wheel-smoke.json")
-        ), output),
+        Stage(
+            "wheel-demo",
+            (
+                str(executable),
+                "-I",
+                "-m",
+                "semantic_asr",
+                "demo",
+                "--output",
+                str(output / "wheel-demo.json"),
+            ),
+            output,
+        ),
+        Stage(
+            "wheel-smoke",
+            (
+                str(executable),
+                "-I",
+                "-m",
+                "semantic_asr",
+                "research-smoke",
+                "--output",
+                str(output / "wheel-smoke.json"),
+            ),
+            output,
+        ),
     ]
 
 
@@ -160,13 +205,14 @@ def terminate(process: subprocess.Popen) -> None:
     if os.name == "nt":
         subprocess.run(
             ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
         )
     else:
-        try:
+        with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
     if process.poll() is None:
         process.kill()
     process.wait(timeout=10)
@@ -178,17 +224,27 @@ def run_stage(stage: Stage, log: Path, timeout: float) -> tuple[str, int | None]
     env = dict(os.environ)
     # Model downloads are forbidden during verification. Isolated wheel BUILD may
     # need package-index access; provisioning that access is an environment task.
-    env.update({
-        "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1",
-        "PYTHONUTF8": "1", "PYTHONNOUSERSITE": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1",
-    })
+    env.update(
+        {
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "HF_DATASETS_OFFLINE": "1",
+            "PYTHONUTF8": "1",
+            "PYTHONNOUSERSITE": "1",
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        }
+    )
     if stage.name.startswith("wheel-") and stage.name != "wheel-build":
         env.pop("PYTHONPATH", None)
         env.pop("PYTHONHOME", None)
     with log.open("xb") as stream:
         try:
             process = subprocess.Popen(
-                stage.argv, cwd=stage.cwd, env=env, stdout=stream, stderr=subprocess.STDOUT,
+                stage.argv,
+                cwd=stage.cwd,
+                env=env,
+                stdout=stream,
+                stderr=subprocess.STDOUT,
                 start_new_session=os.name != "nt",
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
             )
@@ -236,19 +292,27 @@ def verify(root: Path, output: Path, profile: str, total: int, per_stage: int) -
     before = source_identity(root)
     stages = commands(root, output, profile)
     output.mkdir(parents=True, exist_ok=False)
-    packages = sorted({
-        (dist.metadata.get("Name", "unknown"), dist.version)
-        for dist in importlib.metadata.distributions()
-    })
+    packages = sorted(
+        {
+            (dist.metadata.get("Name", "unknown"), dist.version)
+            for dist in importlib.metadata.distributions()
+        }
+    )
     report = {
-        "schema": "semantic-asr-codex-verification-v1", "profile": profile,
-        "source_before": before, "python": platform.python_version(),
+        "schema": "semantic-asr-codex-verification-v1",
+        "profile": profile,
+        "source_before": before,
+        "python": platform.python_version(),
         "platform": {"os": platform.system(), "machine": platform.machine()},
         "packages": [{"name": name, "version": version} for name, version in packages],
         "limits": {"total_seconds": total, "stage_seconds": per_stage},
-        "stages": [], "status": "running", "tests": None,
-        "new_model_inference": False, "new_acoustic_or_llm_weights": False,
-        "experiment_complete": False, "promotion_approved": False,
+        "stages": [],
+        "status": "running",
+        "tests": None,
+        "new_model_inference": False,
+        "new_acoustic_or_llm_weights": False,
+        "experiment_complete": False,
+        "promotion_approved": False,
     }
     started = time.monotonic()
     code = 1
@@ -263,8 +327,11 @@ def verify(root: Path, output: Path, profile: str, total: int, per_stage: int) -
             print(f"[{index + 1}] {stage.name}", flush=True)
             status, returncode = run_stage(stage, log, min(per_stage, remaining))
             required = {
-                "tests": "pytest.xml", "demo": "demo.json", "smoke": "research-smoke.json",
-                "wheel-demo": "wheel-demo.json", "wheel-smoke": "wheel-smoke.json",
+                "tests": "pytest.xml",
+                "demo": "demo.json",
+                "smoke": "research-smoke.json",
+                "wheel-demo": "wheel-demo.json",
+                "wheel-smoke": "wheel-smoke.json",
             }.get(stage.name)
             if status == "passed" and required:
                 artifact = output / required
@@ -274,15 +341,23 @@ def verify(root: Path, output: Path, profile: str, total: int, per_stage: int) -
                 counts = test_counts(output / "pytest.xml")
                 if not counts or not counts["tests"] or counts["failures"] or counts["errors"]:
                     status = "invalid-test-evidence"
-            argv = [arg.replace(str(root), "$REPO").replace(str(output), "$OUT")
-                    .replace(sys.executable, "$PYTHON") for arg in stage.argv]
-            report["stages"].append({
-                "name": stage.name, "argv": argv,
-                "cwd": "$REPO" if stage.cwd == root else "$OUT",
-                "status": status, "returncode": returncode,
-                "seconds": round(time.monotonic() - stamp, 3),
-                "log_sha256": sha256_file(log) if log.exists() else None,
-            })
+            argv = [
+                arg.replace(str(root), "$REPO")
+                .replace(str(output), "$OUT")
+                .replace(sys.executable, "$PYTHON")
+                for arg in stage.argv
+            ]
+            report["stages"].append(
+                {
+                    "name": stage.name,
+                    "argv": argv,
+                    "cwd": "$REPO" if stage.cwd == root else "$OUT",
+                    "status": status,
+                    "returncode": returncode,
+                    "seconds": round(time.monotonic() - stamp, 3),
+                    "log_sha256": sha256_file(log) if log.exists() else None,
+                }
+            )
             if source_identity(root) != before:
                 report["status"] = "source-changed"
                 break
@@ -337,16 +412,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--total-seconds", type=int, default=1200)
     parser.add_argument("--stage-seconds", type=int, default=600)
-    parser.add_argument("--plan", action="store_true", help="print fixed stages without running them")
+    parser.add_argument(
+        "--plan", action="store_true", help="print fixed stages without running them"
+    )
     args = parser.parse_args(argv)
     output = args.output_dir or Path(tempfile.gettempdir()) / f"semantic-asr-{uuid.uuid4().hex}"
     if args.plan:
-        print(json.dumps({
-            "profile": args.profile,
-            "stages": [s.name for s in commands(ROOT, output, args.profile)]
-            + ["wheel-venv", "wheel-install", "wheel-import", "wheel-demo", "wheel-smoke"],
-            "new_model_inference": False,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "profile": args.profile,
+                    "stages": [s.name for s in commands(ROOT, output, args.profile)]
+                    + ["wheel-venv", "wheel-install", "wheel-import", "wheel-demo", "wheel-smoke"],
+                    "new_model_inference": False,
+                },
+                indent=2,
+            )
+        )
         return 0
     try:
         return verify(ROOT, output, args.profile, args.total_seconds, args.stage_seconds)
