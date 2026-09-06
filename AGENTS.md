@@ -74,3 +74,11 @@ Provide issue/PR, base and final SHA/tree, exact commands/environment, test resu
 including skipped/xfail cases, artifact locations and SHA-256, behavioral/migration
 changes, and limitations. Separate engineering-complete, experiment-complete and
 promotion-approved. Templates are in [the evidence templates](docs/development/TEMPLATES.md).
+
+## Codex handoff and automation
+
+For README-intent delivery, read [the Codex handoff](docs/development/CODEX_AUTOPILOT.md).
+Use `python scripts/codex_verify.py --plan` and then the same fixed entry point as CI.
+The repository skill is `.agents/skills/semantic-asr-delivery/SKILL.md`.
+Verification is not the unfinished #30 real-audio research cycle. Keep setup,
+software evidence, new inference/training, held-out measurement and promotion separate.
