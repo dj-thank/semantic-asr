@@ -18,7 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.fixture
 def driver(monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT / "scripts"))
-    spec = importlib.util.spec_from_file_location("codex_pipeline_under_test", ROOT / "scripts/codex_pipeline.py")
+    spec = importlib.util.spec_from_file_location(
+        "codex_pipeline_under_test", ROOT / "scripts/codex_pipeline.py"
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -31,21 +33,40 @@ def manifest(tmp_path):
         with wave.open(str(path), "wb") as handle:
             handle.setparams((1, 2, 16000, 160, "NONE", "not compressed"))
             handle.writeframes(bytes([index, 0]) * 160)
-        rows.append({"sampleId": f"sample-{index}", "groupId": f"group-{index}",
-                     "sourceId": f"source-{index}", "split": split, "audioPath": str(path),
-                     "reference": f"金額は{index + 1}円です", "rightsDecision": "allow",
-                     "licenseId": "test-fixture-only"})
+        rows.append(
+            {
+                "sampleId": f"sample-{index}",
+                "groupId": f"group-{index}",
+                "sourceId": f"source-{index}",
+                "split": split,
+                "audioPath": str(path),
+                "reference": f"金額は{index + 1}円です",
+                "rightsDecision": "allow",
+                "licenseId": "test-fixture-only",
+            }
+        )
     path = tmp_path / "manifest.jsonl"
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
     return path, rows
 
 
 def research_args(path):
-    return argparse.Namespace(allow_local_research=True, manifest=str(path), max_records=3,
-                              max_audio_seconds=1, model="fixture-model", model_revision="a" * 40,
-                              model_artifact_sha256=None, beam_size=3, hypotheses=3,
-                              bootstrap_iterations=20, evaluation_role="regression-exposed",
-                              device="cpu", compute_type="int8", ranker="pairwise")
+    return argparse.Namespace(
+        allow_local_research=True,
+        manifest=str(path),
+        max_records=3,
+        max_audio_seconds=1,
+        model="fixture-model",
+        model_revision="a" * 40,
+        model_artifact_sha256=None,
+        beam_size=3,
+        hypotheses=3,
+        bootstrap_iterations=20,
+        evaluation_role="regression-exposed",
+        device="cpu",
+        compute_type="int8",
+        ranker="pairwise",
+    )
 
 
 def save_manifest(path, rows):
@@ -100,8 +121,18 @@ def test_authorization_and_rights_are_separate(driver, tmp_path):
         driver.research_input(args)
 
 
-@pytest.mark.parametrize("change", ["missing-split", "unknown-split", "missing-license", "duplicate-audio",
-                                    "relative-audio", "empty-audio", "wrong-format"])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "missing-split",
+        "unknown-split",
+        "missing-license",
+        "duplicate-audio",
+        "relative-audio",
+        "empty-audio",
+        "wrong-format",
+    ],
+)
 def test_bad_manifest_rejected(driver, tmp_path, change):
     path, rows = manifest(tmp_path)
     if change == "missing-split":
@@ -152,6 +183,7 @@ def test_mutable_model_revision_rejected(driver, tmp_path, revision):
 
 def test_local_model_artifact_uses_existing_hash_contract(driver, tmp_path):
     from semantic_asr.revisions import sha256_artifact
+
     path, _ = manifest(tmp_path)
     model = tmp_path / "model"
     model.mkdir()
@@ -169,8 +201,14 @@ def test_local_model_artifact_uses_existing_hash_contract(driver, tmp_path):
 def test_stage_failure_and_log_survive(driver, tmp_path):
     receipt = {"stages": []}
     with pytest.raises(subprocess.CalledProcessError):
-        driver.run_stage("failure", [sys.executable, "-c", "print('fixture'); raise SystemExit(7)"],
-                         tmp_path, receipt, time.monotonic() + 10, 1024 * 1024)
+        driver.run_stage(
+            "failure",
+            [sys.executable, "-c", "print('fixture'); raise SystemExit(7)"],
+            tmp_path,
+            receipt,
+            time.monotonic() + 10,
+            1024 * 1024,
+        )
     persisted = json.loads((tmp_path / "receipt.json").read_text())
     assert persisted["stages"][0]["returncode"] == 7
     assert persisted["stages"][0]["status"] == "not-completed"
@@ -181,8 +219,14 @@ def test_timeout_leaves_no_running_child(driver, tmp_path):
     receipt = {"stages": []}
     started = time.monotonic()
     with pytest.raises(driver.BudgetExceeded):
-        driver.run_stage("timeout", [sys.executable, "-c", "import time; time.sleep(30)"],
-                         tmp_path, receipt, started + 0.3, 1024 * 1024)
+        driver.run_stage(
+            "timeout",
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            tmp_path,
+            receipt,
+            started + 0.3,
+            1024 * 1024,
+        )
     assert time.monotonic() - started < 10
     assert receipt["stages"][0]["status"] == "not-completed"
 
@@ -190,15 +234,23 @@ def test_timeout_leaves_no_running_child(driver, tmp_path):
 def test_storage_budget_stops_child(driver, tmp_path):
     receipt = {"stages": []}
     with pytest.raises(driver.BudgetExceeded):
-        driver.run_stage("storage", [sys.executable, "-c", "print('x'*100000)"],
-                         tmp_path, receipt, time.monotonic() + 10, 4096)
+        driver.run_stage(
+            "storage",
+            [sys.executable, "-c", "print('x'*100000)"],
+            tmp_path,
+            receipt,
+            time.monotonic() + 10,
+            4096,
+        )
     assert receipt["stages"][0]["status"] == "not-completed"
 
 
 def test_junit_distinguishes_skips_and_failures(driver, tmp_path):
     path = tmp_path / "tests.xml"
-    path.write_text('<testsuites><testsuite><testcase/><testcase><skipped/></testcase>'
-                    '<testcase><failure/></testcase><testcase><error/></testcase></testsuite></testsuites>')
+    path.write_text(
+        "<testsuites><testsuite><testcase/><testcase><skipped/></testcase>"
+        "<testcase><failure/></testcase><testcase><error/></testcase></testsuite></testsuites>"
+    )
     assert driver.junit_counts(path) == {"tests": 4, "skipped": 1, "failures": 1, "errors": 1}
     path.write_text("<testsuites/>")
     with pytest.raises(ValueError, match="no executed"):
@@ -206,13 +258,29 @@ def test_junit_distinguishes_skips_and_failures(driver, tmp_path):
 
 
 def test_blocked_run_is_not_success_and_has_receipt(driver, monkeypatch, tmp_path):
-    monkeypatch.setattr(driver, "source_identity", lambda: {"dirty": False, "head": "a", "tree": "b"})
+    monkeypatch.setattr(
+        driver, "source_identity", lambda: {"dirty": False, "head": "a", "tree": "b"}
+    )
+
     def blocked(*args):
         raise driver.Blocked("test environment unavailable")
+
     monkeypatch.setattr(driver, "check", blocked)
     out = tmp_path / "blocked"
-    assert driver.main(["check", "--output-dir", str(out), "--max-wall-seconds", "10",
-                        "--max-storage-bytes", "100000"]) == 2
+    assert (
+        driver.main(
+            [
+                "check",
+                "--output-dir",
+                str(out),
+                "--max-wall-seconds",
+                "10",
+                "--max-storage-bytes",
+                "100000",
+            ]
+        )
+        == 2
+    )
     receipt = json.loads((out / "receipt.json").read_text())
     assert receipt["status"] == "blocked"
     assert receipt["promotion"] == "not-evaluated"
@@ -220,13 +288,26 @@ def test_blocked_run_is_not_success_and_has_receipt(driver, monkeypatch, tmp_pat
 
 
 def test_source_mutation_fails_even_when_commands_pass(driver, monkeypatch, tmp_path):
-    calls = iter([{"dirty": False, "head": "a", "tree": "b"},
-                  {"dirty": True, "head": "a", "tree": "b"}])
+    calls = iter(
+        [{"dirty": False, "head": "a", "tree": "b"}, {"dirty": True, "head": "a", "tree": "b"}]
+    )
     monkeypatch.setattr(driver, "source_identity", lambda: next(calls))
     monkeypatch.setattr(driver, "check", lambda *args: None)
     out = tmp_path / "changed"
-    assert driver.main(["check", "--output-dir", str(out), "--max-wall-seconds", "10",
-                        "--max-storage-bytes", "100000"]) == 1
+    assert (
+        driver.main(
+            [
+                "check",
+                "--output-dir",
+                str(out),
+                "--max-wall-seconds",
+                "10",
+                "--max-storage-bytes",
+                "100000",
+            ]
+        )
+        == 1
+    )
     receipt = json.loads((out / "receipt.json").read_text())
     assert receipt["reason"] == "source changed during execution"
 
@@ -243,15 +324,20 @@ def test_research_calls_shared_driver_with_explicit_authorization(driver, monkey
     executable.touch()
     monkeypatch.setattr(driver.sysconfig, "get_path", lambda name: str(scripts))
     calls = []
+
     def stage(name, command):
         calls.append((name, command))
         if name == "post-candidate":
             folder = output / "pipeline"
             folder.mkdir()
             for name in ("report.json", "report-raw.json", "ranker.json", "calibration.json"):
-                payload = ({"sample_count": 1, "baseline_cer": 0.2, "cascade_cer": 0.2, "mbr_cer": 0.2}
-                           if name.startswith("report") else {"profile": {"fixture": True}})
+                payload = (
+                    {"sample_count": 1, "baseline_cer": 0.2, "cascade_cer": 0.2, "mbr_cer": 0.2}
+                    if name.startswith("report")
+                    else {"profile": {"fixture": True}}
+                )
                 (folder / name).write_text(json.dumps(payload), encoding="utf-8")
+
     receipt = {"source": {"head": "a" * 40, "tree": "b" * 40}, "environment": driver.environment()}
     driver.research(args, output, receipt, stage)
     assert [name for name, _ in calls] == ["generate", "post-candidate"]
@@ -273,24 +359,51 @@ def test_truncated_audio_rejected(driver, tmp_path):
 def test_actual_post_candidate_driver_trains_and_evaluates_synthetic_rows(driver, tmp_path):
     """Real CLI optimization/evaluation; synthetic candidates, not real ASR inference."""
     from semantic_asr.contracts import CandidateEvidence
+
     rows = []
     for index, split in enumerate(("train", "calibration", "test")):
         for number in range(4):
             text = f"金額は{index * 10 + number + 1}円です"
-            candidates = [CandidateEvidence("a", text, acoustic=-0.1, avg_logprob=-0.1, rank=1),
-                          CandidateEvidence("b", text + "ない", acoustic=-0.8, avg_logprob=-0.8, rank=2)]
-            rows.append({"sampleId": f"{split}-{number}", "groupId": f"{split}-{number}",
-                         "sourceId": f"{split}-{number}", "split": split, "reference": text,
-                         "rightsDecision": "allow", "licenseId": "synthetic-test-only",
-                         "candidates": [candidate.as_dict() for candidate in candidates]})
+            candidates = [
+                CandidateEvidence("a", text, acoustic=-0.1, avg_logprob=-0.1, rank=1),
+                CandidateEvidence("b", text + "ない", acoustic=-0.8, avg_logprob=-0.8, rank=2),
+            ]
+            rows.append(
+                {
+                    "sampleId": f"{split}-{number}",
+                    "groupId": f"{split}-{number}",
+                    "sourceId": f"{split}-{number}",
+                    "split": split,
+                    "reference": text,
+                    "rightsDecision": "allow",
+                    "licenseId": "synthetic-test-only",
+                    "candidates": [candidate.as_dict() for candidate in candidates],
+                }
+            )
     source = tmp_path / "synthetic.jsonl"
     save_manifest(source, rows)
     output = tmp_path / "pipeline"
     receipt = {"stages": []}
-    driver.run_stage("post-candidate", [sys.executable, "scripts/run_real_audio_pipeline.py",
-                     "--candidates", str(source), "--output-dir", str(output), "--allow-raw-export",
-                     "--ranker", "pairwise", "--bootstrap-iterations", "20"],
-                     tmp_path, receipt, time.monotonic() + 30, 10 * 1024 * 1024)
+    driver.run_stage(
+        "post-candidate",
+        [
+            sys.executable,
+            "scripts/run_real_audio_pipeline.py",
+            "--candidates",
+            str(source),
+            "--output-dir",
+            str(output),
+            "--allow-raw-export",
+            "--ranker",
+            "pairwise",
+            "--bootstrap-iterations",
+            "20",
+        ],
+        tmp_path,
+        receipt,
+        time.monotonic() + 30,
+        10 * 1024 * 1024,
+    )
     report = json.loads((output / "report.json").read_text())
     assert report["sample_count"] == 4
     assert (output / "ranker.json").stat().st_size > 100
