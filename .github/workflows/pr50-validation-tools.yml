@@ -1,0 +1,25 @@
+name: PR50 offline validation tools
+on:
+  push:
+    branches: [codex/pr50-integration-20260906]
+    paths: [.github/workflows/pr50-validation-tools.yml]
+permissions:
+  contents: read
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Download validation-only packages
+        run: |
+          python -m pip download --dest tools 'ruff==0.15.7' 'build==1.4.0' 'pyproject-hooks==1.2.0' 'packaging==26.0'
+          sha256sum tools/* > tools/SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pr50-validation-tools-${{ github.sha }}
+          path: tools/
+          retention-days: 7
+          if-no-files-found: error
