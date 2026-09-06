@@ -20,15 +20,19 @@ Each number is in the [machine-readable plan](release-plan.json), with prerequis
 current source entry points, new tests to create and responsible skill/role.
 Full instructions and acceptance criteria live in the corresponding GitHub Issue.
 This is a dated plan, not live status. As checked on 2026-09-06, #19 was closed by
-#46 and #24 by #42; #21 remains an unfinished research Issue, not a draft PR.
-Read the [current handoff](EXECUTION_2026-09-06.md) before choosing files.
+#46, #24 by #42 and #25 by #47; #21 remains an unfinished research Issue, not a draft PR.
+Read the [training handoff](EXECUTION_2026-09-06.md) and the newer
+[paired-evaluation methods and handoff](../research/PAIRED_EVALUATION_2026-09-06.md)
+before choosing files. #52 is the focused evaluation-integrity repair under #29;
+#53 is a proposed audio-grounding experiment, not an executed study. These additions
+are linked here rather than renumbering the historical machine-readable plan.
 
 ## Execution order
 
-Begin remaining #25, #26 and #28 only after checking their current reservations.
-Do not duplicate an active branch or reopen completed #19/#24 without a regression.
+Begin remaining #26 and #28 only after checking their current reservations.
+Do not duplicate an active branch or reopen completed #19/#24/#25 without a regression.
 The inventory phase of #27 and documentation phase of #40 can also start immediately.
-Finish #25 before score/evidence migrations. Build #29 on #26; #35 then supplies
+Reuse the #25 canonical contract for score/evidence migrations. Build #29 on #26; #35 then supplies
 training infrastructure. #36 and #37 are independent acoustic and LLM experiments,
 not one vague train-everything task. Full runtime validation needs #34. #30 closes
 the reproducible collection/fitting/evaluation loop. Use #38 for real long recordings;
