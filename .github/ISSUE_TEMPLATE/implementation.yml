@@ -1,0 +1,39 @@
+name: Implementation contract
+description: Narrow change with files, dependencies, tests and evidence
+title: "[Implementation] "
+body:
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Goal, current behavior and non-goals
+      description: Include parent Issue, base SHA, evidence and exact source paths.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Prerequisites and file ownership
+      description: Link dependency artifacts and list files another agent must not edit concurrently.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Ordered implementation steps
+      description: Separate characterization, repair, migration and cleanup.
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests and acceptance criteria
+      description: Mark existing versus new test paths; include negative cases, RED/GREEN commands and clean-wheel checks.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Deliverables, limits and rollback
+      description: Require source/tree, environment, logs, artifact hashes, compatibility and explicit blockers.
+    validations:
+      required: true

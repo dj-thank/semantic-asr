@@ -16,6 +16,7 @@ from semantic_asr.multilevel_lattice import (
     frozen_profile_digest,
     path_digest,
 )
+from semantic_asr.score_contract import ScoreNormalization
 from semantic_asr.score_semantics import EvidenceScore, ScoreKind
 
 PROFILE = "1" * 64
@@ -306,6 +307,7 @@ def test_utility_calibration_preserves_score_semantics() -> None:
         value=-0.5,
         kind=ScoreKind.LOG_LIKELIHOOD,
         source="ctc-phone:model@r1:phones-r1",
+        normalization=ScoreNormalization.MEAN_FRAME,
     )
 
     transformed = profile.transform(score)
@@ -319,6 +321,7 @@ def test_utility_calibration_preserves_score_semantics() -> None:
                 value=-0.5,
                 kind=ScoreKind.LOG_LIKELIHOOD,
                 source="another-source",
+                normalization=ScoreNormalization.MEAN_FRAME,
             )
         )
 

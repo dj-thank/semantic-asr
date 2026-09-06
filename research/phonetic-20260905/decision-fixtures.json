@@ -1,0 +1,233 @@
+[
+  {
+    "wave": 1,
+    "split": "test",
+    "sample_id": "test-003",
+    "source_id": 1869,
+    "reference": "その長い顎には70本以上の鋭い歯が並び、口蓋には別の歯列があり、つまりここを通ったら逃げ道はないということになります。",
+    "baseline_id": "window:0001",
+    "expected_selected_id": "window:0002",
+    "expected_errors": 10,
+    "source_audio_sha256": "2898f17090a6c5223b951160b5e84fce00c72d3fd3b03ba57abd45b88166ff1c",
+    "posterior_digest": "52c7e9e7f2a0015b320929c5447c4f9a2c9e53309736c967ccd85799239d4a56",
+    "candidates": [
+      {
+        "id": "window:0001",
+        "text": "その長い顎には70本以上の鋭い歯が並び郊外には別の手術がありつまりここを通ったらねぎめちゃわないということになります",
+        "phones": "s o n o n a g a i a g o n i w a n a n a j u cl p o N i j o o n o s u r u d o i h a g a n a r a b i k o o g a i n i w a b e ts u n o sh u j u ts u g a a r i ts u m a r i k o k o o t o o cl t a r a n e g i m e ch a w a n a i t o i u k o t o n i n a r i m a s U",
+        "phone_score": -0.08325750633457234,
+        "language_score": -5.02184317452567
+      },
+      {
+        "id": "window:0002",
+        "text": "その長い顎には70本以上の鋭い歯が並び郊外には別の私立がありつまりここを通ったらねぎめちゃわないということになります",
+        "phones": "s o n o n a g a i a g o n i w a n a n a j u cl p o N i j o o n o s u r u d o i h a g a n a r a b i k o o g a i n i w a b e ts u n o sh i r i ts u g a a r i ts u m a r i k o k o o t o o cl t a r a n e g i m e ch a w a n a i t o i u k o t o n i n a r i m a s U",
+        "phone_score": -0.042418831552648716,
+        "language_score": -5.46962558521944
+      }
+    ]
+  },
+  {
+    "wave": 1,
+    "split": "test",
+    "sample_id": "test-006",
+    "source_id": 1910,
+    "reference": "パリジャンは、自己中心的で横柄で失礼な人が多いと言われています。",
+    "baseline_id": "window:0002",
+    "expected_selected_id": "window:0001",
+    "expected_errors": 3,
+    "source_audio_sha256": "fccf1354b44ac61b33b90a7b463c49ced120bc3d007bf985131f751f852356e5",
+    "posterior_digest": "3e2f160faef738ca00d417df31b99bc7e27ccc5421d76f919b35c6446224d2b9",
+    "candidates": [
+      {
+        "id": "window:0002",
+        "text": "パリジャンは自己中心的な王兵で失礼の人が多いと言われています",
+        "phones": "p a r i j a N w a j i k o ch u u sh i N t e k i n a o o h e e d e sh I ts u r e e n o h i t o g a o o i t o i w a r e t e i m a s U",
+        "phone_score": -0.03277525613794563,
+        "language_score": -5.417164522058823
+      },
+      {
+        "id": "window:0001",
+        "text": "パリジャンは自己中心的な王兵で失礼な人が多いと言われています",
+        "phones": "p a r i j a N w a j i k o ch u u sh i N t e k i n a o o h e e d e sh I ts u r e e n a h i t o g a o o i t o i w a r e t e i m a s U",
+        "phone_score": -0.018786562482232424,
+        "language_score": -5.1680908203125
+      }
+    ]
+  },
+  {
+    "wave": 1,
+    "split": "test",
+    "sample_id": "test-011",
+    "source_id": 1822,
+    "reference": "都市はモロッコのスルタンによってダルル・バディアとして再建され、貿易拠点を設立したスペイン人貿易商によってカサブランカと名付けられました。",
+    "baseline_id": "window:0002",
+    "expected_selected_id": "window:0001",
+    "expected_errors": 3,
+    "source_audio_sha256": "266371fc1446424d5e99543ad1501e051edab600a0dbb621dd9cc22a2389cb15",
+    "posterior_digest": "86aff4e38b166d69dfae94de19ba2ce9beb6346dd1d1727dc98b4f4662503474",
+    "candidates": [
+      {
+        "id": "window:0002",
+        "text": "都市はモロッコのスルタンによってダルルバリアとして再建され、貿易拠点を設立したスペイン人貿易省によってガサブランカと名付けられました。",
+        "phones": "t o sh i w a m o r o cl k o n o s u r u t a N n i y o cl t e d a r u r u b a r i a t o sh I t e s a i k e N s a r e pau b o o e k I ky o t e N o s e ts u r i ts u sh I t a s U p e i N j i N b o o e k i sh o o n i y o cl t e g a s a b u r a N k a t o n a z u k e r a r e m a sh I t a",
+        "phone_score": -0.012916802596067978,
+        "language_score": -3.945511779785156
+      },
+      {
+        "id": "window:0001",
+        "text": "都市はモロッコのスルタンによってダルルバリアとして再建され、貿易拠点を設立したスペイン人貿易省によってカサブランカと名付けられました。",
+        "phones": "t o sh i w a m o r o cl k o n o s u r u t a N n i y o cl t e d a r u r u b a r i a t o sh I t e s a i k e N s a r e pau b o o e k I ky o t e N o s e ts u r i ts u sh I t a s U p e i N j i N b o o e k i sh o o n i y o cl t e k a s a b u r a N k a t o n a z u k e r a r e m a sh I t a",
+        "phone_score": -0.004634055420294245,
+        "language_score": -3.7208938598632812
+      }
+    ]
+  },
+  {
+    "wave": 1,
+    "split": "test",
+    "sample_id": "test-019",
+    "source_id": 1775,
+    "reference": "ビデオ録画の利用は、数ミリ秒程度続く微表情、つまり顔の動きを解釈するうえで重要な発見につながっています。",
+    "baseline_id": "window:0001",
+    "expected_selected_id": "window:0002",
+    "expected_errors": 4,
+    "source_audio_sha256": "dbcdd8d94561e5184bccd97a5fb0152a7ee59c210a4b799e38da884420e9d37f",
+    "posterior_digest": "562f2de14017570305456c1c3710612a9eb39e79ecd1d73b5cdd8589eabeb235",
+    "candidates": [
+      {
+        "id": "window:0001",
+        "text": "ビデオ録画の利用は、数ミリ秒程度続く微表情、つまり顔の動きを解釈する上で重要な発見につながっています。",
+        "phones": "b i d e o r o k u g a n o r i y o o w a pau s u u m i r i by o o t e e d o ts u z u k U h o r o hy o o j o o pau ts u m a r i k a o n o u g o k i o k a i sh a k U s u r u u e d e j u u y o o n a h a cl k e N n i ts u n a g a cl t e i m a s U",
+        "phone_score": -0.07481452657408608,
+        "language_score": -3.042433127378806
+      },
+      {
+        "id": "window:0002",
+        "text": "ビデオ録画の利用は数ミリ秒程度続く微表情、つまり顔の動きを解釈する上で重要な発見に繋がっています。",
+        "phones": "b i d e o r o k u g a n o r i y o o w a s u u m i r i by o o t e e d o ts u z u k U h o r o hy o o j o o pau ts u m a r i k a o n o u g o k i o k a i sh a k U s u r u u e d e j u u y o o n a h a cl k e N n i ts u n a g a cl t e i m a s U",
+        "phone_score": -0.06862707784756499,
+        "language_score": -3.11847901955629
+      }
+    ]
+  },
+  {
+    "wave": 1,
+    "split": "test",
+    "sample_id": "test-020",
+    "source_id": 1893,
+    "reference": "スンダルバンスは世界最大の沿岸マングローブ地帯であり、海岸からバングラデシュとインドの内陸地域まで80 km（50マイル）にわたって広がっています。",
+    "baseline_id": "window:0001",
+    "expected_selected_id": "window:0002",
+    "expected_errors": 3,
+    "source_audio_sha256": "6f0eacd1f12daf7f307edc96c15931b566ce6a229529d8888ba9d8778f048563",
+    "posterior_digest": "aca47ff83d4ed32e9756c623b100387a5980424bc5a1112bbe6a5f8d6e67430e",
+    "candidates": [
+      {
+        "id": "window:0001",
+        "text": "スンダルバンスは世界最大の沿岸マングローブ地帯であり、海外からバングラディッシュとインドの内陸地域まで80km、50mにわたって広がっています。",
+        "phones": "s u N d a r u b a N s u w a s e k a i s a i d a i n o e N g a N m a N g u r o o b u ch i t a i d e a r i pau k a i g a i k a r a b a N g u r a d i cl sh U t o i N d o n o n a i r i k U ch i i k i m a d e h a ch i j u cl k i r o m e e t o r u pau g o j u u m e e t o r u n i w a t a cl t e h i r o g a cl t e i m a s U",
+        "phone_score": -0.05349266963588037,
+        "language_score": -3.018162446863511
+      },
+      {
+        "id": "window:0002",
+        "text": "スンダルバンスは世界最大の沿岸マングローブ地帯であり、海外からバングラディッシュとインドの内陸地域まで80km、50マイルにわたって広がっています。",
+        "phones": "s u N d a r u b a N s u w a s e k a i s a i d a i n o e N g a N m a N g u r o o b u ch i t a i d e a r i pau k a i g a i k a r a b a N g u r a d i cl sh U t o i N d o n o n a i r i k U ch i i k i m a d e h a ch i j u cl k i r o m e e t o r u pau g o j u u m a i r u n i w a t a cl t e h i r o g a cl t e i m a s U",
+        "phone_score": -0.02633525464106389,
+        "language_score": -3.004133077768179
+      }
+    ]
+  },
+  {
+    "wave": 2,
+    "split": "test",
+    "sample_id": "test-015",
+    "source_id": 1876,
+    "reference": "北マリアナ諸島の危機管理室（EMO）によると、全国的に被害は報告されていないとのことです。",
+    "baseline_id": "window:0001",
+    "expected_selected_id": "expanded:fw:0001",
+    "expected_errors": 2,
+    "source_audio_sha256": "34419971e4def86b30ebbb47a24244db8df8bd8997c2ebc7f8d9914161ea1d38",
+    "posterior_digest": "f102ec89d5b8383048989c2b974bb54184728c5bcf3088c8b463aea497ffa4c7",
+    "candidates": [
+      {
+        "id": "window:0001",
+        "text": "北マリアの諸島の危機管理室EMOによると全国的に被害を報告されていないとのことです",
+        "phones": "k I t a m a r i a n o sh o t o o n o k I k i k a N r i sh I ts u i i e m u o o n i y o r u t o z e N k o k U t e k i n i h i g a i o h o o k o k U s a r e t e i n a i t o n o k o t o d e s U",
+        "phone_score": -0.013133595770460858,
+        "language_score": -5.160631815592448
+      },
+      {
+        "id": "expanded:fw:0003",
+        "text": "北マリアの諸島の危機管理室EMOによると、全国的に被害を報告されていないとのことです。",
+        "phones": "k I t a m a r i a n o sh o t o o n o k I k i k a N r i sh I ts u i i e m u o o n i y o r u t o pau z e N k o k U t e k i n i h i g a i o h o o k o k U s a r e t e i n a i t o n o k o t o d e s U",
+        "phone_score": -0.016794041126274,
+        "language_score": -4.674287649301382
+      },
+      {
+        "id": "expanded:fw:0002",
+        "text": "北マリアの諸島の危機管理室EMOによると、全国的に被害を報告されていないとのことです",
+        "phones": "k I t a m a r i a n o sh o t o o n o k I k i k a N r i sh I ts u i i e m u o o n i y o r u t o pau z e N k o k U t e k i n i h i g a i o h o o k o k U s a r e t e i n a i t o n o k o t o d e s U",
+        "phone_score": -0.016794041126274,
+        "language_score": -4.829415893554687
+      },
+      {
+        "id": "expanded:fw:0005",
+        "text": "北マリアの諸島の危機管理室、EMOによると、全国的に被害を報告されていないとのことです",
+        "phones": "k I t a m a r i a n o sh o t o o n o k I k i k a N r i sh I ts u pau i i e m u o o n i y o r u t o pau z e N k o k U t e k i n i h i g a i o h o o k o k U s a r e t e i n a i t o n o k o t o d e s U",
+        "phone_score": -0.018180891076903214,
+        "language_score": -4.709644611065205
+      },
+      {
+        "id": "expanded:fw:0001",
+        "text": "北マリアの諸島の危機管理室EMOによると 全国的に被害を報告されていないとのことです",
+        "phones": "k I t a m a r i a n o sh o t o o n o k I k i k a N r i sh I ts u i i e m u o o n i y o r u t o z e N k o k U t e k i n i h i g a i o h o o k o k U s a r e t e i n a i t o n o k o t o d e s U",
+        "phone_score": -0.013133595770460858,
+        "language_score": -4.924388592059795
+      }
+    ]
+  },
+  {
+    "wave": 1,
+    "split": "test",
+    "sample_id": "test-000",
+    "source_id": 1828,
+    "reference": "インターネットで「敵対的環境コース」について検索すると、おそらく現地企業の住所が出てくるでしょう。",
+    "baseline_id": "window:0001",
+    "expected_selected_id": "window:0001",
+    "expected_errors": 0,
+    "source_audio_sha256": "a4975b9fe15f9340f06e0acdf3b0cc810f522700bdec1b267f85d901987fa29a",
+    "posterior_digest": "8cadc3a88893aa28d1d02db11dc1155a2c92dd5eceff2bce5b76d36d4a8611d5",
+    "candidates": [
+      {
+        "id": "window:0001",
+        "text": "インターネットで敵対的環境コースについて検索すると、おそらく現地企業の住所が出てくるでしょう。",
+        "phones": "i N t a a n e cl t o d e t e k I t a i t e k I k a N ky o o k o o s u n i ts u i t e k e N s a k U s u r u t o pau o s o r a k u g e N ch I k i gy o o n o j u u sh o g a d e t e k u r u d e sh o o",
+        "phone_score": -0.008191807737976384,
+        "language_score": -4.403136253356934
+      }
+    ]
+  },
+  {
+    "wave": 1,
+    "split": "test",
+    "sample_id": "test-001",
+    "source_id": 1834,
+    "reference": "また、北側に行くなら世界的に有名なマリア像の聖地であるファティマの聖母の聖域（神社）を訪れましょう。",
+    "baseline_id": "window:0001",
+    "expected_selected_id": "window:0001",
+    "expected_errors": 0,
+    "source_audio_sha256": "2d6ca8ff29055d2f885e3e3ea4c99fd7fbd28ebdd405e6dee6f6fd1f1258ed46",
+    "posterior_digest": "d90089b1793538a25e250b53801d4de79513ea8bf09bff3da23704064d4b9d21",
+    "candidates": [
+      {
+        "id": "window:0001",
+        "text": "また北側に行くなら世界的に有名なマリア像の聖地であるファティマの聖母の聖域神社を訪れましょう",
+        "phones": "m a t a k I t a g a w a n i i k u n a r a s e k a i t e k i n i y u u m e e n a m a r i a z o o n o s e e ch i d e a r u f a t i m a n o s e e b o n o s e e i k i j i N j a o o t o z u r e m a sh o o",
+        "phone_score": -0.00561079937691872,
+        "language_score": -4.434649658203125
+      }
+    ]
+  }
+]

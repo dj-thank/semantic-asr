@@ -1,0 +1,60 @@
+{
+  "schema": "semantic-asr-frozen-development-decision-v1",
+  "training_split": "validation",
+  "training_semantics": "finite constrained fusion-policy fitting, not acoustic/LLM fine-tuning",
+  "development_manifest_sha256": "b2031b2950623749768660e86855256456f93c098073f4669cf49005df88537d",
+  "probe_manifest_sha256": "177f43bb16865bfb756f79d788957238b34cbe5f011034ba2153570457bcfe45",
+  "context_artifact_sha256": "15272cc65fbf7821725f7e67c4054cc6c6ec529339e0eee7cd7827471270b227",
+  "profile": {
+    "phone_model": "prj-beatrice/japanese-hubert-base-phoneme-ctc-v4",
+    "phone_revision": "f5fe07043bcb0b77a86faf72ac6d8fc1ae558f99",
+    "phone_runtime": {
+      "torch": "2.14.0+cpu",
+      "transformers": "4.57.6",
+      "faster-whisper": "1.2.1",
+      "ctranslate2": "4.8.2",
+      "pyopenjtalk-plus": "0.4.1.post9",
+      "pyarrow": "25.0.1",
+      "numpy": "2.5.2"
+    },
+    "vocab_sha256": "9c5c09049b351bf19479c84c646c69dd3f6fa12c2030b4318215ba4458211b05",
+    "language_model": "Qwen/Qwen3-0.6B-Base",
+    "language_revision": "da87bfb608c14b7cf20ba1ce41287e8de496c0cd",
+    "language_runtime": {
+      "torch": "2.14.0+cpu",
+      "transformers": "4.57.6"
+    },
+    "language_prefix": "日本語の文章：\n",
+    "phone_normalization": "mean-frame",
+    "language_normalization": "mean-token",
+    "score_kernel": "exact-ctc-v1",
+    "phone_mode": "strict"
+  },
+  "mode": "strict",
+  "policy": {
+    "profile_digest": "025a5899bd6068312af1a6c162211d7a133d6557f624ff93adc3688bd4ad1cf4",
+    "development_manifest_sha256": "b2031b2950623749768660e86855256456f93c098073f4669cf49005df88537d",
+    "language_weight": 0.05,
+    "minimum_gain": 0.01,
+    "maximum_phone_regression": 0.0,
+    "maximum_edit_ratio": 0.35,
+    "require_language_agreement": true,
+    "schema": "semantic-asr-phone-context-policy-v1"
+  },
+  "metrics": {
+    "samples": 24,
+    "reference_characters": 1157,
+    "errors": 34,
+    "lenient_cer": 0.029386343993085567,
+    "baseline_errors": 45,
+    "improved": 3,
+    "harmed": 0,
+    "changed": 3,
+    "false_corrections": 0,
+    "exact_utterances": 12
+  },
+  "policy_digest": "fe550266d7ef7bb0aa6cb799adb80dd855fa9334d020a3b871e149e4fad0ee6e",
+  "trials_evaluated": 240,
+  "test_labels_loaded": false,
+  "deployment_default": false
+}

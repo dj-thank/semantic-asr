@@ -19,6 +19,7 @@ from .adapters import (
     window_frames,
 )
 from .adaptive import AdaptiveKConfig, select_adaptive_k
+from .audio import decode_audio_window
 from .calibration import CalibrationProfile, calibrate_values
 from .candidate_pool import aggregate_surface_candidates
 from .contracts import CandidateEvidence
@@ -398,12 +399,12 @@ class PathPreservingFasterWhisperAdapter(FasterWhisperAdapter):
         except ImportError as exc:  # pragma: no cover - optional runtime
             raise RuntimeError("faster-whisper runtime dependencies are unavailable") from exc
 
-        waveform = decode_audio(request.audio_path, sampling_rate=16_000)
-        if request.start_ms is not None or request.end_ms is not None:
-            start_sample = max(0, int((request.start_ms or 0) * 16))
-            end_ms = request.end_ms if request.end_ms is not None else len(waveform) / 16
-            end_sample = min(len(waveform), int(end_ms * 16))
-            waveform = waveform[start_sample:end_sample]
+        waveform = decode_audio_window(
+            request.audio_path,
+            start_ms=request.start_ms,
+            end_ms=request.end_ms,
+            decoder=decode_audio,
+        )
         duration_seconds = len(waveform) / 16_000
         if duration_seconds <= 0:
             raise ValueError("decode request contains no audio")

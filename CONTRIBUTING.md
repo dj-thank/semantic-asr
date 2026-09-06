@@ -1,5 +1,8 @@
 # Contributing
 
+Start with [AGENTS.md](AGENTS.md) and the [release execution index](docs/development/README.md).
+Implementation and research Issues must specify prerequisites, tests and completion evidence.
+
 Preserve the invariant:
 
 ```text

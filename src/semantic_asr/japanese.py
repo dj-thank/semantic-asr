@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import Any
 
 from .contracts import MoraUnit
+from .mora_phonology import MORA_COMBINATIONS
 
 SMALL_KANA = frozenset("ァィゥェォャュョヮヵヶ")
 PUNCTUATION = frozenset(" \t\r\n、。,.!?！？・「」『』（）()［］[]【】…‥:：;；\"'“”‘’")
@@ -47,7 +48,12 @@ def split_mora(value: str, *, include_unknown: bool = False) -> list[MoraUnit]:
     for offset, character in enumerate(normalized):
         if character in PUNCTUATION:
             continue
-        if character in SMALL_KANA and units and units[-1].kind == "regular":
+        if (
+            character in SMALL_KANA
+            and units
+            and units[-1].char_end == offset
+            and units[-1].kana + character in MORA_COMBINATIONS
+        ):
             previous = units[-1]
             units[-1] = replace(
                 previous,
@@ -96,15 +102,22 @@ def merge_character_alignment(rows: Iterable[Mapping[str, Any]]) -> list[MoraUni
     """Merge timed character CTC rows into canonical timed mora units."""
 
     units: list[MoraUnit] = []
+    adjacent = False
     for row in rows:
         raw = row.get("char", row.get("surface", row.get("text", "")))
         for character in to_katakana(str(raw)):
             if character in PUNCTUATION or not _is_katakana(character):
+                adjacent = False
                 continue
             start_ms = _finite_number(row.get("startMs", row.get("start_ms")))
             end_ms = _finite_number(row.get("endMs", row.get("end_ms")))
             confidence = _confidence(row.get("confidence"))
-            if character in SMALL_KANA and units and units[-1].kind == "regular":
+            if (
+                adjacent
+                and character in SMALL_KANA
+                and units
+                and units[-1].kana + character in MORA_COMBINATIONS
+            ):
                 previous = units[-1]
                 combined_confidence = previous.confidence
                 if confidence is not None:
@@ -122,6 +135,7 @@ def merge_character_alignment(rows: Iterable[Mapping[str, Any]]) -> list[MoraUni
                     confidence=combined_confidence,
                 )
                 continue
+            adjacent = True
             units.append(
                 MoraUnit(
                     index=len(units),
@@ -168,9 +182,36 @@ def join_japanese_fragments(fragments: Iterable[str], *, max_overlap: int = 160)
         suffix = fragment[overlap:]
         if not suffix:
             continue
-        if output[-1:] in "、。！？!?" and suffix[:1] == output[-1:]:
+        if max_overlap > 0 and output[-1:] in "、。！？!?" and suffix[:1] == output[-1:]:
             suffix = suffix[1:]
         output += (" " if _ascii_boundary(output, suffix) else "") + suffix
+    return output
+
+
+def join_timed_fragments(
+    fragments: Iterable[tuple[int, int, str]], *, max_overlap: int = 160
+) -> str:
+    """Join ordered windows, permitting textual deduplication only in time overlap.
+
+    Matching strings in separate audio intervals are repetitions, not duplicates.
+    Within overlapping windows this remains a text-boundary heuristic, not a forced
+    alignment. The original per-window evidence is always retained by the caller.
+    """
+    from .audio import require_integer
+
+    require_integer(max_overlap, name="max_overlap")
+    output = ""
+    previous_start = -1
+    previous_end = 0
+    previous_text = ""
+    for start, end, text in fragments:
+        require_integer(start, name="start_ms")
+        require_integer(end, name="end_ms", minimum=1)
+        if end <= start or start < previous_start:
+            raise ValueError("timed fragments must have positive, ordered time ranges")
+        allowed = min(max_overlap, len(previous_text)) if start < previous_end else 0
+        output = join_japanese_fragments((output, text), max_overlap=allowed)
+        previous_start, previous_end, previous_text = start, end, str(text or "").strip()
     return output
 
 

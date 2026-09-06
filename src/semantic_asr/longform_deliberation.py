@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from .audio import require_integer
 from .contracts import (
     CandidateEvidence,
     NormalizedTranscript,
@@ -28,8 +29,15 @@ from .global_deliberation import (
     decode_global_lattice,
 )
 from .global_scorer import GlobalSequenceScorer
-from .japanese import deterministic_normalize, join_japanese_fragments
-from .longform import LongformResult, LongformSegment, SemanticASRTranscriber, Window
+from .japanese import deterministic_normalize
+from .longform import (
+    LongformResult,
+    LongformSegment,
+    SemanticASRTranscriber,
+    Window,
+    join_segment_text,
+    sha256_file,
+)
 from .semantic_deliberation import (
     SemanticDeliberationBuild,
     SemanticDeliberationConfig,
@@ -74,11 +82,15 @@ class LongformDeliberationConfig:
             "maximum_context_characters",
             "minimum_distinct_surfaces",
         ):
-            value = getattr(self, name)
-            if isinstance(value, bool):
-                raise TypeError(f"{name} must be an integer")
-            if value < 0:
-                raise ValueError(f"{name} must be non-negative")
+            require_integer(getattr(self, name), name=name)
+        for name in (
+            "enabled",
+            "require_sequence_scorer",
+            "apply_provisional",
+            "fail_closed_to_first_pass",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be a boolean")
         if self.minimum_distinct_surfaces < 2:
             raise ValueError("minimum_distinct_surfaces must be at least two")
 
@@ -359,6 +371,7 @@ class DeliberatedLongformResult:
         object.__setattr__(self, "diagnostics", dict(self.diagnostics))
 
     def as_dict(self) -> dict[str, object]:
+        self.verify()
         return {
             "source_name": self.source_name,
             "source_audio_sha256": self.source_audio_sha256,
@@ -377,25 +390,48 @@ class DeliberatedLongformResult:
     def verify(self) -> None:
         if self.first_pass.evidence_sha256 != self.first_pass_evidence_sha256:
             raise ValueError("long-form deliberation is linked to different first-pass evidence")
-        expected_first_pass = sha256_json(
-            {
-                "sourceAudioSha256": self.first_pass.source_audio_sha256,
-                "durationMs": self.first_pass.duration_ms,
-                "observedText": self.first_pass.observed_text,
-                "normalizedText": self.first_pass.normalized_text,
-                "segmentEvidence": [
-                    segment.observed.evidence_sha256 for segment in self.first_pass.segments
-                ],
-            }
-        )
-        if expected_first_pass != self.first_pass_evidence_sha256:
-            raise ValueError("first-pass long-form evidence hash mismatch")
-        for segment in self.segments:
+        self.first_pass.verify()
+        if (
+            self.source_audio_sha256 != self.first_pass.source_audio_sha256
+            or self.duration_ms != self.first_pass.duration_ms
+            or tuple(segment.window for segment in self.segments)
+            != tuple(segment.window for segment in self.first_pass.segments)
+        ):
+            raise ValueError("deliberation changed the source recording or window sequence")
+        for segment, original in zip(self.segments, self.first_pass.segments, strict=True):
+            original_hash = original.observed.evidence_sha256
+            trace = segment.trace
+            if (
+                segment.first_pass_evidence_sha256 != original_hash
+                or trace.first_pass_evidence_sha256 != original_hash
+                or trace.config_digest != self.config_digest
+                or trace.policy_digest != self.policy_digest
+                or trace.applied != segment.changed
+            ):
+                raise ValueError("segment trace does not match its original evidence or policy")
+            if segment.changed:
+                observed = segment.observed
+                if (
+                    observed.first_pass_evidence_sha256 != original_hash
+                    or observed.candidates != original.observed.candidates
+                    or observed.ranked != original.observed.ranked
+                    or observed.build_digest != trace.build_digest
+                    or observed.decision_digest != trace.decision_digest
+                    or observed.selected_path_digest != trace.selected_path_digest
+                    or observed.decision != trace.decision_status
+                    or sha256_json({"text": observed.text}) != trace.selected_text_sha256
+                ):
+                    raise ValueError(
+                        "deliberated receipt does not retain exact first-pass evidence"
+                    )
+            elif segment.observed != original.observed:
+                raise ValueError("unapplied deliberation changed original observed evidence")
             segment.observed.verify()
-            if segment.observed.evidence_sha256 != segment.normalized.observed_evidence_sha256:
-                raise ValueError("segment normalization is linked to different observed evidence")
-        observed = join_japanese_fragments(segment.observed.text for segment in self.segments)
-        normalized = join_japanese_fragments(segment.normalized.text for segment in self.segments)
+            segment.normalized.verify(segment.observed)
+            if segment.observed.source_audio_sha256 != self.source_audio_sha256:
+                raise ValueError("deliberated segment belongs to a different source recording")
+        observed = join_segment_text(self.segments)
+        normalized = join_segment_text(self.segments, normalized=True)
         if observed != self.observed_text or normalized != self.normalized_text:
             raise ValueError("deliberated long-form text does not match its segment sequence")
         deliberation_digest = sha256_json(
@@ -416,6 +452,8 @@ class DeliberatedLongformResult:
                 "firstPassEvidenceSha256": self.first_pass_evidence_sha256,
                 "deliberationEvidenceSha256": self.deliberation_evidence_sha256,
                 "segmentEvidence": [segment.observed.evidence_sha256 for segment in self.segments],
+                "segmentWindows": [asdict(segment.window) for segment in self.segments],
+                "normalizations": [asdict(segment.normalized) for segment in self.segments],
             }
         )
         if expected != self.evidence_sha256:
@@ -660,6 +698,9 @@ def apply_longform_deliberation(
     config = config or LongformDeliberationConfig()
     if not config.enabled:
         return first_pass
+    first_pass.verify()
+    if audio_path is not None and sha256_file(audio_path) != first_pass.source_audio_sha256:
+        raise ValueError("deliberation audio_path belongs to a different source recording")
     if config.require_sequence_scorer and sequence_scorer is None:
         raise ValueError("long-form deliberation requires an explicit global sequence scorer")
     build_config = build_config or SemanticDeliberationConfig()
@@ -763,8 +804,8 @@ def apply_longform_deliberation(
             )
             final_segments.append(_unchanged_segment(segment, trace))
 
-    observed_text = join_japanese_fragments(segment.observed.text for segment in final_segments)
-    normalized_text = join_japanese_fragments(segment.normalized.text for segment in final_segments)
+    observed_text = join_segment_text(final_segments)
+    normalized_text = join_segment_text(final_segments, normalized=True)
     deliberation_evidence_sha256 = sha256_json(
         {
             "traceDigests": [segment.trace.digest for segment in final_segments],
@@ -781,6 +822,8 @@ def apply_longform_deliberation(
             "firstPassEvidenceSha256": first_pass.evidence_sha256,
             "deliberationEvidenceSha256": deliberation_evidence_sha256,
             "segmentEvidence": [segment.observed.evidence_sha256 for segment in final_segments],
+            "segmentWindows": [asdict(segment.window) for segment in final_segments],
+            "normalizations": [asdict(segment.normalized) for segment in final_segments],
         }
     )
     changed_count = sum(segment.changed for segment in final_segments)
