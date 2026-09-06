@@ -9,11 +9,10 @@ from semantic_asr.contracts import (
     NormalizedTranscript,
     ObservedTranscript,
     RankedCandidate,
-    sha256_json,
 )
 from semantic_asr.global_deliberation import DeliberationPolicy
 from semantic_asr.global_scorer import CallableGlobalSequenceScorer, frozen_profile_digest
-from semantic_asr.longform import LongformResult, LongformSegment, Window
+from semantic_asr.longform import LongformResult, LongformSegment, Window, sha256_file
 from semantic_asr.longform_deliberation import (
     DeliberatedLongformResult,
     LongformDeliberationConfig,
@@ -42,6 +41,7 @@ def observed(
     rows: tuple[CandidateEvidence, ...],
     selected_id: str,
     posterior: dict[str, float],
+    audio_sha256: str = AUDIO,
 ) -> ObservedTranscript:
     gate = GateDecision(
         weights={"acoustic": 1.0},
@@ -68,23 +68,23 @@ def observed(
         selected=selected,
         ranked=ranked,
         uncertainty_spans=[],
-        source_audio_sha256=AUDIO,
+        source_audio_sha256=audio_sha256,
     )
 
 
-def first_pass() -> LongformResult:
+def first_pass(audio_sha256: str = AUDIO) -> LongformResult:
     first_rows = (
         candidate("mata", "レビュー完了まではまたマージしません。", 0.70),
         candidate("mada", "レビュー完了まではまだマージしません。", 0.68),
     )
-    first_observed = observed(first_rows, "mata", {"mata": 0.55, "mada": 0.45})
+    first_observed = observed(first_rows, "mata", {"mata": 0.55, "mada": 0.45}, audio_sha256)
     first_normalized = NormalizedTranscript.attach(
         first_observed,
         text=first_observed.text,
         mode="deterministic",
     )
     second_rows = (candidate("approved", "承認後に統合します。", 0.90),)
-    second_observed = observed(second_rows, "approved", {"approved": 1.0})
+    second_observed = observed(second_rows, "approved", {"approved": 1.0}, audio_sha256)
     second_normalized = NormalizedTranscript.attach(
         second_observed,
         text=second_observed.text,
@@ -104,25 +104,11 @@ def first_pass() -> LongformResult:
             diagnostics={"topPosterior": 1.0},
         ),
     )
-    observed_text = "".join(segment.observed.text for segment in segments)
-    normalized_text = "".join(segment.normalized.text for segment in segments)
-    evidence_sha256 = sha256_json(
-        {
-            "sourceAudioSha256": AUDIO,
-            "durationMs": 2_000,
-            "observedText": observed_text,
-            "normalizedText": normalized_text,
-            "segmentEvidence": [segment.observed.evidence_sha256 for segment in segments],
-        }
-    )
-    return LongformResult(
+    return LongformResult.create(
         source_name="meeting.wav",
-        source_audio_sha256=AUDIO,
+        source_audio_sha256=audio_sha256,
         duration_ms=2_000,
-        observed_text=observed_text,
-        normalized_text=normalized_text,
         segments=segments,
-        evidence_sha256=evidence_sha256,
         diagnostics={"provisionalWindowCount": 0},
     )
 
@@ -254,8 +240,10 @@ def test_standard_outputs_use_final_observed_text(tmp_path: Path) -> None:
     assert "deliberation_evidence_sha256" in Path(outputs["json"]).read_text(encoding="utf-8")
 
 
-def test_wrapper_runs_first_pass_once_and_preserves_profile_attributes() -> None:
-    raw = first_pass()
+def test_wrapper_runs_first_pass_once_and_preserves_profile_attributes(tmp_path: Path) -> None:
+    audio = tmp_path / "meeting.wav"
+    audio.write_bytes(b"fake first-pass audio payload")
+    raw = first_pass(sha256_file(audio))
 
     class FakeFirstPass:
         runtime_profile_name = "cpu-ja-v1"
@@ -275,7 +263,7 @@ def test_wrapper_runs_first_pass_once_and_preserves_profile_attributes() -> None
         policy=policy(),
     )
 
-    result = wrapped.transcribe("meeting.wav")
+    result = wrapped.transcribe(audio)
 
     assert base.calls == 1
     assert wrapped.runtime_profile_name == "cpu-ja-v1"

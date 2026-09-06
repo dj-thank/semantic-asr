@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
+
+from .audio import require_integer
 
 try:
     import torch
@@ -40,10 +43,14 @@ def _hidden_states(output: Any) -> Tensor:
     return hidden
 
 
-def _validate_ctc_targets(labels: Tensor, *, blank_id: int, name: str) -> None:
+def _validate_ctc_targets(labels: Tensor, *, blank_id: int, name: str, vocab_size: int) -> None:
     if labels.ndim != 2:
         raise ValueError(f"{name} labels must be [batch, target]")
+    if labels.dtype not in (torch.int32, torch.int64):
+        raise TypeError(f"{name} labels must have integer dtype")
     valid = labels.ne(-100)
+    if torch.any(valid & ((labels < 0) | (labels >= vocab_size))):
+        raise ValueError(f"{name} target ID is outside vocabulary")
     if torch.any(labels.masked_select(valid).eq(blank_id)):
         raise ValueError(f"{name} labels must not contain the CTC blank ID")
     for row in range(labels.shape[0]):
@@ -60,20 +67,52 @@ def _ctc_loss(
     blank_id: int,
     name: str,
 ) -> Tensor:
-    _validate_ctc_targets(labels, blank_id=blank_id, name=name)
+    if logits.ndim != 3 or not torch.isfinite(logits).all():
+        raise ValueError(f"{name} logits must be finite [batch, frames, vocabulary]")
+    if isinstance(blank_id, bool) or not isinstance(blank_id, int):
+        raise TypeError("CTC blank ID must be an integer")
+    if not 0 <= blank_id < logits.shape[-1]:
+        raise ValueError("CTC blank ID is outside vocabulary")
+    if input_lengths.dtype not in (torch.int32, torch.int64):
+        raise TypeError("CTC input lengths must have integer dtype")
+    if labels.ndim != 2:
+        raise ValueError(f"{name} labels must be [batch, target]")
+    if input_lengths.shape != (logits.shape[0],) or labels.shape[0] != logits.shape[0]:
+        raise ValueError("CTC batch and length shapes must match")
+    if torch.any(input_lengths <= 0) or torch.any(input_lengths > logits.shape[1]):
+        raise ValueError("CTC input lengths exceed frame bounds")
+    _validate_ctc_targets(labels, blank_id=blank_id, name=name, vocab_size=logits.shape[-1])
     valid = labels.ne(-100)
     target_lengths = valid.sum(dim=1).to(dtype=torch.long)
     if torch.any(target_lengths > input_lengths):
         raise ValueError(f"{name} target length exceeds encoder length")
+    repetitions = (labels[:, 1:].eq(labels[:, :-1]) & valid[:, 1:] & valid[:, :-1]).sum(dim=1)
+    if torch.any(target_lengths + repetitions > input_lengths):
+        raise ValueError(f"{name} repeated targets need extra blank frames for CTC alignment")
     targets = labels.masked_select(valid).to(dtype=torch.long)
-    return F.ctc_loss(
+    loss = F.ctc_loss(
         logits.log_softmax(dim=-1).transpose(0, 1),
         targets,
         input_lengths.to(dtype=torch.long),
         target_lengths,
         blank=blank_id,
-        zero_infinity=True,
+        zero_infinity=False,
     )
+    if not torch.isfinite(loss):
+        raise ValueError(f"{name} CTC loss is non-finite; do not silently zero failed examples")
+    return loss
+
+
+def _validated_loss_weights(weights: dict[str, float]) -> dict[str, float]:
+    names = {"mora", "phone", "boundary", "accent", "f0", "preservation"}
+    if set(weights) != names:
+        raise ValueError("loss weights must cover exactly the supported heads")
+    for name, value in weights.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"{name} weight must be a real number")
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"{name} weight must be finite and nonnegative")
+    return {name: float(value) for name, value in weights.items()}
 
 
 def _frame_cross_entropy(
@@ -83,6 +122,8 @@ def _frame_cross_entropy(
     input_lengths: Tensor,
     name: str,
 ) -> Tensor | None:
+    if labels.dtype not in (torch.int32, torch.int64):
+        raise TypeError(f"{name} labels must have integer dtype")
     if labels.shape != logits.shape[:2]:
         raise ValueError(f"{name} labels must match encoder frame shape")
     valid = labels.ne(-100)
@@ -100,7 +141,7 @@ def _frame_cross_entropy(
         return None
     return F.cross_entropy(
         logits.reshape(-1, logits.shape[-1]),
-        labels.reshape(-1),
+        labels.reshape(-1).to(dtype=torch.long),
         ignore_index=-100,
     )
 
@@ -133,10 +174,32 @@ class SemanticASRMultiTask(nn.Module):
         preservation_weight: float = 0.10,
     ) -> None:
         super().__init__()
-        if mora_vocab_size < 2:
-            raise ValueError("mora_vocab_size must include blank and labels")
-        if phone_vocab_size is not None and phone_vocab_size < 2:
-            raise ValueError("phone_vocab_size must include blank and labels")
+        for name, value, minimum in (
+            ("hidden_size", hidden_size, 1),
+            ("mora_vocab_size", mora_vocab_size, 2),
+            ("boundary_classes", boundary_classes, 1),
+            ("accent_classes", accent_classes, 1),
+            ("preservation_classes", preservation_classes, 1),
+        ):
+            require_integer(value, name=name, minimum=minimum)
+        if phone_vocab_size is not None:
+            require_integer(phone_vocab_size, name="phone_vocab_size", minimum=2)
+        require_integer(mora_blank_id, name="mora_blank_id")
+        require_integer(phone_blank_id, name="phone_blank_id")
+        if mora_blank_id >= mora_vocab_size:
+            raise ValueError("mora blank ID is outside vocabulary")
+        if phone_vocab_size is not None and phone_blank_id >= phone_vocab_size:
+            raise ValueError("phone blank ID is outside vocabulary")
+        self.loss_weights = _validated_loss_weights(
+            {
+                "mora": mora_weight,
+                "phone": phone_weight,
+                "boundary": boundary_weight,
+                "accent": accent_weight,
+                "f0": f0_weight,
+                "preservation": preservation_weight,
+            }
+        )
         self.encoder = encoder
         self.mora_head = nn.Linear(hidden_size, mora_vocab_size)
         self.phone_head = (
@@ -148,14 +211,6 @@ class SemanticASRMultiTask(nn.Module):
         self.preservation_head = nn.Linear(hidden_size, preservation_classes)
         self.mora_blank_id = mora_blank_id
         self.phone_blank_id = phone_blank_id
-        self.loss_weights = {
-            "mora": float(mora_weight),
-            "phone": float(phone_weight),
-            "boundary": float(boundary_weight),
-            "accent": float(accent_weight),
-            "f0": float(f0_weight),
-            "preservation": float(preservation_weight),
-        }
 
     def forward(
         self,
@@ -170,10 +225,22 @@ class SemanticASRMultiTask(nn.Module):
         preservation_labels: Tensor | None = None,
         encoder_kwargs: dict[str, Any] | None = None,
     ) -> MultiTaskOutput:
+        weights = _validated_loss_weights(self.loss_weights)
+        if phone_labels is not None and self.phone_head is None:
+            raise ValueError("phone labels require an enabled phone head")
+        if encoder_lengths is not None and (
+            not isinstance(encoder_lengths, Tensor)
+            or encoder_lengths.dtype not in (torch.int32, torch.int64)
+        ):
+            raise TypeError("encoder_lengths must have integer tensor dtype")
         encoded = self.encoder(input_features, **(encoder_kwargs or {}))
         hidden = _hidden_states(encoded)
-        if hidden.ndim != 3:
-            raise ValueError("encoder hidden states must be [batch, frames, hidden]")
+        if (
+            hidden.ndim != 3
+            or min(hidden.shape) < 1
+            or hidden.shape[-1] != self.mora_head.in_features
+        ):
+            raise ValueError("encoder hidden states must be nonempty [batch, frames, hidden_size]")
         batch, frames, _ = hidden.shape
         if encoder_lengths is None:
             encoder_lengths = torch.full((batch,), frames, dtype=torch.long, device=hidden.device)
@@ -264,8 +331,10 @@ class SemanticASRMultiTask(nn.Module):
             ("preservation", preservation_loss),
         ):
             if loss is not None:
-                weighted.append(self.loss_weights[name] * loss)
+                weighted.append(weights[name] * loss)
         total_loss = torch.stack(weighted).sum() if weighted else None
+        if total_loss is not None and not torch.isfinite(total_loss):
+            raise ValueError("multitask training loss must be finite")
         return MultiTaskOutput(
             loss=total_loss,
             mora_ctc_loss=mora_loss,
