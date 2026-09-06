@@ -1,0 +1,56 @@
+name: PR50 immutable integration inputs
+
+on:
+  push:
+    branches: [codex/pr50-integration-20260906]
+    paths: [.github/workflows/pr50-source-snapshot.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Archive exact integration inputs
+        shell: bash
+        run: |
+          mkdir -p evidence
+          python - <<'PY'
+          import hashlib
+          import json
+          import subprocess
+          from pathlib import Path
+
+          refs = {
+              'pr50': '6939d325927062ec8dac6db643e4b8abe861e1a7',
+              'main': '7c36c9323626a83fdb89dddccb93f7252930666e',
+              'merge-base': 'fbce62c60cb12701b01a88795ef78470c1aba602',
+          }
+          manifest = {'schema': 'pr50-integration-inputs-v1', 'inputs': {}}
+          for name, revision in refs.items():
+              path = Path('evidence') / (name + '.tar')
+              with path.open('wb') as stream:
+                  subprocess.run(['git', 'archive', '--format=tar', revision], stdout=stream, check=True)
+              tree = subprocess.check_output(['git', 'rev-parse', revision + '^{tree}'], text=True).strip()
+              manifest['inputs'][name] = {
+                  'commit': revision,
+                  'tree': tree,
+                  'archive_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+              }
+          manifest['claim'] = 'Source identity only. No test success or readiness claim.'
+          Path('evidence/inputs.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+          PY
+          git diff --exit-code
+          git diff --cached --exit-code
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pr50-integration-inputs-${{ github.sha }}
+          path: evidence/
+          retention-days: 14
+          if-no-files-found: error
