@@ -70,3 +70,10 @@ train weights, publish an integrated phonetic model, or establish world-leading 
 Subsequent #42/#43/#44 have separate implementation and limited training evidence.
 Those outcomes need the evidence specified in the work queue. Historical research
 remains in its original dated documents; do not overwrite its conclusions.
+
+## Codex execution
+
+[Codex handoff and bounded automation](CODEX_HANDOFF.md) connects the README to
+the existing validation and post-candidate research commands. It includes setup,
+receipt/exit semantics, privacy boundaries and the remaining research gates.
+It is an incremental execution entry point, not completion of #23 or #30.

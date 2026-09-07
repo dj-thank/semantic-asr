@@ -190,6 +190,8 @@ def run_validation() -> dict[str, object]:
         CandidateEvidence("teacher-b", "料金は30000円です"),
     )
     digest = candidate_set_digest(teacher_candidates)
+    # Entropy is derived from these score distributions by the canonical aggregator.
+    # A fixture must not supply a self-reported entropy as acoustic/confidence evidence.
     teacher_consensus = aggregate_teacher_judgments(
         teacher_candidates,
         [
@@ -198,7 +200,6 @@ def run_validation() -> dict[str, object]:
                 candidate_set_sha256=digest,
                 scores={"teacher-a": 2.4, "teacher-b": -0.7},
                 score_kind="logit",
-                entropy=0.18,
                 reliability=0.90,
             ),
             TeacherJudgment(
@@ -206,7 +207,6 @@ def run_validation() -> dict[str, object]:
                 candidate_set_sha256=digest,
                 scores={"teacher-a": 0.82, "teacher-b": 0.18},
                 score_kind="preference",
-                entropy=0.22,
                 reliability=0.86,
             ),
         ],

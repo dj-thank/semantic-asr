@@ -31,3 +31,6 @@ data/reazon/
 .env
 .env.*
 !.env.example
+
+# Separate optional CPU development environment used by the Codex handoff.
+.venv-cpu/

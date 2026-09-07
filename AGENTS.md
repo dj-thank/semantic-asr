@@ -74,3 +74,11 @@ Provide issue/PR, base and final SHA/tree, exact commands/environment, test resu
 including skipped/xfail cases, artifact locations and SHA-256, behavioral/migration
 changes, and limitations. Separate engineering-complete, experiment-complete and
 promotion-approved. Templates are in [the evidence templates](docs/development/TEMPLATES.md).
+
+## Codex entry point
+
+Read [the Codex handoff](docs/development/CODEX_HANDOFF.md).
+`python scripts/codex_pipeline.py plan` is read-only. Use its documented `check`
+command for local/CI evidence and `research` only with explicit authorization
+and finite budgets. It does not replace the issue acceptance criteria above.
+Never mistake a blocked/partial run or optional-test skip for executed coverage.

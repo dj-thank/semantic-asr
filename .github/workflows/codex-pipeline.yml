@@ -1,0 +1,56 @@
+name: Codex handoff pipeline
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-pipeline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-source-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: "1"
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install explicit CPU validation environment, not all model extras
+        run: |
+          python -m pip install 'torch>=2.4' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e '.[dev]' 'numpy>=1.26' 'soundfile>=0.12' 'safetensors>=0.7,<1'
+          python -m pip check
+      - name: Run the same bounded command used by Codex
+        run: >-
+          python scripts/codex_pipeline.py check
+          --lane training-cpu --require-clean --isolated-build
+          --output-dir "$RUNNER_TEMP/codex-evidence"
+          --max-wall-seconds 1200 --max-storage-bytes 1073741824
+      - name: Retain public model-free evidence even after failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/codex-evidence/receipt.json
+            ${{ runner.temp }}/codex-evidence/*.log
+            ${{ runner.temp }}/codex-evidence/tests.xml
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Require unchanged tracked source
+        if: always()
+        run: git diff --exit-code HEAD
