@@ -41,6 +41,7 @@ def adapter(tmp_path, monkeypatch):
 
 
 def test_preserves_observed_text_without_faking_confidence(adapter):
+    pytest.importorskip("numpy", reason="the opt-in Reazon audio path requires the sherpa extra")
     model, path, stream, _ = adapter
     candidates = model.decode(
         DecodeRequest(str(path), beam_size=4, hypotheses=1, start_ms=250, end_ms=750)
@@ -68,6 +69,7 @@ def test_unsupported_conditioning_is_not_silently_ignored(adapter, options):
 
 
 def test_empty_decode_is_not_invented_speech(adapter):
+    pytest.importorskip("numpy", reason="the opt-in Reazon audio path requires the sherpa extra")
     model, path, stream, _ = adapter
     stream.result.text = ""
     assert model.decode(DecodeRequest(str(path), beam_size=4, hypotheses=1)) == []
