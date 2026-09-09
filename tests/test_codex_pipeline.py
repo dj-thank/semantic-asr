@@ -61,7 +61,13 @@ def research_args(path):
         model_artifact_sha256=None,
         beam_size=3,
         hypotheses=3,
-        bootstrap_iterations=20,
+        bootstrap_iterations=100,
+        max_trials=1,
+        max_wall_seconds=60,
+        max_storage_bytes=10485760,
+        epochs=3,
+        seed=17,
+        resume=False,
         evaluation_role="regression-exposed",
         device="cpu",
         compute_type="int8",
@@ -245,6 +251,46 @@ def test_storage_budget_stops_child(driver, tmp_path):
     assert receipt["stages"][0]["status"] == "not-completed"
 
 
+def test_atomic_rename_during_storage_poll_is_not_a_failed_run(driver, monkeypatch, tmp_path):
+    published = tmp_path / "artifact.json"
+    published.write_text("x" * 100, encoding="utf-8")
+    monkeypatch.setattr(
+        driver, "files_under", lambda _: [tmp_path / "artifact.json.tmp", published]
+    )
+    driver.enforce_budget(tmp_path, time.monotonic() + 10, 1000)
+    with pytest.raises(driver.BudgetExceeded):
+        driver.enforce_budget(tmp_path, time.monotonic() + 10, 10)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process group contract")
+def test_parent_timeout_stops_nested_stage_writer(driver, monkeypatch, tmp_path):
+    monkeypatch.delenv("SEMANTIC_ASR_MANAGED_GROUP", raising=False)
+    child = tmp_path / "child"
+    child.mkdir()
+    marker = tmp_path / "orphan-wrote.txt"
+    write_later = (
+        "import time; from pathlib import Path; time.sleep(2); "
+        f"Path({str(marker)!r}).write_text('bad')"
+    )
+    outer = (
+        f"import sys,time; sys.path.insert(0,{str(ROOT / 'scripts')!r}); "
+        "from pathlib import Path; from codex_pipeline import run_stage; "
+        f"run_stage('nested',[sys.executable,'-c',{write_later!r}],Path({str(child)!r}),"
+        "{'stages':[]},time.monotonic()+30,1048576)"
+    )
+    with pytest.raises(driver.BudgetExceeded):
+        driver.run_stage(
+            "outer",
+            [sys.executable, "-c", outer],
+            tmp_path,
+            {"stages": []},
+            time.monotonic() + 0.7,
+            1048576,
+        )
+    time.sleep(2.1)
+    assert not marker.exists()
+
+
 def test_junit_distinguishes_skips_and_failures(driver, tmp_path):
     path = tmp_path / "tests.xml"
     path.write_text(
@@ -337,6 +383,9 @@ def test_research_calls_shared_driver_with_explicit_authorization(driver, monkey
                     else {"profile": {"fixture": True}}
                 )
                 (folder / name).write_text(json.dumps(payload), encoding="utf-8")
+            (folder / "cycle.json").write_text(
+                json.dumps({"status": "completed"}), encoding="utf-8"
+            )
 
     receipt = {"source": {"head": "a" * 40, "tree": "b" * 40}, "environment": driver.environment()}
     driver.research(args, output, receipt, stage)

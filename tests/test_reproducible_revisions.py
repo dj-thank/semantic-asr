@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -126,6 +126,11 @@ def test_qwen_revision_resolves_one_snapshot_for_model_and_processor(monkeypatch
     assert snapshot_calls["revision"] == "fedcba9876543210fedcba9876543210fedcba98"
     assert model_calls["model"] == "C:/cache/snapshots/revision"
     assert adapter.model_revision == snapshot_calls["revision"]
+    adapter.model = SimpleNamespace(transcribe=lambda **kwargs: [{"text": "ええ、ええ。"}])
+    monkeypatch.setattr("semantic_asr._adapters_legacy._audio_slice", lambda request: "fixture")
+    result = adapter.decode(DecodeRequest(audio_path="fixture.wav", language="ja"))
+    assert result[0].metadata["scoreKind"] == "unscored-transcript"
+    assert result[0].text == "ええ、ええ。"
 
 
 def test_unknown_qwen_hub_model_requires_an_exact_revision(monkeypatch) -> None:

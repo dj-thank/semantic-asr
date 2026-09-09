@@ -95,6 +95,22 @@ def test_ambiguous_sparse_evidence_becomes_provisional() -> None:
     assert observed.decision == "provisional"
 
 
+def test_unscored_observation_is_provisional_even_with_one_candidate() -> None:
+    candidate = CandidateEvidence(
+        "native-top1",
+        "発話候補",
+        rank=1,
+        hypothesis_count=1,
+        source="unscored-engine",
+        metadata={"scoreKind": "unscored-transcript"},
+    )
+    ranked = fuse_candidates([candidate])
+    observed = ObservedTranscript.create(
+        selected=ranked[0], ranked=ranked, uncertainty_spans=[], force_provisional=True
+    )
+    assert observed.decision == "provisional"
+
+
 def test_clear_candidate_is_accepted() -> None:
     ranked = fuse_candidates(
         [

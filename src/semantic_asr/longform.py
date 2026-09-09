@@ -793,6 +793,9 @@ class SemanticASRTranscriber:
             candidates = aggregate_surface_candidates(
                 candidates, id_prefix="window", policy=self.surface_policy
             )
+        unscored_primary = any(
+            candidate.metadata.get("scoreKind") == "unscored-transcript" for candidate in candidates
+        )
         ranked = fuse_candidates(candidates, self.fusion_config)
         lattice = build_semantic_lattice(
             candidates,
@@ -818,6 +821,10 @@ class SemanticASRTranscriber:
                 )
                 if enabled
             ),
+            force_second_ear=self.second_ear is not None and unscored_primary,
+            whole_window_start_ms=window.start_ms,
+            whole_window_end_ms=window.end_ms,
+            minimum_evidence_coverage=self.fusion_config.minimum_evidence_coverage,
         )
         routing_diagnostics: dict[str, Any] = {"enabled": False}
         if self.balanced_router and (plan.selected or plan.rejected):
@@ -927,6 +934,10 @@ class SemanticASRTranscriber:
                 segment_end_ms=window.end_ms,
             )
 
+        # An independent transcript is useful support, but not calibrated
+        # acceptance evidence. Agreement must not remove this abstention.
+        force_provisional = unscored_primary
+
         teacher_result: TeacherResult | None = None
         teacher_cache_hit = False
         teacher_action = next((a for a in plan.selected if a.kind == "local-teacher"), None)
@@ -965,6 +976,7 @@ class SemanticASRTranscriber:
             ranked=ranked,
             uncertainty_spans=uncertainty_spans,
             source_audio_sha256=audio_sha256,
+            force_provisional=force_provisional,
         )
         observed.verify()
 
@@ -1020,6 +1032,8 @@ class SemanticASRTranscriber:
             "teacherCacheHit": teacher_cache_hit,
             "forcedAlignment": alignment_rows,
             "observationDecision": observed.decision,
+            "unscoredPrimary": unscored_primary,
+            "forcedProvisional": force_provisional,
         }
         return LongformSegment(
             window=window,

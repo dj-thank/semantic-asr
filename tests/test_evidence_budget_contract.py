@@ -215,3 +215,32 @@ def test_empty_primary_candidates_fail_without_querying_teacher(tmp_path):
     with pytest.raises(RuntimeError, match="no candidates"):
         SemanticASRTranscriber(EmptyAdapter(), teacher=teacher).transcribe(audio, duration_ms=1000)
     assert teacher.calls == 0
+
+
+def test_unscored_agreement_is_not_calibrated_acceptance(tmp_path):
+    from semantic_asr.adapters import MockASRAdapter
+    from semantic_asr.contracts import CandidateEvidence
+
+    audio = tmp_path / "capture.wav"
+    audio.write_bytes(b"fixture adapters do not read audio")
+    candidates = [
+        CandidateEvidence(
+            name,
+            "同じ発話",
+            rank=1,
+            hypothesis_count=1,
+            source=name,
+            metadata={"scoreKind": "unscored-transcript"},
+        )
+        for name in ("primary", "secondary")
+    ]
+    result = SemanticASRTranscriber(
+        MockASRAdapter(candidates[:1]),
+        second_ear=MockASRAdapter(candidates[1:]),
+        evidence_budget=EvidenceBudget(20000, 1),
+    ).transcribe(audio, duration_ms=1000)
+    observed = result.segments[0].observed
+    assert observed.decision == "provisional"
+    assert len(observed.candidates[0].source_support) == 2
+    assert result.segments[0].diagnostics["evidenceExecution"]["completedUncachedActionCount"] == 1
+    result.verify()

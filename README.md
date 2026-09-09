@@ -8,6 +8,13 @@ Semantic ASRは、日本語音声を単に「自然な文章」へ変換する�
 observedTranscript != normalizedTranscript
 ```
 
+公開候補の導入方法・対応入力・既知の制限・公開までの最短手順は
+[公開候補ガイド](docs/development/PUBLIC_RELEASE_CANDIDATE.md)を参照してください。
+
+音声再生・参照文・認識結果・表記差を並べるローカル評価と、Whisper本来の出力を
+一次観測として保持する任意指定経路は、[ローカル評価ガイド](docs/development/LOCAL_ACCURACY_STUDY.md)
+を参照してください。文字の表記差率を意味の誤認識率とは扱いません。
+
 発話者が実際に「昨日、学校を行きました」と話した場合、言語モデルが「昨日、学校に行きました」を好んでも、前者を消しません。
 
 ## Codexで開発・自動検証を引き継ぐ
@@ -255,6 +262,42 @@ result.write("transcripts")      # json / observed.txt / txt / md / srt / vtt
 ```
 
 `profile` は不変の名前付き設定です（`cpu-ja-v1`: CPU int8 large-v3-turbo・beam 5・30 秒 window padding・loop guard。`cpu-ja-quality-v1`: beam 12。`gpu-ja-v1`: CUDA float16）。バックエンドのノブは呼び出しに漏らさず、組み合わせが変わるときは新しい profile を足します。Koemo のような既存呼び出し側には `transcribe_segments(audio)` が `[(start, end, text), ...]` を返します。モデルを温めたまま何度も呼ぶ場合は `load_transcriber(profile)` を一度作り、`transcribe(..., transcriber=warm)` に渡してください。
+
+ReazonSpeech k2を本体APIの観測/正規化/evidence契約へ接続する場合は、モデルディレクトリと検証済みartifact SHA-256を明示して `scripts/transcribe_reazon.py` を使います。これは既定のWhisperプロファイルを変更せず、`reazon-ja-v1`（native top-one、beam 4、hypotheses 1、未校正confidence）として記録します。
+
+複数ASRを候補証拠として使う場合は、`transcribe(..., adapter=primary, second_ear=secondary)` の形で既存の `SemanticASRTranscriber` second-ear 経路へ渡せます。第二ASRは常時結果を上書きするのではなく、evidence budgetが許す場合に必要な窓だけを再確認し、出典は `provenance.secondEar` に残ります。warm transcriberを渡す場合は、second-earを別引数で同時指定できません。
+
+同じ構成は主入口の `semantic-asr run` からも利用できます。`reazon-ja-v1` はprimaryだけ、`reazon-ja-research-v1` はParakeet second-earを指定する構成です。artifact SHA-256が不足した実行や、既定Whisper profileへローカルReazon artifactを混ぜる指定はfail-closedで拒否されます。
+
+```bash
+semantic-asr run recording.wav \
+  --profile reazon-ja-research-v1 \
+  --reazon-model-dir /absolute/models/reazonspeech-k2 \
+  --reazon-artifact-sha256 REAZON_ARTIFACT_SHA256 \
+  --second-ear-parakeet-model-dir /absolute/models/parakeet-ja \
+  --second-ear-parakeet-artifact-sha256 PARAKEET_ARTIFACT_SHA256 \
+  --output-dir /absolute/external/run
+```
+
+```bash
+python scripts/transcribe_reazon.py recording.wav \
+  --model-dir /absolute/models/reazonspeech-k2 \
+  --model-sha256 VERIFIED_ARTIFACT_SHA256 \
+  --output-dir /absolute/external/reazon-run \
+  --allow-local-research --normalize-numbers
+```
+
+Parakeetをsecond-earとして同じ窓へ追加する場合は、別artifactのSHA-256も明示します。候補が曖昧な窓だけがevidence budgetに従って再確認され、unscored候補は一致しても自動的にacceptedへ昇格しません。
+
+```bash
+python scripts/transcribe_reazon.py recording.wav \
+  --model-dir /absolute/models/reazonspeech-k2 \
+  --model-sha256 REAZON_ARTIFACT_SHA256 \
+  --second-ear-model-dir /absolute/models/parakeet-ja \
+  --second-ear-model-sha256 PARAKEET_ARTIFACT_SHA256 \
+  --output-dir /absolute/external/reazon-parakeet-run \
+  --allow-local-research --normalize-numbers
+```
 
 ### 固有名詞を安全に補助する（ContextCatalog）
 

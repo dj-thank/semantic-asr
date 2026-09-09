@@ -72,13 +72,129 @@ def test_profiles_are_frozen_named_and_digestible() -> None:
     assert profile.loop_guard is True
     assert len(profile.digest) == 64
     assert runtime_profile(profile) is profile
-    assert {name for name in PROFILES} >= {"cpu-ja-v1", "cpu-ja-quality-v1", "gpu-ja-v1"}
+    assert {name for name in PROFILES} >= {
+        "cpu-ja-v1",
+        "cpu-ja-quality-v1",
+        "reazon-ja-v1",
+        "reazon-ja-research-v1",
+        "gpu-ja-v1",
+    }
     with pytest.raises(ValueError):
         runtime_profile("nope")
     with pytest.raises(ValueError):
         RuntimeProfile(name="bad", description="", beam_size=2, hypotheses=5)
     with pytest.raises(ValueError):
         RuntimeProfile(name="bad", description="", window_ms=40_000)
+
+
+def test_reazon_profile_uses_native_top_one_budget_without_confidence() -> None:
+    profile = runtime_profile("reazon-ja-v1")
+    assert profile.model == "reazon-research/reazonspeech-k2-v2"
+    assert profile.beam_size == 4
+    assert profile.hypotheses == 1
+    assert profile.confidence_calibration is None
+
+
+def test_reazon_without_local_adapter_never_loads_whisper(monkeypatch):
+    from semantic_asr import advanced_adapters
+    from semantic_asr.api import build_adapter
+
+    def wrong_backend(*args, **kwargs):
+        pytest.fail("Reazon profile must not load or download a Whisper backend")
+
+    monkeypatch.setattr(advanced_adapters, "PathPreservingFasterWhisperAdapter", wrong_backend)
+    with pytest.raises(ValueError, match="verified local artifact"):
+        build_adapter(runtime_profile("reazon-ja-v1"))
+
+
+def test_reazon_profile_routes_native_decode_budget(tmp_path: Path) -> None:
+    audio = tmp_path / "reazon-profile.wav"
+    _write_wav(audio, 1.0)
+    adapter = FakeAdapter()
+    result = transcribe(audio, profile="reazon-ja-v1", adapter=adapter)
+    assert adapter.requests[0].beam_size == 4
+    assert adapter.requests[0].hypotheses == 1
+    assert result.profile.name == "reazon-ja-v1"
+    assert result.provenance["confidenceCalibrationApplied"] is False
+
+
+def test_reazon_research_profile_has_bounded_evidence_budget() -> None:
+    profile = runtime_profile("reazon-ja-research-v1")
+    assert profile.effort == "research"
+    assert profile.beam_size == 4
+    assert profile.hypotheses == 1
+
+
+def test_second_ear_is_bound_and_provenance_is_explicit(tmp_path: Path) -> None:
+    audio = tmp_path / "second-ear.wav"
+    _write_wav(audio, 1.0)
+    primary = FakeAdapter()
+    second = FakeAdapter()
+    result = transcribe(
+        audio,
+        profile="cpu-ja-quality-v1",
+        adapter=primary,
+        second_ear=second,
+    )
+    assert result.provenance["secondEar"]["adapter"] == "fake-whisper"
+    assert result.provenance["secondEar"]["model"] == "fixture"
+    assert result.provenance["secondEar"]["modelRevision"] is None
+
+
+def test_second_ear_cannot_be_silently_ignored_with_warm_transcriber(tmp_path: Path) -> None:
+    audio = tmp_path / "warm-second-ear.wav"
+    _write_wav(audio, 1.0)
+    with pytest.raises(ValueError, match="second_ear"):
+        transcribe(
+            audio,
+            profile="cpu-ja-quality-v1",
+            transcriber=_warm(FakeAdapter()),
+            second_ear=FakeAdapter(),
+        )
+
+
+def test_adapter_capabilities_fail_closed_before_unsupported_hotword_decode(tmp_path: Path) -> None:
+    class NoHotwordAdapter(FakeAdapter):
+        name = "no-hotword"
+        supports_hotwords = False
+
+    audio = tmp_path / "no-hotword.wav"
+    _write_wav(audio, 1.0)
+    with pytest.raises(ValueError, match="does not support hotwords"):
+        transcribe(audio, adapter=NoHotwordAdapter(), hotwords=("固有名詞",))
+
+
+def test_adapter_capabilities_fail_closed_before_unsupported_prompt_decode(tmp_path: Path) -> None:
+    class NoPromptAdapter(FakeAdapter):
+        name = "no-prompt"
+        supports_initial_prompt = False
+
+    audio = tmp_path / "no-prompt.wav"
+    _write_wav(audio, 1.0)
+    with pytest.raises(ValueError, match="does not support initial_prompt"):
+        transcribe(audio, adapter=NoPromptAdapter(), initial_prompt="文脈")
+
+
+def test_context_catalog_hotword_fails_closed_for_unsupported_adapter(tmp_path: Path) -> None:
+    class NoHotwordAdapter(FakeAdapter):
+        name = "no-hotword-catalog"
+        supports_hotwords = False
+
+    audio = tmp_path / "catalog-no-hotword.wav"
+    _write_wav(audio, 1.0)
+    catalog = ContextCatalog(
+        name="meeting",
+        revision="agenda-v1",
+        entries=(ContextEntry("term:semantic-asr", "Semantic ASR", tags=("term",)),),
+    )
+    with pytest.raises(ValueError, match="does not support hotwords"):
+        transcribe(
+            audio,
+            adapter=NoHotwordAdapter(),
+            catalog=catalog,
+            context_query="Semantic ASR",
+            context_tags=("term",),
+        )
 
 
 def test_transcribe_path_returns_segments_and_provenance(tmp_path: Path) -> None:
@@ -142,6 +258,69 @@ def test_run_cli_writes_outputs_with_injected_adapter(tmp_path: Path, capsys) ->
     assert payload["profile"] == "cpu-ja-v1"
     assert set(payload["outputs"]) == {"json", "observed", "transcript_json"}
     assert (tmp_path / "out").exists()
+
+
+def test_run_cli_reazon_profile_requires_local_artifact_pair() -> None:
+    from semantic_asr.run_cli import build_parser, build_profile_adapters
+
+    args = build_parser().parse_args(["clip.wav", "--profile", "reazon-ja-v1"])
+    with pytest.raises(ValueError, match="Reazon profiles require"):
+        build_profile_adapters(args)
+
+
+def test_qwen_profile_requires_explicit_local_artifact_before_model_import():
+    from semantic_asr.api import build_adapter
+    from semantic_asr.run_cli import build_parser, build_profile_adapters
+
+    with pytest.raises(ValueError, match="verified local artifact"):
+        build_adapter(runtime_profile("qwen-ja-cpu-v1"))
+    args = build_parser().parse_args(["clip.wav", "--profile", "qwen-ja-cpu-v1"])
+    with pytest.raises(ValueError, match="both model"):
+        build_profile_adapters(args)
+    args = build_parser().parse_args(["clip.wav", "--qwen-model-dir", "local-model"])
+    with pytest.raises(ValueError, match="require qwen"):
+        build_profile_adapters(args)
+
+
+def test_qwen_profile_preserves_provisional_unscored_observation(tmp_path):
+    from semantic_asr.adapters import CandidateEvidence
+
+    class QwenLike:
+        name = "qwen3-asr"
+        model_artifact_sha256 = "a" * 64
+
+        def decode(self, request):
+            return [
+                CandidateEvidence(
+                    candidate_id="qwen-0000",
+                    text="ええ、今日は今日は晴れです。",
+                    source=self.name,
+                    metadata={"adapter": self.name, "scoreKind": "unscored-transcript"},
+                )
+            ]
+
+    audio = tmp_path / "qwen.wav"
+    _write_wav(audio, 1.0)
+    result = transcribe(audio, profile="qwen-ja-cpu-v1", adapter=QwenLike())
+    result.verify()
+    assert result.observed_text == "ええ、今日は今日は晴れです。"
+    assert all(s.status == "provisional" and s.confidence is None for s in result.segments)
+
+
+def test_run_cli_rejects_second_ear_on_default_profile() -> None:
+    from semantic_asr.run_cli import build_parser, build_profile_adapters
+
+    args = build_parser().parse_args(
+        [
+            "clip.wav",
+            "--reazon-model-dir",
+            "model",
+            "--reazon-artifact-sha256",
+            "a" * 64,
+        ]
+    )
+    with pytest.raises(ValueError, match="require a Reazon profile"):
+        build_profile_adapters(args)
 
 
 def test_root_cli_routes_run_command() -> None:
@@ -365,3 +544,89 @@ def test_runtime_profile_rejects_invalid_patience_and_effort_bounds() -> None:
             hypotheses=6,
             effort="ultra-light",
         )
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, EOFError])
+def test_phone_observer_failure_retains_first_pass_and_reports_coverage(tmp_path, failure):
+    audio = tmp_path / "phone-failure.wav"
+    _write_wav(audio, 1.0)
+    baseline = transcribe(audio, adapter=FakeAdapter())
+
+    class FailingObserver:
+        def observe(self, path, *, start_ms, end_ms):
+            assert Path(path) == audio
+            assert (start_ms, end_ms) == (0, 1000)
+            raise failure("local phone model unavailable")
+
+    result = transcribe(audio, adapter=FakeAdapter(), phone_observer=FailingObserver())
+    result.verify()
+    assert result.evidence_sha256 == baseline.evidence_sha256
+    assert result.observed_text == baseline.observed_text
+    assert result.normalized_text == baseline.normalized_text
+    assert "phoneEvidence" not in baseline.diagnostics
+    evidence = result.diagnostics["phoneEvidence"]
+    assert evidence["completed_windows"] == 0
+    assert evidence["total_windows"] == 1
+    assert "unavailable" in evidence["windows"][0]["reason"]
+    evidence["completed_windows"] = 1
+    with pytest.raises(ValueError, match="phone evidence"):
+        result.verify()
+
+
+def test_phone_cli_pair_is_checked_without_loading_models():
+    from semantic_asr.run_cli import build_parser, build_phone_observer
+
+    args = build_parser().parse_args(["audio.wav", "--phone-model-dir", "model"])
+    with pytest.raises(ValueError, match="supplied together"):
+        build_phone_observer(args)
+
+
+@pytest.mark.parametrize("score_error", [None, FileNotFoundError, EOFError])
+def test_successful_phone_observer_survives_api_json_without_changing_transcript(
+    tmp_path, score_error
+):
+    from semantic_asr.audio_phone_runtime import AudioPhoneObservation
+    from semantic_asr.phonetic_evidence import PosteriorFrame, PosteriorSequence
+
+    audio = tmp_path / "phone-success.wav"
+    _write_wav(audio, 1.0)
+    baseline = transcribe(audio, adapter=FakeAdapter())
+
+    class Observer:
+        def score_candidates(self, observation, segment):
+            if score_error:
+                raise score_error("candidate resource unavailable")
+            return None
+
+        def observe(self, path, *, start_ms, end_ms):
+            assert Path(path) == audio
+            assert (start_ms, end_ms) == (0, 1000)
+            posterior = PosteriorSequence(
+                "phone",
+                "PAD",
+                ("PAD", "a"),
+                tuple(
+                    PosteriorFrame.from_mapping(
+                        start_ms=i * 20, end_ms=(i + 1) * 20, probabilities={"PAD": 0.1, "a": 0.9}
+                    )
+                    for i in range(50)
+                ),
+                "fixture",
+                "artifact:" + "a" * 64,
+                "labels-v1",
+                baseline.source_audio_sha256,
+            )
+            return AudioPhoneObservation(
+                posterior, 0, 16000, 16000, "b" * 64, "c" * 64, "a" * 64, "fixture", 320, 400
+            )
+
+    result = transcribe(audio, adapter=FakeAdapter(), phone_observer=Observer())
+    payload = result.as_dict()
+    assert result.evidence_sha256 == baseline.evidence_sha256
+    assert result.observed_text == baseline.observed_text
+    assert result.normalized_text == baseline.normalized_text
+    phone = payload["diagnostics"]["phoneEvidence"]
+    assert phone["completed_windows"] == phone["total_windows"] == 1
+    assert phone["windows"][0]["observation"]["phones"][0]["phone"] == "a"
+    if score_error:
+        assert phone["windows"][0]["candidate_checks"]["execution"] == "unavailable"

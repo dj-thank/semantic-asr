@@ -1,5 +1,9 @@
 # Execution index — release readiness
 
+For the integrated fixed-trial audio driver, freeze/paired evaluation and verified
+stage resume, read [the research cycle](RESEARCH_CYCLE.md). Its engineering and
+real-audio smoke evidence are separate from the remaining full #30 acceptance gates.
+
 This is an implementation roadmap, not a completed release or a performance claim.
 Start at [Issue #23](https://github.com/dj-thank/semantic-asr/issues/23).
 Read [AGENTS](../../AGENTS.md), the [audit](AUDIT_2026-09-05.md),
@@ -71,6 +75,12 @@ Subsequent #42/#43/#44 have separate implementation and limited training evidenc
 Those outcomes need the evidence specified in the work queue. Historical research
 remains in its original dated documents; do not overwrite its conclusions.
 
+## Codex execution entry
+
+[Codex handoff and bounded pipeline](CODEX_AUTOPILOT.md) connects README intentions to
+acceptance criteria, executable model-free verification, and the next #30 driver task.
+Run `python scripts/codex_verify.py --plan` from the repository root. This does not
+complete the real-audio research loop or change the reserved issue ownership above.
 ## Codex execution
 
 [Codex handoff and bounded automation](CODEX_HANDOFF.md) connects the README to

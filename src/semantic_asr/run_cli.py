@@ -10,6 +10,8 @@ from typing import Any
 
 from .adapters import ASRAdapter
 from .api import PROFILES, transcribe
+from .parakeet_adapter import ParakeetJapaneseCtcAdapter
+from .reazon_adapter import ReazonSpeechK2Adapter
 
 RUN_COMMANDS = {"run"}
 
@@ -18,6 +20,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="semantic-asr run")
     parser.add_argument("audio", help="audio file (any format ffmpeg/PyAV can decode)")
     parser.add_argument("--profile", default="cpu-ja-v1", choices=sorted(PROFILES))
+    parser.add_argument("--whisper-model-dir", default=None)
+    parser.add_argument("--whisper-artifact-sha256", default=None)
+    parser.add_argument("--qwen-model-dir", default=None)
+    parser.add_argument("--qwen-artifact-sha256", default=None)
+    parser.add_argument("--phone-model-dir", default=None, help="optional local HuBERT phone model")
+    parser.add_argument("--phone-artifact-sha256", default=None)
+    parser.add_argument(
+        "--phone-check-candidates",
+        action="store_true",
+        help="check whole-window candidate readings against audio phones",
+    )
+    parser.add_argument("--reazon-model-dir", default=None)
+    parser.add_argument("--reazon-artifact-sha256", default=None)
+    parser.add_argument("--second-ear-parakeet-model-dir", default=None)
+    parser.add_argument("--second-ear-parakeet-artifact-sha256", default=None)
     parser.add_argument("--output-dir", default="transcripts")
     parser.add_argument("--language", default=None, help="override the profile language")
     parser.add_argument("--hotwords", default="", help="comma or 、 separated prompt bias terms")
@@ -49,8 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_transcription(
-    args: argparse.Namespace, *, adapter: ASRAdapter | None = None
+    args: argparse.Namespace,
+    *,
+    adapter: ASRAdapter | None = None,
+    second_ear: ASRAdapter | None = None,
+    phone_observer: Any | None = None,
 ) -> dict[str, Any]:
+    if phone_observer is None:
+        phone_observer = build_phone_observer(args)
     hotwords = tuple(
         value.strip()
         for value in str(args.hotwords or "").replace("、", ",").split(",")
@@ -79,6 +102,8 @@ def run_transcription(
         context_tags=tuple(args.context_tag),
         on_progress=progress,
         adapter=adapter,
+        second_ear=second_ear,
+        phone_observer=phone_observer,
     )
     outputs = result.write(args.output_dir, overwrite=args.overwrite, formats=formats)
     return {
@@ -94,12 +119,107 @@ def run_transcription(
     }
 
 
+def build_phone_observer(args: argparse.Namespace):
+    directory = getattr(args, "phone_model_dir", None)
+    digest = getattr(args, "phone_artifact_sha256", None)
+    if directory is None and digest is None:
+        if getattr(args, "phone_check_candidates", False):
+            raise ValueError("phone candidate checks require a local phone model")
+        return None
+    if not directory or not digest:
+        raise ValueError("phone model directory and artifact SHA-256 must be supplied together")
+    from .audio_phone_runtime import LocalHubertPhoneObserver
+
+    return LocalHubertPhoneObserver(
+        directory,
+        artifact_sha256=digest,
+        check_candidates=getattr(args, "phone_check_candidates", False),
+    )
+
+
+def build_profile_adapters(args: argparse.Namespace) -> tuple[ASRAdapter | None, ASRAdapter | None]:
+    """Construct explicitly requested local adapters for the named profile."""
+
+    reazon_values = (args.reazon_model_dir, args.reazon_artifact_sha256)
+    parakeet_values = (
+        args.second_ear_parakeet_model_dir,
+        args.second_ear_parakeet_artifact_sha256,
+    )
+    whisper_values = (args.whisper_model_dir, args.whisper_artifact_sha256)
+    qwen_values = (args.qwen_model_dir, args.qwen_artifact_sha256)
+    if args.profile == "qwen-ja-cpu-v1" or any(v is not None for v in qwen_values):
+        if args.profile != "qwen-ja-cpu-v1":
+            raise ValueError("local Qwen artifacts require qwen-ja-cpu-v1")
+        if any(v is None or not str(v).strip() for v in qwen_values):
+            raise ValueError("Qwen requires both model directory and artifact SHA-256")
+        if any(v is not None for v in (*reazon_values, *parakeet_values, *whisper_values)):
+            raise ValueError("do not mix Qwen and other primary/second-ear artifact arguments")
+        from .adapters import Qwen3ASRAdapter
+
+        return Qwen3ASRAdapter(
+            model=args.qwen_model_dir,
+            artifact_sha256=args.qwen_artifact_sha256,
+            dtype="float32",
+            device_map="cpu",
+            max_inference_batch_size=1,
+            max_new_tokens=256,
+        ), None
+    if any(value is not None for value in whisper_values):
+        if args.profile != "whisper-native-cpu-v1":
+            raise ValueError("local native Whisper artifacts require whisper-native-cpu-v1")
+        if any(value is None or not str(value).strip() for value in whisper_values):
+            raise ValueError("native Whisper requires both model directory and artifact SHA-256")
+        if any(value is not None for value in (*reazon_values, *parakeet_values)):
+            raise ValueError("do not mix native Whisper and Reazon artifact arguments")
+        from .native_whisper_adapter import NativeWhisperAdapter
+
+        return NativeWhisperAdapter(
+            model=args.whisper_model_dir,
+            artifact_sha256=args.whisper_artifact_sha256,
+            device="cpu",
+            compute_type="int8",
+            cpu_threads=2,
+        ), None
+    if args.profile not in {"reazon-ja-v1", "reazon-ja-research-v1"}:
+        if any(value is not None for value in (*reazon_values, *parakeet_values)):
+            raise ValueError("local Reazon/Parakeet artifacts require a Reazon profile")
+        return None, None
+    if any(value is None for value in reazon_values):
+        raise ValueError("Reazon profiles require --reazon-model-dir and --reazon-artifact-sha256")
+    if any(value is None for value in parakeet_values):
+        if any(value is not None for value in parakeet_values):
+            raise ValueError(
+                "Parakeet second-ear requires both model directory and artifact SHA-256"
+            )
+        second_ear = None
+    else:
+        if args.profile != "reazon-ja-research-v1":
+            raise ValueError("Parakeet second-ear requires profile reazon-ja-research-v1")
+        second_ear = ParakeetJapaneseCtcAdapter(
+            args.second_ear_parakeet_model_dir,
+            artifact_sha256=args.second_ear_parakeet_artifact_sha256,
+        )
+    primary = ReazonSpeechK2Adapter(
+        args.reazon_model_dir,
+        artifact_sha256=args.reazon_artifact_sha256,
+    )
+    return primary, second_ear
+
+
 def main(argv: list[str] | None = None) -> int:
     values = list(sys.argv[1:] if argv is None else argv)
     if values and values[0] == "run":
         values = values[1:]
-    args = build_parser().parse_args(values)
-    payload = run_transcription(args)
+    parser = build_parser()
+    args = parser.parse_args(values)
+    try:
+        phone_observer = build_phone_observer(args)
+        adapter, second_ear = build_profile_adapters(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    payload = run_transcription(
+        args, adapter=adapter, second_ear=second_ear, phone_observer=phone_observer
+    )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
