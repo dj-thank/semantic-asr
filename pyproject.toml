@@ -21,6 +21,10 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+sherpa = [
+  "sherpa-onnx==1.13.7",
+  "numpy>=1.26,<3",
+]
 # Separate reproducible environment: the existing rerank extra targets Transformers 5.
 phonetic = [
   "numpy>=1.26",

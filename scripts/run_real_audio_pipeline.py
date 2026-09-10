@@ -170,6 +170,10 @@ def run(command: list[str]) -> None:
 
 
 def main() -> int:
+    if "--bounded" in sys.argv[1:]:
+        from research_cycle import main as bounded_main
+
+        return bounded_main([value for value in sys.argv[1:] if value != "--bounded"])
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidates", required=True, help="glob of candidate JSONL files")
     parser.add_argument(
@@ -189,7 +193,9 @@ def main() -> int:
     parser.add_argument("--ranker", choices=["listwise", "pairwise"], default="listwise")
     parser.add_argument("--ks", default="1,3,5,8,12,16,25,50")
     parser.add_argument("--bootstrap-iterations", type=int, default=2000)
-    parser.add_argument("--cli", default="semantic-asr")
+    parser.add_argument(
+        "--cli", help="Optional executable override; default uses this Python environment"
+    )
     args = parser.parse_args()
 
     files = sorted(glob.glob(args.candidates))
@@ -224,7 +230,15 @@ def main() -> int:
         )
     )
 
-    cli = [args.cli]
+    cli = (
+        [args.cli]
+        if args.cli
+        else [
+            sys.executable,
+            "-c",
+            "from semantic_asr.cli_root import main; raise SystemExit(main())",
+        ]
+    )
     run([*cli, "partition-manifest", str(paths["merged"]), "--output-dir", str(paths["splits"])])
     train_command = "train-listwise-ranker" if args.ranker == "listwise" else "train-ranker"
     ranker = paths["ranker"]

@@ -224,6 +224,7 @@ class ObservedTranscript:
     evidence_sha256: str
     decision: ObservationDecision = "accepted"
     selected_posterior: float = 0.0
+    force_provisional: bool = False
 
     @classmethod
     def create(
@@ -233,9 +234,12 @@ class ObservedTranscript:
         ranked: list[RankedCandidate],
         uncertainty_spans: list[dict[str, Any]],
         source_audio_sha256: str | None = None,
+        force_provisional: bool = False,
     ) -> ObservedTranscript:
         candidates = tuple(item.candidate for item in ranked)
-        decision: ObservationDecision = "provisional" if selected.gate.abstain else "accepted"
+        decision: ObservationDecision = (
+            "provisional" if force_provisional or selected.gate.abstain else "accepted"
+        )
         payload = {
             "text": selected.candidate.text,
             "selectedCandidateId": selected.candidate.candidate_id,
@@ -245,6 +249,7 @@ class ObservedTranscript:
             "sourceAudioSha256": source_audio_sha256,
             "decision": decision,
             "selectedPosterior": selected.posterior,
+            "forceProvisional": force_provisional,
         }
         return cls(
             text=selected.candidate.text,
@@ -256,6 +261,7 @@ class ObservedTranscript:
             evidence_sha256=sha256_json(payload),
             decision=decision,
             selected_posterior=selected.posterior,
+            force_provisional=force_provisional,
         )
 
     def verify(self) -> None:
@@ -268,6 +274,7 @@ class ObservedTranscript:
             "sourceAudioSha256": self.source_audio_sha256,
             "decision": self.decision,
             "selectedPosterior": self.selected_posterior,
+            "forceProvisional": self.force_provisional,
         }
         if sha256_json(payload) != self.evidence_sha256:
             raise ValueError("observed transcript evidence was modified")

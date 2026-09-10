@@ -56,7 +56,7 @@ def _fake_cli(monkeypatch, pipeline):
     def fake_run(command: list[str], *, check: bool) -> None:
         assert check is True
         commands.append(command)
-        if command[1] in {"train-listwise-ranker", "train-ranker"}:
+        if any(value in {"train-listwise-ranker", "train-ranker"} for value in command):
             output = Path(command[command.index("--output") + 1])
             output.write_text('{"profile":{"name":"fixture-ranker"}}', encoding="utf-8")
 

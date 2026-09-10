@@ -34,3 +34,7 @@ data/reazon/
 
 # Separate optional CPU development environment used by the Codex handoff.
 .venv-cpu/
+
+# Task-local research data and deliverables.
+work/
+outputs/

@@ -64,6 +64,38 @@ def test_budgeted_plan_prefers_high_information_actions() -> None:
     assert any("currency" in action.reasons for action in plan.selected)
 
 
+def test_unscored_primary_requests_whole_window_second_ear() -> None:
+    candidate = CandidateEvidence(
+        "primary",
+        "候補の文",
+        rank=1,
+        hypothesis_count=1,
+        source="unscored-engine",
+        metadata={"scoreKind": "unscored-transcript"},
+    )
+    ranked = fuse_candidates([candidate])
+    lattice = build_semantic_lattice(
+        [candidate],
+        posterior=ranked[0].gate.posterior,
+        pivot_candidate_id=ranked[0].candidate.candidate_id,
+        segment_start_ms=0,
+        segment_end_ms=12_000,
+    )
+    plan = plan_evidence(
+        ranked,
+        lattice,
+        budget=EvidenceBudget(total_cost_ms=20_000, max_actions=1),
+        enabled=("qwen-second-ear",),
+        force_second_ear=True,
+        whole_window_start_ms=0,
+        whole_window_end_ms=12_000,
+    )
+    assert len(plan.selected) == 1
+    assert plan.selected[0].kind == "qwen-second-ear"
+    assert plan.selected[0].start_ms == 0
+    assert plan.selected[0].end_ms == 12_000
+
+
 def test_semantic_change_warnings_detect_meaning_flip() -> None:
     warnings = semantic_change_warnings(
         "明日は行きません。料金は3000円です。",

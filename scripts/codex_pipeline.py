@@ -7,7 +7,6 @@ checkpoint, score, rights or model-promotion contract. Research outputs stay loc
 from __future__ import annotations
 
 import argparse
-import contextlib
 import glob
 import hashlib
 import importlib.metadata
@@ -23,6 +22,7 @@ import sysconfig
 import time
 import wave
 import xml.etree.ElementTree as ET
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -144,16 +144,24 @@ def files_under(directory: Path) -> list[Path]:
 def enforce_budget(output: Path, deadline: float, storage: int) -> None:
     if time.monotonic() >= deadline:
         raise BudgetExceeded("wall-clock budget exceeded")
-    if sum(path.stat().st_size for path in files_under(output)) > storage:
+    size = 0
+    for path in files_under(output):
+        try:
+            size += path.stat().st_size
+        except FileNotFoundError:
+            # A child's atomic .tmp -> final rename can occur after enumeration.
+            # The next poll and the post-exit scan include the promoted file.
+            continue
+    if size > storage:
         raise BudgetExceeded("output storage budget exceeded")
 
 
-def stop_process(process: subprocess.Popen[bytes]) -> None:
-    if os.name == "posix":
+def stop_process(process: subprocess.Popen[bytes], *, owns_group: bool = True) -> None:
+    if os.name == "posix" and owns_group:
         # Also terminate descendants after their parent has exited.
-        with contextlib.suppress(ProcessLookupError):
+        with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-    elif process.poll() is None:
+    elif os.name == "nt" and process.poll() is None:
         subprocess.run(
             ["taskkill", "/PID", str(process.pid), "/T", "/F"],
             stdout=subprocess.DEVNULL,
@@ -162,6 +170,8 @@ def stop_process(process: subprocess.Popen[bytes]) -> None:
         )
         if process.poll() is None:
             process.kill()
+    elif process.poll() is None:
+        process.kill()
     process.wait()
 
 
@@ -189,6 +199,9 @@ def run_stage(
         TOKENIZERS_PARALLELISM="false",
     )
     env.pop("PYTHONPATH", None)
+    owns_group = os.name == "posix" and os.environ.get("SEMANTIC_ASR_MANAGED_GROUP") != "1"
+    if os.name == "posix":
+        env["SEMANTIC_ASR_MANAGED_GROUP"] = "1"
     env["PATH"] = sysconfig.get_path("scripts") + os.pathsep + env.get("PATH", "")
     process = None
     try:
@@ -199,7 +212,7 @@ def run_stage(
                 env=env,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                start_new_session=os.name == "posix",
+                start_new_session=owns_group,
             )
             while process.poll() is None:
                 enforce_budget(output, deadline, storage)
@@ -214,7 +227,7 @@ def run_stage(
         raise
     finally:
         if process is not None:
-            stop_process(process)
+            stop_process(process, owns_group=owns_group)
         step["seconds"] = round(time.monotonic() - started, 3)
         write_json(output / "receipt.json", receipt)
 
@@ -292,8 +305,8 @@ def check(args: argparse.Namespace, output: Path, receipt: dict[str, Any], stage
     )
     code = (
         "import pathlib, semantic_asr; "
-        "assert pathlib.Path(semantic_asr.__file__).resolve()"
-        f".is_relative_to(pathlib.Path({str(venv)!r})); "
+        "assert pathlib.Path(semantic_asr.__file__).resolve().is_relative_to("
+        f"pathlib.Path({str(venv)!r})); "
         "[getattr(semantic_asr, n) for n in semantic_asr.__all__]; "
         "from semantic_asr.cli_root import main; raise SystemExit(main())"
     )
@@ -317,8 +330,8 @@ def research_input(args: argparse.Namespace) -> dict[str, Any]:
 
     if not 1 <= args.beam_size <= 50 or not 1 <= args.hypotheses <= 50:
         raise ValueError("beam/hypotheses must be between 1 and 50")
-    if not 1 <= args.bootstrap_iterations <= 10000:
-        raise ValueError("bootstrap iterations must be between 1 and 10000")
+    if not 100 <= args.bootstrap_iterations <= 10000:
+        raise ValueError("bootstrap iterations must be between 100 and 10000")
     manifest = Path(args.manifest).expanduser().resolve()
     if manifest.is_relative_to(ROOT) or manifest.stat().st_size > 64 * 1024 * 1024:
         raise ValueError("use a bounded manifest outside the checkout")
@@ -382,7 +395,10 @@ def research_input(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def research(args: argparse.Namespace, output: Path, receipt: dict[str, Any], stage: Any) -> None:
-    receipt["inputs"] = research_input(args)
+    current_inputs = research_input(args)
+    if "inputs" in receipt and receipt["inputs"] != current_inputs:
+        raise ValueError("research inputs changed on resume")
+    receipt["inputs"] = current_inputs
     require_modules(("faster_whisper", "ctranslate2", "numpy"))
     receipt["runtime_network_policy"] = "offline model cache/local directory; provision separately"
     executable = Path(sysconfig.get_path("scripts")) / (
@@ -430,6 +446,7 @@ def research(args: argparse.Namespace, output: Path, receipt: dict[str, Any], st
         [
             sys.executable,
             "scripts/run_real_audio_pipeline.py",
+            "--bounded",
             "--candidates",
             glob.escape(str(candidates)),
             "--output-dir",
@@ -437,10 +454,29 @@ def research(args: argparse.Namespace, output: Path, receipt: dict[str, Any], st
             "--allow-raw-export",
             "--ranker",
             args.ranker,
-            "--cli",
-            str(executable),
+            "--max-trials",
+            str(args.max_trials),
+            "--epochs",
+            str(args.epochs),
+            "--seed",
+            str(args.seed),
+            "--audio-seconds",
+            str(receipt["inputs"]["audio_seconds"]),
+            "--max-audio-seconds",
+            str(args.max_audio_seconds),
+            "--max-wall-seconds",
+            str(args.max_wall_seconds),
+            "--max-storage-bytes",
+            str(args.max_storage_bytes),
+            "--evaluation-role",
+            args.evaluation_role,
             "--bootstrap-iterations",
             str(args.bootstrap_iterations),
+            *(
+                ["--resume"]
+                if args.resume and (output / "pipeline" / "cycle.json").exists()
+                else []
+            ),
         ],
     )
     for name in ("report.json", "report-raw.json"):
@@ -450,7 +486,7 @@ def research(args: argparse.Namespace, output: Path, receipt: dict[str, Any], st
             or report["sample_count"] != receipt["inputs"]["split_counts"]["test"]
         ):
             raise ValueError("benchmark did not account for the complete test cohort")
-        for key in ("baseline_cer", "cascade_cer", "mbr_cer"):
+        for key in ("baseline_cer", "cascade_cer"):
             value = report.get(key)
             if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
                 raise ValueError("benchmark has a missing/non-finite error metric")
@@ -461,10 +497,13 @@ def research(args: argparse.Namespace, output: Path, receipt: dict[str, Any], st
     if research_input(args) != receipt["inputs"]:
         raise ValueError("input/model bytes changed during research")
     receipt["new_acoustic_or_lora_weights"] = False
-    receipt["research_scope"] = "one legacy v0.2 generation/ranker/calibration/evaluation cycle"
+    cycle = json.loads((output / "pipeline" / "cycle.json").read_text(encoding="utf-8"))
+    if cycle["status"] != "completed":
+        raise ValueError("post-candidate cycle did not complete")
+    receipt["research_scope"] = "fixed-trial generation/ranker/freeze/paired-evaluation cycle"
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser(
@@ -478,6 +517,10 @@ def main(argv: list[str] | None = None) -> int:
     validation.add_argument("--require-clean", action="store_true")
     experiment = commands.add_parser("research", help="one explicitly authorized, local-only cycle")
     experiment.add_argument("--allow-local-research", action="store_true")
+    experiment.add_argument("--resume", action="store_true")
+    experiment.add_argument("--max-trials", type=positive, required=True)
+    experiment.add_argument("--epochs", type=positive, default=20)
+    experiment.add_argument("--seed", type=int, default=17)
     experiment.add_argument("--manifest", required=True)
     experiment.add_argument("--model", required=True)
     experiment.add_argument("--model-revision")
@@ -527,14 +570,47 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
+    resume = args.command == "research" and args.resume
+    configuration = {k: v for k, v in vars(args).items() if k not in {"resume", "output_dir"}}
+    previous = None
     try:
-        output = output_path(args.output_dir)
-        output.mkdir(parents=True)
-    except (ValueError, OSError) as error:
+        if resume:
+            from run_real_audio_pipeline import ensure_safe_output_dir
+
+            output = ensure_safe_output_dir(args.output_dir)
+            previous = json.loads((output / "receipt.json").read_text(encoding="utf-8"))
+            if previous.get("configuration") != configuration:
+                raise ValueError("resume configuration mismatch")
+            if (
+                previous.get("source") != source_identity()
+                or previous.get("environment") != environment()
+            ):
+                raise ValueError("resume source/environment mismatch")
+            if previous.get("inputs") != research_input(args):
+                raise ValueError("resume input mismatch")
+            if previous.get("status") == "running":
+                active_started = previous.get("active_started_at")
+                if not isinstance(active_started, (int, float)) or active_started > time.time():
+                    raise ValueError("unfinalized run has no valid timing evidence")
+                previous["seconds"] = (
+                    previous.get("seconds_before", 0.0) + time.time() - active_started
+                )
+            for name, identity in previous.get("artifacts", {}).items():
+                path = output / name
+                if not path.resolve().is_relative_to(output) or sha256(path) != identity["sha256"]:
+                    raise ValueError("resume artifact mismatch")
+            if previous["status"] == "completed":
+                print(json.dumps({"status": "completed", "resumed_without_reexecution": True}))
+                return 0
+        else:
+            output = output_path(args.output_dir)
+            output.mkdir(parents=True)
+    except (ValueError, OSError, Blocked) as error:
         print(type(error).__name__ + ": invalid or occupied output destination", file=sys.stderr)
         return 2
     started = time.monotonic()
-    deadline = started + args.max_wall_seconds
+    spent_before = previous.get("seconds", 0.0) if previous else 0.0
+    deadline = started + args.max_wall_seconds - spent_before
     receipt: dict[str, Any] = {
         "schema": "codex-pipeline-receipt-v1",
         "command": args.command,
@@ -546,7 +622,13 @@ def main(argv: list[str] | None = None) -> int:
         "trials": 1,
         "promotion": "not-evaluated",
         "automatic_publish": False,
+        "configuration": configuration,
     }
+    if previous is not None:
+        receipt = previous
+        receipt["status"] = "running"
+    receipt["active_started_at"] = time.time()
+    receipt["seconds_before"] = spent_before
     if args.command == "check":
         receipt["lane"] = args.lane
     else:
@@ -561,7 +643,20 @@ def main(argv: list[str] | None = None) -> int:
             raise Blocked("clean committed source required for this run")
 
         def stage(name: str, command: list[str], *, cwd: Path = ROOT) -> None:
-            run_stage(name, command, output, receipt, deadline, args.max_storage_bytes, cwd=cwd)
+            if resume and name == "generate" and receipt.get("generated_candidates_sha256"):
+                if (
+                    sha256(output / "all-candidates.jsonl")
+                    != receipt["generated_candidates_sha256"]
+                ):
+                    raise ValueError("generated candidate digest mismatch")
+                return
+            attempt_name = name if not resume else f"{name}-resume-{len(receipt['stages'])}"
+            run_stage(
+                attempt_name, command, output, receipt, deadline, args.max_storage_bytes, cwd=cwd
+            )
+            if name == "generate":
+                receipt["generated_candidates_sha256"] = sha256(output / "all-candidates.jsonl")
+                write_json(output / "receipt.json", receipt)
 
         if args.command == "check":
             check(args, output, receipt, stage)
@@ -576,8 +671,17 @@ def main(argv: list[str] | None = None) -> int:
     except (BudgetExceeded, KeyboardInterrupt) as error:
         receipt.update(status="partial", reason=str(error) or "interrupted")
         code = 3
+    except subprocess.CalledProcessError as error:
+        if args.command == "research" and error.returncode == 3:
+            receipt.update(
+                status="partial",
+                reason="post-candidate cycle exhausted its budget or was interrupted",
+            )
+            code = 3
+        else:
+            receipt.update(status="failed", reason=str(error))
     except Exception as error:
-        # Receipts may contain private paths. Never upload research receipts/logs automatically.
+        # Local receipts may contain private paths. Never auto-upload research logs.
         receipt.update(status="failed", reason=type(error).__name__ + ": " + str(error))
     finally:
         try:
@@ -597,10 +701,31 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as error:
             receipt.update(status="failed", evidence_error=type(error).__name__)
             code = 1
-        receipt["seconds"] = round(time.monotonic() - started, 3)
+        receipt["seconds"] = round(spent_before + time.monotonic() - started, 3)
         write_json(output / "receipt.json", receipt)
     print(json.dumps({"status": receipt["status"], "promotion": "not-evaluated"}))
     return code
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "research" and not {"-h", "--help"}.intersection(arguments):
+        from run_real_audio_pipeline import ensure_safe_output_dir
+
+        from semantic_asr.experiment_runner import _checkpoint_writer_lock
+
+        probe = argparse.ArgumentParser(add_help=False)
+        probe.add_argument("--output-dir")
+        known, _ = probe.parse_known_args(arguments[1:])
+        if known.output_dir:
+            try:
+                output = ensure_safe_output_dir(known.output_dir)
+                with _checkpoint_writer_lock(output.with_name(output.name + "-writer")):
+                    return _main(arguments)
+            except (OSError, ValueError, RuntimeError) as error:
+                print(type(error).__name__ + ": " + str(error), file=sys.stderr)
+                return 2
+    return _main(arguments)
 
 
 if __name__ == "__main__":

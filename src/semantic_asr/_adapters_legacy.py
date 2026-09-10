@@ -678,6 +678,7 @@ class Qwen3ASRAdapter:
                         "timeStamps": _jsonable(timestamps),
                         "qwenAsrVersion": _package_version("qwen-asr"),
                         "candidateMultiplicity": "one-transcript-per-input",
+                        "scoreKind": "unscored-transcript",
                     },
                 )
             )

@@ -34,6 +34,11 @@ on:
         default: "100"
         required: true
         type: string
+      max_trials:
+        description: "Maximum training attempts; this fixed cycle does not tune on evaluation data"
+        default: "1"
+        required: true
+        type: string
       max_audio_seconds:
         description: "Maximum total audio seconds, verified from WAVs"
         default: "600"
@@ -108,6 +113,7 @@ jobs:
           RUNTIME: ${{ inputs.runtime }}
           EVALUATION_ROLE: ${{ inputs.evaluation_role }}
           MAX_RECORDS: ${{ inputs.max_records }}
+          MAX_TRIALS: ${{ inputs.max_trials }}
           MAX_AUDIO: ${{ inputs.max_audio_seconds }}
           MAX_WALL: ${{ inputs.max_wall_seconds }}
           MAX_STORAGE: ${{ inputs.max_storage_bytes }}
@@ -123,6 +129,7 @@ jobs:
             --device "$device" --compute-type "$compute" \
             --evaluation-role "$EVALUATION_ROLE" --allow-local-research \
             --max-records "$MAX_RECORDS" --max-audio-seconds "$MAX_AUDIO" \
+            --max-trials "$MAX_TRIALS" \
             --max-wall-seconds "$MAX_WALL" --max-storage-bytes "$MAX_STORAGE" \
             --output-dir "$ASR_OUTPUT"
       - name: Report status without uploading references, paths, models, or raw logs

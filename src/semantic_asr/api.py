@@ -35,6 +35,7 @@ from .adapters import ASRAdapter
 from .audio import pcm_to_float32, require_integer
 from .candidate_pool import lenient_surface_key
 from .context_catalog import ContextCatalog, ContextSelection, load_context_catalog
+from .contracts import sha256_json
 from .longform import LongformResult, SemanticASRTranscriber
 from .outputs import publish_output_documents, render_output_documents
 from .pipeline import EffortName, effort_profile
@@ -117,6 +118,25 @@ class RuntimeProfile:
 
 
 PROFILES: dict[str, RuntimeProfile] = {
+    "qwen-ja-cpu-v1": RuntimeProfile(
+        name="qwen-ja-cpu-v1",
+        description="Japanese Qwen3-ASR on CPU with an explicitly verified local artifact.",
+        model="local-qwen3-asr",
+        device="cpu",
+        compute_type="float32",
+        beam_size=1,
+        hypotheses=1,
+        confidence_calibration=None,
+        confidence_note="Qwen output is provisional; no transcript correctness calibration.",
+    ),
+    "whisper-native-cpu-v1": RuntimeProfile(
+        name="whisper-native-cpu-v1",
+        description="Pinned native Whisper pipeline; preserve its observation before correction.",
+        hypotheses=1,
+        model_revision=FASTER_WHISPER_MODEL_REVISIONS["large-v3-turbo"],
+        confidence_calibration=None,
+        confidence_note="Native segment scores are not calibrated whole-window acceptance.",
+    ),
     "cpu-ja-v1": RuntimeProfile(
         name="cpu-ja-v1",
         description=(
@@ -141,6 +161,40 @@ PROFILES: dict[str, RuntimeProfile] = {
         patience=1.4,
         effort="cpu-quality",
         model_revision=FASTER_WHISPER_MODEL_REVISIONS["large-v3-turbo"],
+    ),
+    "reazon-ja-v1": RuntimeProfile(
+        name="reazon-ja-v1",
+        description=(
+            "Japanese, local ReazonSpeech k2 INT8 adapter with a native top-one decode; "
+            "requires an explicitly supplied, SHA-256-verified local model artifact."
+        ),
+        model="reazon-research/reazonspeech-k2-v2",
+        device="cpu",
+        compute_type="int8",
+        beam_size=4,
+        hypotheses=1,
+        effort="ultra-light",
+        confidence_calibration=None,
+        confidence_note=(
+            "Reazon native top-one output has no calibrated confidence in this profile."
+        ),
+    ),
+    "reazon-ja-research-v1": RuntimeProfile(
+        name="reazon-ja-research-v1",
+        description=(
+            "Japanese, local ReazonSpeech k2 INT8 adapter with bounded research evidence "
+            "budget for an explicitly supplied independent second-ear adapter."
+        ),
+        model="reazon-research/reazonspeech-k2-v2",
+        device="cpu",
+        compute_type="int8",
+        beam_size=4,
+        hypotheses=1,
+        effort="research",
+        confidence_calibration=None,
+        confidence_note=(
+            "Reazon native top-one output has no calibrated confidence in this profile."
+        ),
     ),
     "gpu-ja-v1": RuntimeProfile(
         name="gpu-ja-v1",
@@ -403,6 +457,16 @@ class TranscriptResult:
                 raise ValueError("facade segment does not match long-form evidence")
         if self.utterances != utterances_from_segments(self.longform, self.segments):
             raise ValueError("facade utterances do not match observed evidence")
+        if "phoneEvidence" in self.diagnostics:
+            phone = self.diagnostics["phoneEvidence"]
+            payload = {key: value for key, value in phone.items() if key != "digest"}
+            if (
+                phone.get("digest") != sha256_json(payload)
+                or phone.get("source_audio_sha256") != self.source_audio_sha256
+                or phone.get("first_pass_evidence_sha256") != self.evidence_sha256
+                or phone.get("total_windows") != len(self.longform.segments)
+            ):
+                raise ValueError("auxiliary phone evidence is not bound to the first pass")
 
     def as_dict(self) -> dict[str, Any]:
         self.verify()
@@ -450,7 +514,30 @@ class TranscriptResult:
 def build_adapter(profile: RuntimeProfile) -> ASRAdapter:
     """Construct the measured primary decoder for a profile (requires the ``asr`` extra)."""
 
+    if profile.model == "local-qwen3-asr":
+        raise ValueError(
+            "Qwen requires an explicit Qwen3ASRAdapter with a verified local artifact; "
+            "pass adapter= or use --qwen-model-dir and --qwen-artifact-sha256"
+        )
+    if profile.model == "reazon-research/reazonspeech-k2-v2":
+        raise ValueError(
+            "Reazon requires an explicit ReazonSpeechK2Adapter with a verified local artifact; "
+            "pass adapter= or use semantic-asr run with --reazon-model-dir and "
+            "--reazon-artifact-sha256"
+        )
+
     from .advanced_adapters import LoopGuardConfig, PathPreservingFasterWhisperAdapter
+
+    if profile.name == "whisper-native-cpu-v1":
+        from .native_whisper_adapter import NativeWhisperAdapter
+
+        return NativeWhisperAdapter(
+            model=profile.model,
+            model_revision=profile.model_revision,
+            device=profile.device,
+            compute_type=profile.compute_type,
+            cpu_threads=2,
+        )
 
     return PathPreservingFasterWhisperAdapter(
         model=profile.model,
@@ -698,8 +785,10 @@ def transcribe(
     context_tags: Iterable[str] = (),
     on_progress: ProgressCallback | None = None,
     adapter: ASRAdapter | None = None,
+    second_ear: ASRAdapter | None = None,
     transcriber: SemanticASRTranscriber | None = None,
     duration_ms: int | None = None,
+    phone_observer: Any | None = None,
 ) -> TranscriptResult:
     """Transcribe one recording with a named runtime profile.
 
@@ -707,10 +796,15 @@ def transcribe(
     ``context_query`` match; no match is a recorded abstention and injects no catalog term.
     ``audio`` arrays must already be 16 kHz and may be mono, samples-first stereo, or
     channels-first stereo.
+    ``phone_observer`` optionally adds audio-only phone/mora diagnostics on up to
+    16 windows, with a 120-second between-call budget. It never changes first-pass
+    text or its evidence hash; failures are explicit uncovered windows.
     """
 
     if adapter is not None and transcriber is not None:
         raise ValueError("pass adapter or transcriber, not both")
+    if second_ear is not None and transcriber is not None:
+        raise ValueError("pass second_ear when constructing the transcriber, not with transcriber")
     resolved = runtime_profile(profile)
     manual_hotwords = tuple(
         dict.fromkeys(str(value).strip() for value in hotwords if str(value).strip())
@@ -739,13 +833,25 @@ def transcribe(
         )
 
     source, temporary = _materialise_audio(audio)
+    phone_evidence = None
     try:
         if transcriber is None:
             if on_progress:
                 on_progress(f"loading {resolved.model} ({resolved.device}/{resolved.compute_type})")
-            transcriber = load_transcriber(resolved, adapter=adapter)
+            transcriber = load_transcriber(resolved, adapter=adapter, second_ear=second_ear)
         else:
             _validate_warm_transcriber(resolved, transcriber)
+        base_adapter = transcriber.base_adapter
+        if effective_hotwords and getattr(base_adapter, "supports_hotwords", True) is False:
+            raise ValueError(
+                f"adapter {getattr(base_adapter, 'name', type(base_adapter).__name__)} "
+                "does not support hotwords; remove context/hotwords or use a compatible profile"
+            )
+        if initial_prompt and getattr(base_adapter, "supports_initial_prompt", True) is False:
+            raise ValueError(
+                f"adapter {getattr(base_adapter, 'name', type(base_adapter).__name__)} "
+                "does not support initial_prompt; remove it or use a compatible profile"
+            )
         if on_progress:
             on_progress("transcribing")
         longform = transcriber.transcribe(
@@ -756,12 +862,19 @@ def transcribe(
             hotwords=effective_hotwords,
             context=context_binding,
         )
+        if phone_observer is not None:
+            from .audio_phone_runtime import observe_transcript_phones
+
+            if on_progress:
+                on_progress("observing phones and morae from audio")
+            phone_evidence = observe_transcript_phones(phone_observer, source, longform)
     finally:
         if temporary is not None:
             with contextlib.suppress(OSError):
                 temporary.unlink()
 
     base = transcriber.base_adapter
+    active_second_ear = getattr(transcriber, "second_ear", None)
     confidence_eligible = _confidence_eligible(
         resolved,
         base,
@@ -815,6 +928,17 @@ def transcribe(
         "effectiveHotwordCount": len(effective_hotwords),
         "effectiveHotwordsSha256": _hotword_digest(effective_hotwords),
         "contextCatalog": context_info,
+        "secondEar": (
+            None
+            if active_second_ear is None
+            else {
+                "adapter": getattr(active_second_ear, "name", type(active_second_ear).__name__),
+                "model": getattr(active_second_ear, "model_name", None),
+                "modelRevision": getattr(active_second_ear, "model_revision", None),
+                "modelArtifactSha256": getattr(active_second_ear, "model_artifact_sha256", None),
+                "runtimeRevision": getattr(active_second_ear, "runtime_revision", None),
+            }
+        ),
     }
     if on_progress:
         on_progress("done")
@@ -829,7 +953,11 @@ def transcribe(
         segments=segments,
         evidence_sha256=longform.evidence_sha256,
         provenance=provenance,
-        diagnostics={**dict(longform.diagnostics), "contextCatalog": context_info},
+        diagnostics={
+            **dict(longform.diagnostics),
+            "contextCatalog": context_info,
+            **({"phoneEvidence": phone_evidence} if phone_evidence is not None else {}),
+        },
         longform=longform,
         utterances=utterances,
     )
@@ -839,6 +967,7 @@ def load_transcriber(
     profile: str | RuntimeProfile = "cpu-ja-v1",
     *,
     adapter: ASRAdapter | None = None,
+    second_ear: ASRAdapter | None = None,
 ) -> SemanticASRTranscriber:
     """Load and bind a warm model to one immutable runtime profile."""
 
@@ -848,6 +977,7 @@ def load_transcriber(
     relisten_hypotheses = max(8, resolved.hypotheses)
     transcriber = SemanticASRTranscriber(
         adapter or build_adapter(resolved),
+        second_ear=second_ear,
         window_ms=resolved.window_ms,
         overlap_ms=resolved.overlap_ms,
         beam_size=resolved.beam_size,

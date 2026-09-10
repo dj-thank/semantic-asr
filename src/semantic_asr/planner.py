@@ -184,6 +184,10 @@ def plan_evidence(
         "local-teacher",
         "lexicon-lookup",
     ),
+    force_second_ear: bool = False,
+    whole_window_start_ms: int | None = None,
+    whole_window_end_ms: int | None = None,
+    minimum_evidence_coverage: float = 0.55,
 ) -> EvidencePlan:
     budget = budget or EvidenceBudget()
     if not ranked:
@@ -191,6 +195,52 @@ def plan_evidence(
     if not ranked[0].gate.needs_relisten:
         return EvidencePlan((), (), budget.total_cost_ms, 0, 0.0, "observation-already-confident")
     if not lattice.contradiction_islands:
+        if (
+            force_second_ear
+            and "qwen-second-ear" in enabled
+            and whole_window_start_ms is not None
+            and whole_window_end_ms is not None
+            and ranked[0].gate.evidence_coverage < minimum_evidence_coverage
+        ):
+            duration = max(160, whole_window_end_ms - whole_window_start_ms)
+            action = EvidenceAction(
+                action_id="whole-window:qwen-second-ear",
+                kind="qwen-second-ear",
+                start_ms=whole_window_start_ms,
+                end_ms=whole_window_end_ms,
+                estimated_cost_ms=_cost("qwen-second-ear", duration),
+                expected_information_gain=0.75,
+                semantic_criticality=1.0 - ranked[0].gate.evidence_coverage,
+                utility=0.75 / max(1, _cost("qwen-second-ear", duration)),
+                reasons=("unscored-primary", "low-evidence-coverage", "whole-window-second-ear"),
+                affects_observed_decision=True,
+            )
+            if budget.max_actions < 1 or action.estimated_cost_ms > budget.total_cost_ms:
+                return EvidencePlan(
+                    selected=(),
+                    rejected=(action,),
+                    budget_ms=budget.total_cost_ms,
+                    used_ms=0,
+                    expected_information_gain=0.0,
+                    stopping_reason="budget-exhausted",
+                )
+            if action.utility < budget.minimum_utility:
+                return EvidencePlan(
+                    selected=(),
+                    rejected=(action,),
+                    budget_ms=budget.total_cost_ms,
+                    used_ms=0,
+                    expected_information_gain=0.0,
+                    stopping_reason="utility-frontier-reached",
+                )
+            return EvidencePlan(
+                selected=(action,),
+                rejected=(),
+                budget_ms=budget.total_cost_ms,
+                used_ms=action.estimated_cost_ms,
+                expected_information_gain=action.expected_information_gain,
+                stopping_reason="whole-window-unscored-primary",
+            )
         return EvidencePlan((), (), budget.total_cost_ms, 0, 0.0, "no-localized-contradiction")
     enabled_set = set(enabled)
     gate = ranked[0].gate
