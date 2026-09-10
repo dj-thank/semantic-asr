@@ -5,7 +5,7 @@ import argparse
 import json
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 from semantic_asr.experiment import DatasetManifest, SplitName, UtteranceRecord
 
