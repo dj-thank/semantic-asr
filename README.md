@@ -72,6 +72,7 @@ v0.2で追加した主な機構:
 - [`docs/RERANKER_TRAINING.md`](docs/RERANKER_TRAINING.md)
 - [`docs/KOEMO_INTEGRATION.md`](docs/KOEMO_INTEGRATION.md)
 - [`docs/BENCHMARK_PROTOCOL.md`](docs/BENCHMARK_PROTOCOL.md)
+- [`docs/DATA_LINEAGE_AND_RIGHTS.md`](docs/DATA_LINEAGE_AND_RIGHTS.md)
 - [`docs/DISCRETE_UNIT_EVIDENCE.md`](docs/DISCRETE_UNIT_EVIDENCE.md)
 
 ## 設計原則
@@ -516,7 +517,7 @@ semantic-asr rights data/rights_registry.example.json \
   jmdict-current derive_features
 ```
 
-`prepare_public_manifest.py` に `--rights-registry` を渡すと、`derive_features` と `redistribute_raw` の両方が `allow` であることを既存 registry に要求します。`review` は「たぶん使える」ではなく処理停止です。生成 WAV、参照文、絶対パスを含む成果物は公開せず、checkout 外の local-research ディレクトリでのみ扱ってください。`.gitignore` にも代表的な誤出力先を記載していますが、ignore は権利確認や公開許可の代わりではありません。
+`prepare_public_manifest.py` に `--rights-registry` を渡すと、`derive_features` と `redistribute_audio` の両方が `allow` であることを既存 registry に要求します。`review` は「たぶん使える」ではなく処理停止です。生成 WAV、参照文、絶対パスを含む成果物は公開せず、checkout 外の local-research ディレクトリでのみ扱ってください。`.gitignore` にも代表的な誤出力先を記載していますが、ignore は権利確認や公開許可の代わりではありません。
 
 ## Koemo
 

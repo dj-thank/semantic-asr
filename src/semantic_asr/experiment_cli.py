@@ -48,7 +48,7 @@ def command_partition_manifest(args: argparse.Namespace) -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     counts: dict[str, int] = {}
-    for split in ("train", "calibration", "test"):
+    for split in ("train", "dev", "calibration", "test", "regression-exposed"):
         selected = [record for record in records if record.split == split]
         target = output_dir / f"{split}.jsonl"
         rows = []

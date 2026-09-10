@@ -31,6 +31,11 @@ def _candidate_from_row(row: Mapping[str, Any]) -> CandidateEvidence:
 def fusion_example_from_row(
     row: Mapping[str, Any], *, line_number: int = 0
 ) -> FusionTrainingExample:
+    raw_split = row.get("split")
+    if not isinstance(raw_split, str) or raw_split != "train":
+        raise ValueError(
+            f"fusion training row {line_number} belongs to forbidden split {raw_split!r}"
+        )
     raw_candidates = row.get("candidates")
     if not isinstance(raw_candidates, list):
         raise ValueError(f"fusion row {line_number} has no candidates array")
@@ -58,7 +63,7 @@ def fusion_example_from_row(
         group_id=str(row.get("groupId") or row.get("group_id") or ""),
         candidates=candidates,
         target_distribution=target,
-        split=str(row.get("split") or "train"),
+        split=raw_split,
     )
 
 

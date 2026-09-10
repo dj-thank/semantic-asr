@@ -310,6 +310,11 @@ def _candidate_from_row(row: Mapping[str, Any]) -> CandidateEvidence:
 
 
 def example_from_row(row: Mapping[str, Any], *, line_number: int = 0) -> RankerExample:
+    raw_split = row.get("split")
+    if not isinstance(raw_split, str) or raw_split != "train":
+        raise ValueError(
+            f"ranker training row {line_number} belongs to forbidden split {raw_split!r}"
+        )
     raw_candidates = row.get("candidates")
     if not isinstance(raw_candidates, list):
         raise ValueError(f"ranker row {line_number} has no candidates array")
@@ -349,6 +354,11 @@ def load_jsonl_examples(path: str | Path) -> list[RankerExample]:
         payload = json.loads(line)
         if not isinstance(payload, Mapping):
             raise ValueError(f"ranker row {line_number} must be an object")
+        raw_split = payload.get("split")
+        if not isinstance(raw_split, str) or raw_split != "train":
+            raise ValueError(
+                f"ranker training row {line_number} belongs to forbidden split {raw_split!r}"
+            )
         candidates = payload.get("candidates")
         if isinstance(candidates, list) and len(candidates) < 2:
             skipped += 1

@@ -57,42 +57,33 @@ def test_ranking_example_matches_schema() -> None:
 
 def test_experiment_manifest_schema() -> None:
     schema = _schema("v02-experiment-manifest.schema.json")
-    jsonschema.validate(
-        {
-            "datasetName": "fixture",
-            "datasetRevision": "1",
-            "rightsRegistryDigest": None,
-            "records": [
-                {
-                    "sampleId": "sample-1",
-                    "split": "train",
-                    "audioSha256": "a" * 64,
-                    "reference": "今日は東京に行きます",
-                    "speakerId": "speaker-1",
-                    "sourceRecordingId": "recording-1",
-                    "durationSeconds": 2.5,
-                    "domain": "meeting",
-                    "metadata": {},
-                }
-            ],
-        },
-        schema,
+    payload = json.loads(
+        (ROOT / "examples" / "v02-experiment-manifest.json").read_text(encoding="utf-8")
+    )
+    jsonschema.validate(payload, schema)
+
+
+def _experiment_manifest_example() -> dict[str, object]:
+    return json.loads(
+        (ROOT / "examples" / "v02-experiment-manifest.json").read_text(encoding="utf-8")
     )
 
 
 def test_experiment_manifest_schema_rejects_noncanonical_audio_digest() -> None:
     schema = _schema("v02-experiment-manifest.schema.json")
-    payload = {
-        "datasetName": "fixture",
-        "datasetRevision": "1",
-        "records": [
-            {
-                "sampleId": "sample-1",
-                "split": "train",
-                "audioSha256": "AB" * 32,
-                "reference": "今日は東京に行きます",
-            }
-        ],
-    }
+    payload = _experiment_manifest_example()
+    records = payload["records"]
+    assert isinstance(records, list) and isinstance(records[0], dict)
+    records[0]["audioSha256"] = "AB" * 32
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(payload, schema)
+
+
+def test_experiment_manifest_schema_rejects_unknown_split_role() -> None:
+    schema = _schema("v02-experiment-manifest.schema.json")
+    payload = _experiment_manifest_example()
+    records = payload["records"]
+    assert isinstance(records, list) and isinstance(records[0], dict)
+    records[0]["split"] = "validation"
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(payload, schema)

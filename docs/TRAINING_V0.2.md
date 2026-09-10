@@ -2,18 +2,17 @@
 
 ## 1. Separation of data roles
 
-Use four physically and logically distinct data roles:
+Use five physically and logically distinct data roles:
 
 ```text
-training       fit rerankers, verifiers and auxiliary heads
-validation     early stopping and model selection inside a training family
-calibration    fit probabilities, risk thresholds and adaptive policies
-test           locked final evaluation only
+train                 fit rerankers, verifiers and auxiliary heads
+dev                   early stopping and model selection inside a training family
+calibration           fit probabilities, risk thresholds and adaptive policies
+test                  untouched final publication evaluation only
+regression-exposed    already viewed or published examples; regression only
 ```
 
-The public `DatasetManifest` currently expresses `train`, `calibration` and `test`. When a neural training run needs a validation subset, derive it from `train` using a committed group split manifest; never use calibration or test examples for early stopping.
-
-Speakers, source recordings, exact audio hashes and near-duplicate utterances must not cross roles. Run the manifest leakage gate before generating model inputs.
+The public `DatasetManifest` expresses these five exact values. A missing split is not inferred as `train`, and `test` or `regression-exposed` references cannot enter training or model-context loaders. Speakers, sessions, source recordings, raw/PCM hashes, parent lineage, derivation groups and near-duplicate utterances must not cross roles. Run the lineage gate before generating model inputs. See [`DATA_LINEAGE_AND_RIGHTS.md`](DATA_LINEAGE_AND_RIGHTS.md).
 
 ## 2. Candidate generation dataset
 

@@ -88,8 +88,10 @@ def test_rights_cli_fails_closed() -> None:
             encoding="utf-8",
         )
         assert main(["rights", str(registry), "fixture", "train"]) == 0
+        with pytest.raises(PermissionError, match="review"):
+            main(["rights", str(registry), "fixture", "evaluate"])
         with pytest.raises(PermissionError):
-            main(["rights", str(registry), "fixture", "redistribute_raw"])
+            main(["rights", str(registry), "fixture", "redistribute_audio"])
 
 
 def test_transcribe_cli_carries_hub_and_local_artifact_provenance_options() -> None:
