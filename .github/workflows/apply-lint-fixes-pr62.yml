@@ -23,6 +23,12 @@ jobs:
         with:
           ref: codex/dataset-lineage-rights-v2
           fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install validation environment
+        run: python -m pip install -e '.[dev]'
       - name: Apply exact Ruff lint fixes
         shell: bash
         run: |
@@ -32,7 +38,7 @@ jobs:
           final_tree="96ab3581b818a2e58a1aa7201380ebb2315a7d48"
           helper=".github/workflows/apply-lint-fixes-pr62.yml"
 
-          test "$(git rev-parse HEAD^)" = "$base"
+          test "$(git merge-base HEAD "$base")" = "$base"
           test "$(git rev-parse "$base^{tree}")" = "$base_tree"
           test "$(git diff --name-only "$base"..HEAD)" = "$helper"
 
