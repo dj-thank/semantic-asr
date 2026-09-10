@@ -12,7 +12,10 @@ import glob
 import hashlib
 import json
 import math
+import os
+import stat
 import sys
+import tempfile
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -23,12 +26,10 @@ from codex_pipeline import (
     BudgetExceeded,
     enforce_budget,
     environment,
-    files_under,
     positive,
     run_stage,
     sha256,
     source_identity,
-    write_json,
 )
 from run_real_audio_pipeline import (
     _read_candidate_files,
@@ -72,23 +73,120 @@ def digest(value: Any) -> str:
     ).hexdigest()
 
 
+def strict_json(text: str) -> Any:
+    """Reject ambiguous objects and non-finite numbers, including float overflow."""
+
+    def object_pairs(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate JSON object key")
+            value[key] = item
+        return value
+
+    def finite_float(token):
+        value = float(token)
+        if not math.isfinite(value):
+            raise ValueError("non-finite JSON number")
+        return value
+
+    def reject_constant(token):
+        raise ValueError("nonstandard JSON constant: " + token)
+
+    return json.loads(
+        text,
+        object_pairs_hook=object_pairs,
+        parse_float=finite_float,
+        parse_constant=reject_constant,
+    )
+
+
 def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return strict_json(path.read_text(encoding="utf-8"))
 
 
 def rows(path: Path) -> list[dict[str, Any]]:
     return [
-        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+        strict_json(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
     ]
 
 
-def write_rows(path: Path, values: list[dict[str, Any]]) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        "".join(json.dumps(v, ensure_ascii=False, allow_nan=False) + "\n" for v in values),
-        encoding="utf-8",
+def write_text_atomic(path: Path, text: str) -> None:
+    """Use an exclusive temporary file; never follow a predictable .tmp alias."""
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix="." + path.name + "-",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def write_json(path: Path, payload: Any) -> None:
+    write_text_atomic(
+        path, json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
     )
-    temporary.replace(path)
+
+
+def write_rows(path: Path, values: list[dict[str, Any]]) -> None:
+    write_text_atomic(
+        path, "".join(json.dumps(v, ensure_ascii=False, allow_nan=False) + "\n" for v in values)
+    )
+
+
+def output_files(output: Path) -> list[Path]:
+    """Inspect without following aliases or opening special files.
+
+    This guards a private run directory, not an OS sandbox against concurrent
+    hostile mutation. Stage workers must still be trusted and bounded.
+    """
+
+    def onerror(error):
+        raise error
+
+    result = []
+    for root, directories, filenames in os.walk(output, followlinks=False, onerror=onerror):
+        for name in sorted(directories + filenames):
+            path = Path(root) / name
+            info = path.lstat()
+            reparse = getattr(info, "st_file_attributes", 0) & getattr(
+                stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0
+            )
+            if stat.S_ISLNK(info.st_mode) or reparse:
+                raise ValueError("output alias is forbidden: " + str(path.relative_to(output)))
+            if stat.S_ISDIR(info.st_mode):
+                continue
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError(
+                    "output must be a regular file with a single link: "
+                    + str(path.relative_to(output))
+                )
+            result.append(path)
+    return sorted(result)
+
+
+def preserve_abandoned_outputs(output: Path, stage: str, attempt: int) -> None:
+    """Quarantine previous partial outputs; a successful retry must create its own."""
+    names = [name for name in OUTPUTS[stage] if (output / name).exists()]
+    if not names:
+        return
+    archive = output / "attempt-artifacts" / f"before-{attempt:03d}-{stage}"
+    archive.mkdir(parents=True, exist_ok=False)
+    for name in names:
+        (output / name).rename(archive / name)
 
 
 def select_candidates(candidates, ranker, calibration) -> dict[str, Any]:
@@ -153,14 +251,28 @@ def select_candidates(candidates, ranker, calibration) -> dict[str, Any]:
 def verify_freeze(output: Path) -> dict[str, Any]:
     config = read_json(output / "config.json")
     frozen = read_json(output / "freeze.json")
+    if not isinstance(frozen, dict) or frozen.get("schema") != "research-freeze-v1":
+        raise ValueError("unsupported freeze receipt schema")
     if frozen.get("config_digest") != digest(config):
         raise ValueError("freeze configuration mismatch")
     required = ("ranker.json", "calibration.json", *OUTPUTS["provision"])
-    if set(frozen.get("artifacts", {})) != set(required):
+    if not isinstance(frozen.get("artifacts"), dict) or set(frozen["artifacts"]) != set(required):
         raise ValueError("freeze artifact set mismatch")
     for name in required:
         if sha256(output / name) != frozen["artifacts"][name]:
             raise ValueError("frozen artifact changed: " + name)
+    inference = rows(output / "test-inference.jsonl")
+    if not inference or any(
+        not isinstance(row, dict)
+        or set(row) != {"sampleId", "candidates"}
+        or not isinstance(row["sampleId"], str)
+        or not row["sampleId"].strip()
+        for row in inference
+    ):
+        raise ValueError("invalid frozen inference cohort")
+    expected = [row["sampleId"] for row in inference]
+    if len(set(expected)) != len(expected) or frozen.get("expected_sample_ids") != expected:
+        raise ValueError("freeze cohort or order mismatch")
     return frozen
 
 
@@ -200,7 +312,8 @@ def provision(output: Path, config: dict[str, Any]) -> None:
     write_rows(output / "test-reference.jsonl", references)
 
 
-def select(output: Path) -> None:
+def selection_rows(output: Path) -> list[dict[str, Any]]:
+    """Replay the frozen candidate-only policy without parsing evaluation text."""
     from semantic_asr.contracts import CandidateEvidence
     from semantic_asr.experiment_cli import _calibration, _linear_ranker
 
@@ -217,7 +330,11 @@ def select(output: Path) -> None:
             tuple(CandidateEvidence.from_dict(c) for c in row["candidates"]), ranker, calibration
         )
         decisions.append({"sampleId": row["sampleId"], **result})
-    write_rows(output / "decisions.jsonl", decisions)
+    return decisions
+
+
+def select(output: Path) -> None:
+    write_rows(output / "decisions.jsonl", selection_rows(output))
 
 
 def evaluate(output: Path, config: dict[str, Any]) -> None:
@@ -231,12 +348,26 @@ def evaluate(output: Path, config: dict[str, Any]) -> None:
     from semantic_asr.experiment import PairedErrorCounts, paired_error_rate_comparison
 
     frozen = verify_freeze(output)
+    if frozen["config_digest"] != digest(config):
+        raise ValueError("evaluation configuration differs from frozen policy")
     decisions = rows(output / "decisions.jsonl")
-    references = rows(output / "test-reference.jsonl")
     expected = frozen["expected_sample_ids"]
-    if [r["sampleId"] for r in decisions] != expected or [
-        r["sampleId"] for r in references
+    if any(not isinstance(row, dict) for row in decisions) or [
+        row.get("sampleId") for row in decisions
     ] != expected:
+        raise ValueError("evaluation cohort or order changed")
+    # Membership alone is insufficient: a different valid candidate could replace
+    # the policy's selection. Replay the existing selector before parsing
+    # evaluation references.
+    replayed = selection_rows(output)
+    if any(
+        not isinstance(row, dict)
+        or type(row.get("requires_additional_evidence")) is not bool
+        for row in decisions
+    ) or decisions != replayed:
+        raise ValueError("saved decisions do not match the frozen candidate-only policy")
+    references = rows(output / "test-reference.jsonl")
+    if [r["sampleId"] for r in references] != expected:
         raise ValueError("evaluation cohort or order changed")
     counts = []
     reports = {}
@@ -431,6 +562,96 @@ def commands(stage: str, output: Path, config: dict[str, Any]) -> list[str]:
     ]
 
 
+def validate_resume_receipt(receipt: Any, config: dict[str, Any]) -> None:
+    """Reject malformed accounting before any resume arithmetic or receipt write.
+
+    This validates the existing local journal, not an authenticated external ledger.
+    Trial charges may exceed recorded fit attempts after a crash between those writes;
+    accepting that conservative overcount must never refund an already charged trial.
+    """
+    if not isinstance(receipt, dict) or receipt.get("schema") != "research-cycle-v1":
+        raise ValueError("unsupported resume receipt schema")
+    if receipt.get("status") not in ("running", "completed", "failed", "partial"):
+        raise ValueError("invalid resume receipt status")
+    if receipt.get("config_digest") != digest(config):
+        raise ValueError("resume receipt configuration mismatch")
+    spent = receipt.get("spent_seconds")
+    if type(spent) not in (int, float) or not 0 <= spent <= sys.float_info.max:
+        raise ValueError("resume spent_seconds must be finite and nonnegative")
+    trials = receipt.get("trials_started")
+    if type(trials) is not int or not 0 <= trials <= config["max_trials"]:
+        raise ValueError("resume trials_started must be an integer within the trial budget")
+    completed = receipt.get("completed")
+    if not isinstance(completed, list) or completed != list(STAGES[: len(completed)]):
+        raise ValueError("invalid completed stage prefix")
+    if receipt["status"] == "completed" and completed != list(STAGES):
+        raise ValueError("completed receipt has an unfinished stage prefix")
+    if not isinstance(receipt.get("artifacts"), dict) or not isinstance(
+        receipt.get("stages"), list
+    ):
+        raise ValueError("invalid resume artifact or stage ledger")
+    attempts = receipt.get("attempts")
+    if not isinstance(attempts, list):
+        raise ValueError("invalid resume attempt ledger")
+    finished = []
+    fit_attempts = 0
+    for index, attempt in enumerate(attempts):
+        if (
+            not isinstance(attempt, dict)
+            or len(finished) == len(STAGES)
+            or attempt.get("stage") != STAGES[len(finished)]
+            or attempt.get("status")
+            not in ("running", "completed", "failed", "partial", "interrupted")
+        ):
+            raise ValueError("invalid resume attempt sequence")
+        if attempt["status"] == "running" and (
+            index != len(attempts) - 1 or receipt["status"] != "running"
+        ):
+            raise ValueError("running attempt is not the active terminal attempt")
+        fit_attempts += attempt["stage"] == "fit-train"
+        if attempt["status"] == "completed":
+            finished.append(attempt["stage"])
+    if finished != completed or fit_attempts > trials:
+        raise ValueError("resume attempts disagree with completed stages or charged trials")
+    steps = {}
+    previous_index = -1
+    names = {f"{i + 1:03d}-{a['stage']}": i for i, a in enumerate(attempts)}
+    for step in receipt["stages"]:
+        if not isinstance(step, dict) or not isinstance(step.get("name"), str):
+            raise ValueError("invalid execution stage record")
+        index = names.get(step["name"], -1)
+        if index <= previous_index:
+            raise ValueError("execution stages are duplicate, unknown or out of order")
+        previous_index = index
+        status = step.get("status")
+        if status not in ("running", "passed", "not-completed"):
+            raise ValueError("invalid execution stage status")
+        if status == "running" and (
+            index != len(attempts) - 1 or attempts[index]["status"] != "running"
+        ):
+            raise ValueError("execution stage is not the active attempt")
+        seconds = step.get("seconds")
+        if (status != "running" or seconds is not None) and (
+            type(seconds) not in (int, float) or not 0 <= seconds <= sys.float_info.max
+        ):
+            raise ValueError("invalid execution stage timing")
+        code = step.get("returncode")
+        if (code is not None and type(code) is not int) or (status == "passed" and code != 0):
+            raise ValueError("invalid execution return code")
+        steps[index] = step
+    for index, attempt in enumerate(attempts):
+        if attempt["status"] == "completed" and steps.get(index, {}).get("status") != "passed":
+            raise ValueError("completed attempt has no successful execution record")
+    if receipt["status"] == "running":
+        active_started = receipt.get("active_started_at")
+        if (
+            type(active_started) not in (int, float)
+            or not 0 < active_started < math.inf
+            or active_started > time.time()
+        ):
+            raise ValueError("unfinalized run has no valid timing evidence")
+
+
 def execute(args: argparse.Namespace) -> int:
     output = ensure_safe_output_dir(args.output_dir)
     files = sorted(glob.glob(args.candidates))
@@ -479,14 +700,12 @@ def execute(args: argparse.Namespace) -> int:
         "promotion": "not-evaluated",
     }
     if args.resume:
+        output_files(output)  # Reject aliases before reading or writing resume evidence.
         existing = read_json(output / "config.json")
         if existing != config:
             raise ValueError("resume input, configuration, code or environment mismatch")
         receipt = read_json(output / "cycle.json")
-        if receipt["config_digest"] != digest(config):
-            raise ValueError("resume receipt configuration mismatch")
-        if receipt["completed"] != list(STAGES[: len(receipt["completed"])]):
-            raise ValueError("invalid completed stage prefix")
+        validate_resume_receipt(receipt, config)
         for name, expected in receipt["artifacts"].items():
             if name not in {n for s in receipt["completed"] for n in OUTPUTS[s]}:
                 raise ValueError("unexpected receipt artifact")
@@ -498,12 +717,19 @@ def execute(args: argparse.Namespace) -> int:
         if receipt["status"] == "running":
             # The OS writer lock has been acquired. Conservatively charge elapsed
             # time since the interrupted attempt, including any offline interval.
-            active_started = receipt.get("active_started_at")
-            if not isinstance(active_started, (int, float)) or active_started > time.time():
-                raise ValueError("unfinalized run has no valid timing evidence")
-            receipt["spent_seconds"] += time.time() - active_started
+            active_started = receipt["active_started_at"]
+            recovered_seconds = time.time() - active_started
+            receipt["spent_seconds"] += recovered_seconds
             if receipt["attempts"] and receipt["attempts"][-1]["status"] == "running":
                 receipt["attempts"][-1]["status"] = "interrupted"
+                if receipt["stages"] and receipt["stages"][-1]["status"] == "running":
+                    # Keep the interrupted record, not a permanently active step.
+                    # This bound includes the offline interval, not measured CPU time.
+                    receipt["stages"][-1].update(
+                        status="not-completed",
+                        seconds=recovered_seconds,
+                        timing_basis="conservative-recovery-bound",
+                    )
         if receipt["completed"] == list(STAGES) and receipt["status"] == "completed":
             enforce_budget(
                 output,
@@ -517,13 +743,15 @@ def execute(args: argparse.Namespace) -> int:
         output.mkdir(parents=True)
         write_json(output / "config.json", config)
     started = time.monotonic()
-    deadline = started + args.max_wall_seconds - receipt["spent_seconds"]
+    previously_spent = receipt["spent_seconds"]
+    deadline = started + args.max_wall_seconds - previously_spent
     receipt["status"] = "running"
     receipt["active_started_at"] = time.time()
     write_json(output / "cycle.json", receipt)
     code = 1
     try:
         for stage in STAGES[len(receipt["completed"]) :]:
+            output_files(output)
             enforce_budget(output, deadline, args.max_storage_bytes)
             if read_json(output / "config.json") != config:
                 raise ValueError("on-disk configuration changed during cycle")
@@ -545,6 +773,7 @@ def execute(args: argparse.Namespace) -> int:
             attempt = {"stage": stage, "status": "running"}
             receipt["attempts"].append(attempt)
             write_json(output / "cycle.json", receipt)
+            preserve_abandoned_outputs(output, stage, len(receipt["attempts"]))
             # Each attempt owns a separate log; interrupted/failed evidence stays intact.
             run_stage(
                 f"{len(receipt['attempts']):03d}-{stage}",
@@ -556,11 +785,23 @@ def execute(args: argparse.Namespace) -> int:
             )
             if read_json(output / "config.json") != config:
                 raise ValueError("on-disk configuration changed during stage")
+            output_files(output)
+            # A worker must not mutate evidence committed by an earlier stage.
+            # Check before accepting this stage, including the final report worker.
+            for name, expected in receipt["artifacts"].items():
+                if sha256(output / name) != expected:
+                    raise ValueError("completed artifact changed during stage: " + name)
+            pending_artifacts = {}
             for name in OUTPUTS[stage]:
                 path = output / name
                 if not path.is_file() or not path.stat().st_size:
                     raise ValueError("stage missing required output: " + name)
-                receipt["artifacts"][name] = sha256(path)
+                values = rows(path) if path.suffix == ".jsonl" else [read_json(path)]
+                if not values or not all(isinstance(value, dict) for value in values):
+                    raise ValueError("stage output must contain JSON objects: " + name)
+                pending_artifacts[name] = sha256(path)
+            # Commit the entire output set only after every output has passed.
+            receipt["artifacts"].update(pending_artifacts)
             attempt["status"] = "completed"
             receipt["completed"].append(stage)
             receipt["status"] = "running"
@@ -581,15 +822,38 @@ def execute(args: argparse.Namespace) -> int:
     except Exception as error:
         receipt.update(status="failed", reason=type(error).__name__ + ": " + str(error))
     finally:
-        receipt["spent_seconds"] += time.monotonic() - started
         if receipt["attempts"] and receipt["attempts"][-1]["status"] == "running":
             receipt["attempts"][-1]["status"] = receipt["status"]
-        receipt["local_artifacts"] = {
-            str(p.relative_to(output)): sha256(p)
-            for p in files_under(output)
-            if p.name not in {"cycle.json", "receipt.json"}
-        }
+        try:
+            receipt["local_artifacts"] = {
+                str(p.relative_to(output)): sha256(p)
+                for p in output_files(output)
+                if p.name not in {"cycle.json", "receipt.json"}
+            }
+        except (OSError, ValueError) as error:
+            # An inventory failure must not discard the original terminal failure.
+            receipt["artifact_inventory_error"] = type(error).__name__ + ": " + str(error)
+            receipt.setdefault("reason", "artifact inventory could not be verified")
+            receipt["status"] = "failed"
+            code = 1
+        # Hashing and writing terminal evidence are work too. Never report a
+        # completed cycle whose final inventory has exceeded the declared budget.
+        if code == 0:
+            try:
+                enforce_budget(output, deadline, args.max_storage_bytes)
+            except BudgetExceeded as error:
+                receipt.update(status="partial", reason=str(error))
+                code = 3
+        receipt["spent_seconds"] = previously_spent + time.monotonic() - started
         write_json(output / "cycle.json", receipt)
+        if code == 0:
+            try:
+                enforce_budget(output, deadline, args.max_storage_bytes)
+            except BudgetExceeded as error:
+                receipt.update(status="partial", reason=str(error))
+                receipt["spent_seconds"] = previously_spent + time.monotonic() - started
+                write_json(output / "cycle.json", receipt)
+                code = 3
     print(json.dumps({"status": receipt["status"], "completed": receipt["completed"]}))
     return code
 
