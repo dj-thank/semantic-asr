@@ -8,11 +8,19 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from numbers import Real
 from statistics import fmean
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from .audio import require_integer
 
 SplitName = Literal["train", "calibration", "test"]
+_SPLIT_NAMES = frozenset(("train", "calibration", "test"))
+_LOWERCASE_HEX = frozenset("0123456789abcdef")
+
+
+def _require_split(value: Any, *, name: str = "split") -> SplitName:
+    if not isinstance(value, str) or value not in _SPLIT_NAMES:
+        raise ValueError(f"{name} must be exactly one of: train, calibration, test")
+    return cast(SplitName, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,10 +38,11 @@ class UtteranceRecord:
     def __post_init__(self) -> None:
         if not self.sample_id or not self.audio_sha256 or not self.reference:
             raise ValueError("sample_id, audio_sha256 and reference are required")
+        _require_split(self.split)
         if len(self.audio_sha256) != 64 or any(
-            character not in "0123456789abcdefABCDEF" for character in self.audio_sha256
+            character not in _LOWERCASE_HEX for character in self.audio_sha256
         ):
-            raise ValueError("audio_sha256 must be a hexadecimal SHA-256 digest")
+            raise ValueError("audio_sha256 must be a lowercase hexadecimal SHA-256 digest")
         if self.duration_seconds is not None and (
             not math.isfinite(self.duration_seconds) or self.duration_seconds <= 0
         ):
@@ -86,7 +95,8 @@ class DatasetManifest:
         ).hexdigest()
 
     def split(self, name: SplitName) -> tuple[UtteranceRecord, ...]:
-        return tuple(record for record in self.records if record.split == name)
+        canonical = _require_split(name, name="requested split")
+        return tuple(record for record in self.records if record.split == canonical)
 
     def leakage_findings(
         self, *, reference_near_duplicate: bool = True
@@ -110,7 +120,10 @@ class DatasetManifest:
                         )
                     )
 
-        collect("audio-sha256", ((record.audio_sha256, record) for record in self.records))
+        collect(
+            "audio-sha256",
+            ((record.audio_sha256.lower(), record) for record in self.records),
+        )
         collect("speaker-id", ((record.speaker_id, record) for record in self.records))
         collect(
             "source-recording-id",
