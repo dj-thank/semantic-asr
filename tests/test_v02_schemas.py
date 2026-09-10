@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import jsonschema
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS = ROOT / "schemas"
@@ -77,3 +78,21 @@ def test_experiment_manifest_schema() -> None:
         },
         schema,
     )
+
+
+def test_experiment_manifest_schema_rejects_noncanonical_audio_digest() -> None:
+    schema = _schema("v02-experiment-manifest.schema.json")
+    payload = {
+        "datasetName": "fixture",
+        "datasetRevision": "1",
+        "records": [
+            {
+                "sampleId": "sample-1",
+                "split": "train",
+                "audioSha256": "AB" * 32,
+                "reference": "今日は東京に行きます",
+            }
+        ],
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(payload, schema)

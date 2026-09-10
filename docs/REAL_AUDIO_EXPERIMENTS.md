@@ -28,6 +28,11 @@ by default. Do not commit local audio paths or raw audio.
 Speakers/groups, source recordings, and near-duplicate clusters must not cross `train`,
 `calibration`, and `test`.
 
+Manifest identity fields are canonical and fail closed:
+
+- `split` must be exactly `train`, `calibration`, or `test`; whitespace and unknown roles are rejected rather than silently omitted.
+- `audioSha256` must be exactly 64 lowercase hexadecimal characters. Uppercase legacy values are rejected, not silently rewritten. Normalize the source manifest explicitly, assign a new `datasetRevision`, and retain the old-to-new manifest digest mapping before resuming an experiment. Never reuse an old manifest digest for normalized payload bytes.
+
 ## 2. Generate path-preserving N-best evidence
 
 ```bash
