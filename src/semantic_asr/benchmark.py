@@ -27,7 +27,7 @@ from .evaluation import (
 from .experiment import _finite_metric
 from .mbr import critical_units
 
-SplitName = Literal["train", "calibration", "test"]
+SplitName = Literal["train", "dev", "calibration", "test", "regression-exposed"]
 MetricValue = float | None
 
 
@@ -46,7 +46,7 @@ class BenchmarkUtterance:
     def __post_init__(self) -> None:
         if not self.sample_id or not self.group_id or not self.source_id:
             raise ValueError("sample, group, and source IDs are required")
-        if self.split not in {"train", "calibration", "test"}:
+        if self.split not in {"train", "dev", "calibration", "test", "regression-exposed"}:
             raise ValueError("unknown benchmark split")
         if not self.reference:
             raise ValueError("benchmark reference must not be empty")

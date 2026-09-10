@@ -20,7 +20,7 @@ def record(
 
 @pytest.mark.parametrize(
     "invalid",
-    ("", "train ", " train", "TRAIN", "development", "regression-exposed", None),
+    ("", "train ", " train", "TRAIN", "development", "regression_exposed", None),
 )
 def test_record_rejects_unknown_or_noncanonical_split(invalid: object) -> None:
     with pytest.raises(ValueError, match="split must be exactly one of"):

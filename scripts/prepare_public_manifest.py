@@ -158,7 +158,7 @@ def validate_rights_for_export(
         # feature operation and a raw-data operation.  A registry review/deny
         # must never be overridden by the CLI's explicit ``allow``.
         registry.require(selected_asset_id, "derive_features")
-        registry.require(selected_asset_id, "redistribute_raw")
+        registry.require(selected_asset_id, "redistribute_audio")
     if decision != "allow":
         raise PermissionError(
             f"raw public-data export requires allow rights; dataset {dataset!r} is {decision!r}"

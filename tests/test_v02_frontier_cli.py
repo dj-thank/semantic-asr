@@ -73,6 +73,7 @@ def test_frontier_listwise_and_fusion_training_write_profiles() -> None:
             rows.append(
                 {
                     "exampleId": f"example-{index}",
+                    "split": "train",
                     "candidates": [
                         {
                             "candidateId": "wrong",

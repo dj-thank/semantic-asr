@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import random
+import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from numbers import Real
@@ -11,16 +12,81 @@ from statistics import fmean
 from typing import Any, Literal, cast
 
 from .audio import require_integer
+from .rights import Operation, RightsRegistry
 
-SplitName = Literal["train", "calibration", "test"]
-_SPLIT_NAMES = frozenset(("train", "calibration", "test"))
+DatasetSplitRole = Literal["train", "dev", "calibration", "test", "regression-exposed"]
+SplitName = DatasetSplitRole
+ModelVisibleSplit = Literal["train", "dev", "calibration"]
+ReferencePurpose = Literal["training", "context", "calibration"]
+_SPLIT_NAMES = (
+    "train",
+    "dev",
+    "calibration",
+    "test",
+    "regression-exposed",
+)
+_SPLIT_NAME_SET = frozenset(_SPLIT_NAMES)
 _LOWERCASE_HEX = frozenset("0123456789abcdef")
+_REFERENCE_PURPOSE_SPLITS: dict[ReferencePurpose, frozenset[SplitName]] = {
+    "training": frozenset(("train",)),
+    "context": frozenset(("train", "dev")),
+    "calibration": frozenset(("calibration",)),
+}
 
 
 def _require_split(value: Any, *, name: str = "split") -> SplitName:
-    if not isinstance(value, str) or value not in _SPLIT_NAMES:
-        raise ValueError(f"{name} must be exactly one of: train, calibration, test")
+    if not isinstance(value, str) or value not in _SPLIT_NAME_SET:
+        raise ValueError(f"{name} must be exactly one of: {', '.join(_SPLIT_NAMES)}")
     return cast(SplitName, value)
+
+
+def _require_sha256(value: Any, *, name: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in _LOWERCASE_HEX for character in value)
+    ):
+        raise ValueError(f"{name} must be a lowercase hexadecimal SHA-256 digest")
+    return value
+
+
+def _require_optional_identifier(value: Any, *, name: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError(f"{name} must be a non-empty canonical string when provided")
+
+
+def _canonical_string_tuple(
+    value: Any,
+    *,
+    name: str,
+    sha256: bool = False,
+) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise TypeError(f"{name} must be a sequence of strings")
+    rows = tuple(value)
+    for row in rows:
+        if sha256:
+            _require_sha256(row, name=f"{name} entry")
+        else:
+            _require_optional_identifier(row, name=f"{name} entry")
+    if len(set(rows)) != len(rows):
+        raise ValueError(f"{name} must not contain duplicates")
+    return rows
+
+
+def _normalized_reference_digest(value: str) -> str:
+    normalized = "".join(
+        character for character in unicodedata.normalize("NFKC", value) if not character.isspace()
+    )
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _identifier_digest(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,15 +100,45 @@ class UtteranceRecord:
     duration_seconds: float | None = None
     domain: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    pcm_sha256: str | None = None
+    session_id: str | None = None
+    reference_lineage_id: str | None = None
+    derivation_group_id: str | None = None
+    near_duplicate_id: str | None = None
+    rights_asset_id: str | None = None
+    source_dataset_revision: str | None = None
+    parent_sample_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.sample_id or not self.audio_sha256 or not self.reference:
+        if (
+            not isinstance(self.sample_id, str)
+            or not self.sample_id
+            or self.sample_id != self.sample_id.strip()
+            or not isinstance(self.reference, str)
+            or not self.reference
+        ):
             raise ValueError("sample_id, audio_sha256 and reference are required")
         _require_split(self.split)
-        if len(self.audio_sha256) != 64 or any(
-            character not in _LOWERCASE_HEX for character in self.audio_sha256
+        _require_sha256(self.audio_sha256, name="audio_sha256")
+        if self.pcm_sha256 is not None:
+            _require_sha256(self.pcm_sha256, name="pcm_sha256")
+        for name in (
+            "speaker_id",
+            "source_recording_id",
+            "session_id",
+            "reference_lineage_id",
+            "derivation_group_id",
+            "near_duplicate_id",
+            "rights_asset_id",
+            "source_dataset_revision",
         ):
-            raise ValueError("audio_sha256 must be a lowercase hexadecimal SHA-256 digest")
+            _require_optional_identifier(getattr(self, name), name=name)
+        parents = _canonical_string_tuple(self.parent_sample_ids, name="parent_sample_ids")
+        if self.sample_id in parents:
+            raise ValueError("parent_sample_ids cannot contain the sample itself")
+        object.__setattr__(self, "parent_sample_ids", parents)
+        if not isinstance(self.metadata, dict):
+            raise TypeError("metadata must be a dictionary")
         if self.duration_seconds is not None and (
             not math.isfinite(self.duration_seconds) or self.duration_seconds <= 0
         ):
@@ -50,7 +146,7 @@ class UtteranceRecord:
 
     @property
     def reference_digest(self) -> str:
-        return hashlib.sha256(self.reference.encode("utf-8")).hexdigest()
+        return _normalized_reference_digest(self.reference)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,12 +163,53 @@ class DatasetManifest:
     dataset_name: str
     dataset_revision: str
     rights_registry_digest: str | None = None
+    split_policy: str = "semantic-asr-five-role-v1"
+    split_seed: int = 0
+    excluded_sample_ids: tuple[str, ...] = ()
+    excluded_audio_sha256: tuple[str, ...] = ()
+    excluded_reference_sha256: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.records or not self.dataset_name or not self.dataset_revision:
+        if (
+            not self.records
+            or not isinstance(self.dataset_name, str)
+            or not self.dataset_name
+            or self.dataset_name != self.dataset_name.strip()
+            or not isinstance(self.dataset_revision, str)
+            or not self.dataset_revision
+            or self.dataset_revision != self.dataset_revision.strip()
+        ):
             raise ValueError("records, dataset_name and dataset_revision are required")
         if len({record.sample_id for record in self.records}) != len(self.records):
             raise ValueError("sample IDs must be globally unique")
+        if self.rights_registry_digest is not None:
+            _require_sha256(self.rights_registry_digest, name="rights_registry_digest")
+        _require_optional_identifier(self.split_policy, name="split_policy")
+        if isinstance(self.split_seed, bool) or not isinstance(self.split_seed, int):
+            raise TypeError("split_seed must be an integer")
+        object.__setattr__(
+            self,
+            "excluded_sample_ids",
+            _canonical_string_tuple(self.excluded_sample_ids, name="excluded_sample_ids"),
+        )
+        object.__setattr__(
+            self,
+            "excluded_audio_sha256",
+            _canonical_string_tuple(
+                self.excluded_audio_sha256,
+                name="excluded_audio_sha256",
+                sha256=True,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "excluded_reference_sha256",
+            _canonical_string_tuple(
+                self.excluded_reference_sha256,
+                name="excluded_reference_sha256",
+                sha256=True,
+            ),
+        )
 
     @property
     def digest(self) -> str:
@@ -80,6 +217,13 @@ class DatasetManifest:
             "datasetName": self.dataset_name,
             "datasetRevision": self.dataset_revision,
             "rightsRegistryDigest": self.rights_registry_digest,
+            "splitPolicy": self.split_policy,
+            "splitSeed": self.split_seed,
+            "exclusions": {
+                "sampleIds": sorted(self.excluded_sample_ids),
+                "audioSha256": sorted(self.excluded_audio_sha256),
+                "referenceSha256": sorted(self.excluded_reference_sha256),
+            },
             "records": [
                 asdict(record) for record in sorted(self.records, key=lambda row: row.sample_id)
             ],
@@ -97,6 +241,72 @@ class DatasetManifest:
     def split(self, name: SplitName) -> tuple[UtteranceRecord, ...]:
         canonical = _require_split(name, name="requested split")
         return tuple(record for record in self.records if record.split == canonical)
+
+    def model_visible_records(
+        self,
+        splits: Sequence[ModelVisibleSplit],
+        *,
+        purpose: ReferencePurpose,
+    ) -> tuple[UtteranceRecord, ...]:
+        if isinstance(splits, (str, bytes)):
+            raise TypeError("model-visible splits must be a sequence")
+        canonical = tuple(_require_split(value, name="model-visible split") for value in splits)
+        if not canonical or len(set(canonical)) != len(canonical):
+            raise ValueError("model-visible splits must be non-empty and unique")
+        allowed = _REFERENCE_PURPOSE_SPLITS.get(purpose)
+        if allowed is None:
+            raise ValueError(f"unknown reference purpose: {purpose!r}")
+        forbidden = tuple(value for value in canonical if value not in allowed)
+        if forbidden:
+            raise PermissionError(
+                f"reference purpose {purpose!r} forbids split(s): {', '.join(forbidden)}"
+            )
+        selected = tuple(record for record in self.records if record.split in canonical)
+        if not selected:
+            raise ValueError("requested model-visible cohort is empty")
+        return selected
+
+    def training_records(self) -> tuple[UtteranceRecord, ...]:
+        return self.model_visible_records(("train",), purpose="training")
+
+    def context_records(self) -> tuple[UtteranceRecord, ...]:
+        return self.model_visible_records(("train", "dev"), purpose="context")
+
+    def calibration_records(self) -> tuple[UtteranceRecord, ...]:
+        return self.model_visible_records(("calibration",), purpose="calibration")
+
+    def require_operation_rights(
+        self,
+        registry: RightsRegistry,
+        operation: Operation,
+        *,
+        splits: Sequence[SplitName] | None = None,
+    ) -> tuple[UtteranceRecord, ...]:
+        if self.rights_registry_digest is None:
+            raise ValueError("rights_registry_digest is required before checking an operation")
+        if registry.digest != self.rights_registry_digest:
+            raise ValueError("rights registry digest does not match the dataset manifest")
+        if splits is None:
+            selected = self.records
+        else:
+            if isinstance(splits, (str, bytes)):
+                raise TypeError("rights-check splits must be a sequence")
+            canonical = tuple(_require_split(value, name="rights-check split") for value in splits)
+            if not canonical or len(set(canonical)) != len(canonical):
+                raise ValueError("rights-check splits must be non-empty and unique")
+            selected = tuple(record for record in self.records if record.split in canonical)
+        if not selected:
+            raise ValueError("rights check selected no records")
+        asset_ids = set()
+        for record in selected:
+            if record.rights_asset_id is None:
+                raise PermissionError(
+                    f"unknown rights asset for sample {record.sample_id}; cannot {operation}"
+                )
+            asset_ids.add(record.rights_asset_id)
+        for asset_id in sorted(asset_ids):
+            registry.require(asset_id, operation)
+        return selected
 
     def leakage_findings(
         self, *, reference_near_duplicate: bool = True
@@ -120,26 +330,230 @@ class DatasetManifest:
                         )
                     )
 
-        collect(
-            "audio-sha256",
-            ((record.audio_sha256.lower(), record) for record in self.records),
-        )
+        collect("audio-sha256", ((record.audio_sha256, record) for record in self.records))
+        collect("pcm-sha256", ((record.pcm_sha256, record) for record in self.records))
         collect("speaker-id", ((record.speaker_id, record) for record in self.records))
+        collect("session-id", ((record.session_id, record) for record in self.records))
         collect(
             "source-recording-id",
             ((record.source_recording_id, record) for record in self.records),
+        )
+        collect(
+            "reference-lineage-id",
+            ((record.reference_lineage_id, record) for record in self.records),
+        )
+        collect(
+            "derivation-group-id",
+            ((record.derivation_group_id, record) for record in self.records),
+        )
+        collect(
+            "near-duplicate-id",
+            ((record.near_duplicate_id, record) for record in self.records),
         )
         if reference_near_duplicate:
             collect(
                 "reference-digest",
                 ((record.reference_digest, record) for record in self.records),
             )
+
+        by_sample_id = {record.sample_id: record for record in self.records}
+        for record in self.records:
+            for parent_id in record.parent_sample_ids:
+                parent = by_sample_id.get(parent_id)
+                if parent is not None and parent.split != record.split:
+                    findings.append(
+                        LeakageFinding(
+                            kind="parent-sample-id",
+                            value=parent_id,
+                            splits=tuple(sorted((parent.split, record.split))),
+                            sample_ids=tuple(sorted((parent.sample_id, record.sample_id))),
+                        )
+                    )
+        excluded_sample_ids = set(self.excluded_sample_ids)
+        excluded_audio = set(self.excluded_audio_sha256)
+        excluded_reference = set(self.excluded_reference_sha256)
+        for record in self.split("test"):
+            for kind, value, excluded in (
+                ("excluded-sample-id", record.sample_id, excluded_sample_ids),
+                ("excluded-audio-sha256", record.audio_sha256, excluded_audio),
+                ("excluded-reference-sha256", record.reference_digest, excluded_reference),
+            ):
+                if value in excluded:
+                    findings.append(
+                        LeakageFinding(
+                            kind=kind,
+                            value=value,
+                            splits=("test",),
+                            sample_ids=(record.sample_id,),
+                        )
+                    )
+        unique = {
+            (finding.kind, finding.value, finding.splits, finding.sample_ids): finding
+            for finding in findings
+        }
         return tuple(
             sorted(
-                findings,
+                unique.values(),
                 key=lambda finding: (finding.kind, finding.value, finding.sample_ids),
             )
         )
+
+    def _cyclic_sample_ids(self) -> tuple[str, ...]:
+        records = {record.sample_id: record for record in self.records}
+        state: dict[str, int] = {}
+        cyclic: set[str] = set()
+        for start in sorted(records):
+            if state.get(start, 0):
+                continue
+            path: list[str] = []
+            stack: list[tuple[str, Any]] = [(start, iter(records[start].parent_sample_ids))]
+            while stack:
+                node, parents = stack[-1]
+                if state.get(node, 0) == 0:
+                    state[node] = 1
+                    path.append(node)
+                try:
+                    parent = next(parents)
+                except StopIteration:
+                    stack.pop()
+                    state[node] = 2
+                    path.pop()
+                    continue
+                if parent not in records:
+                    continue
+                parent_state = state.get(parent, 0)
+                if parent_state == 0:
+                    stack.append((parent, iter(records[parent].parent_sample_ids)))
+                elif parent_state == 1:
+                    cyclic.update(path[path.index(parent) :])
+        return tuple(sorted(cyclic))
+
+    def integrity_report(self, *, reference_near_duplicate: bool = True) -> dict[str, Any]:
+        sample_ids = {record.sample_id for record in self.records}
+        missing_parents = sorted(
+            (
+                {"sampleId": record.sample_id, "parentSampleId": parent_id}
+                for record in self.records
+                for parent_id in record.parent_sample_ids
+                if parent_id not in sample_ids
+            ),
+            key=lambda row: (row["sampleId"], row["parentSampleId"]),
+        )
+        missing_pcm = sorted(
+            record.sample_id for record in self.records if record.pcm_sha256 is None
+        )
+        unknown_speakers = sorted(
+            record.sample_id for record in self.records if record.speaker_id is None
+        )
+        unknown_rights = sorted(
+            record.sample_id for record in self.records if record.rights_asset_id is None
+        )
+        unknown_source_revisions = sorted(
+            record.sample_id for record in self.records if record.source_dataset_revision is None
+        )
+        revision_mismatches = sorted(
+            record.sample_id
+            for record in self.records
+            if record.source_dataset_revision is not None
+            and record.source_dataset_revision != self.dataset_revision
+        )
+        leakage = self.leakage_findings(reference_near_duplicate=reference_near_duplicate)
+        speaker_leakage = any(finding.kind == "speaker-id" for finding in leakage)
+        test_isolation = not any("test" in finding.splits for finding in leakage)
+        cycles = self._cyclic_sample_ids()
+        return {
+            "manifestDigest": self.digest,
+            "splitPolicy": self.split_policy,
+            "splitSeed": self.split_seed,
+            "counts": {name: len(self.split(cast(SplitName, name))) for name in _SPLIT_NAMES},
+            "leakageFindings": [asdict(finding) for finding in leakage],
+            "missingParentRelations": missing_parents,
+            "cyclicSampleIds": list(cycles),
+            "missingPcmSha256SampleIds": missing_pcm,
+            "unknownSpeakerSampleIds": unknown_speakers,
+            "unknownRightsSampleIds": unknown_rights,
+            "unknownSourceDatasetRevisionSampleIds": unknown_source_revisions,
+            "datasetRevisionMismatchSampleIds": revision_mismatches,
+            "speakerDisjointGuaranteed": not unknown_speakers and not speaker_leakage,
+            "testIsolationPassed": test_isolation,
+            "lineagePassed": not missing_parents
+            and not cycles
+            and not missing_pcm
+            and not unknown_source_revisions
+            and not revision_mismatches
+            and not leakage,
+            "rightsComplete": not unknown_rights,
+        }
+
+    def assert_lineage_valid(
+        self,
+        *,
+        reference_near_duplicate: bool = True,
+        require_known_speakers: bool = False,
+        require_known_rights: bool = False,
+    ) -> None:
+        report = self.integrity_report(reference_near_duplicate=reference_near_duplicate)
+        hard_failures = (
+            report["leakageFindings"],
+            report["missingParentRelations"],
+            report["cyclicSampleIds"],
+            report["missingPcmSha256SampleIds"],
+            report["unknownSourceDatasetRevisionSampleIds"],
+            report["datasetRevisionMismatchSampleIds"],
+        )
+        if any(hard_failures):
+            raise ValueError("dataset lineage integrity failed; inspect integrity_report()")
+        if require_known_speakers and report["unknownSpeakerSampleIds"]:
+            raise ValueError("speaker identity is unknown for one or more samples")
+        if require_known_rights and report["unknownRightsSampleIds"]:
+            raise PermissionError("rights asset is unknown for one or more samples")
+
+    def public_redacted_payload(self) -> dict[str, Any]:
+        records = []
+        for record in sorted(self.records, key=lambda row: row.sample_id):
+            row: dict[str, Any] = {
+                "sampleIdSha256": _identifier_digest(record.sample_id),
+                "split": record.split,
+                "audioSha256": record.audio_sha256,
+                "pcmSha256": record.pcm_sha256,
+                "referenceSha256": record.reference_digest,
+                "speakerKnown": record.speaker_id is not None,
+                "sourceRecordingIdSha256": _identifier_digest(record.source_recording_id),
+                "sessionIdSha256": _identifier_digest(record.session_id),
+                "referenceLineageIdSha256": _identifier_digest(record.reference_lineage_id),
+                "derivationGroupIdSha256": _identifier_digest(record.derivation_group_id),
+                "nearDuplicateIdSha256": _identifier_digest(record.near_duplicate_id),
+                "rightsAssetId": record.rights_asset_id,
+                "sourceDatasetRevision": record.source_dataset_revision,
+                "parentSampleIdSha256": [
+                    _identifier_digest(parent_id) for parent_id in record.parent_sample_ids
+                ],
+                "durationSeconds": record.duration_seconds,
+                "domain": record.domain,
+            }
+            records.append(row)
+        return {
+            "schemaVersion": "semantic-asr-public-redacted-manifest-v1",
+            "datasetName": self.dataset_name,
+            "datasetRevision": self.dataset_revision,
+            "rightsRegistryDigest": self.rights_registry_digest,
+            "splitPolicy": self.split_policy,
+            "splitSeed": self.split_seed,
+            "manifestDigest": self.digest,
+            "records": records,
+            "redaction": {
+                "omitted": ["reference", "speakerId", "metadata"],
+                "hashed": [
+                    "sampleId",
+                    "sourceRecordingId",
+                    "sessionId",
+                    "referenceLineageId",
+                    "derivationGroupId",
+                    "nearDuplicateId",
+                    "parentSampleIds",
+                ],
+            },
+        }
 
     def assert_leakage_free(self, *, reference_near_duplicate: bool = True) -> None:
         findings = self.leakage_findings(reference_near_duplicate=reference_near_duplicate)

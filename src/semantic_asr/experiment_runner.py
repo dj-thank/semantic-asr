@@ -15,7 +15,7 @@ from .adapters import ASRAdapter, DecodeRequest
 from .candidate_pool import aggregate_surface_candidates
 from .contracts import CandidateEvidence, canonical_json
 
-DatasetSplit = Literal["train", "calibration", "test"]
+DatasetSplit = Literal["train", "dev", "calibration", "test", "regression-exposed"]
 RightsDecision = Literal["allow", "deny", "review"]
 
 
@@ -37,7 +37,7 @@ class AudioManifestRecord:
     def __post_init__(self) -> None:
         if not self.sample_id or not self.group_id or not self.source_id:
             raise ValueError("sample, group, and source IDs are required")
-        if self.split not in {"train", "calibration", "test"}:
+        if self.split not in {"train", "dev", "calibration", "test", "regression-exposed"}:
             raise ValueError("unknown audio-manifest split")
         if not self.audio_path or not self.reference:
             raise ValueError("audio path and reference are required")

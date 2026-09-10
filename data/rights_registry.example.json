@@ -1,5 +1,6 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "2.0.0",
+  "registryDigest": "f55b16a26c0327a12873716d873fdfcf2c40010cedc8a7da2c78dfaaa0992c03",
   "assets": [
     {
       "assetId": "jmdict-current",
@@ -9,11 +10,19 @@
       "licenseName": "REVIEW_EXACT_TERMS",
       "licenseUrl": "https://www.edrdg.org/edrdg/licence.html",
       "train": "review",
+      "evaluate": "review",
       "deriveFeatures": "review",
+      "publishText": "review",
+      "publishFeatures": "review",
+      "publishWeights": "review",
+      "redistributeAudio": "deny",
       "redistributeRaw": "deny",
       "exportSpeakerId": "deny",
       "attribution": "Electronic Dictionary Research and Development Group",
       "reviewedAt": "2026-08-29",
+      "acquiredAt": "2026-08-29",
+      "licenseTextSha256": null,
+      "consentRecord": null,
       "notes": "Pin an exact snapshot and complete legal review before use."
     },
     {
@@ -24,11 +33,19 @@
       "licenseName": "REVIEW_RELEASE_CARD",
       "licenseUrl": "https://commonvoice.mozilla.org/en/datasets",
       "train": "review",
+      "evaluate": "review",
       "deriveFeatures": "review",
+      "publishText": "review",
+      "publishFeatures": "review",
+      "publishWeights": "review",
+      "redistributeAudio": "deny",
       "redistributeRaw": "deny",
       "exportSpeakerId": "deny",
       "attribution": "Mozilla Common Voice contributors",
       "reviewedAt": "2026-08-29",
+      "acquiredAt": "2026-08-29",
+      "licenseTextSha256": null,
+      "consentRecord": null,
       "notes": "Client IDs must be HMAC-pseudonymized before local indexing."
     },
     {
@@ -39,11 +56,19 @@
       "licenseName": "REVIEW_EXACT_ASSET_LICENSE",
       "licenseUrl": "https://github.com/reazon-research/ReazonSpeech",
       "train": "review",
+      "evaluate": "review",
       "deriveFeatures": "review",
+      "publishText": "review",
+      "publishFeatures": "review",
+      "publishWeights": "review",
+      "redistributeAudio": "deny",
       "redistributeRaw": "deny",
       "exportSpeakerId": "deny",
       "attribution": "Reazon Human Interaction Lab",
       "reviewedAt": "2026-08-29",
+      "acquiredAt": "2026-08-29",
+      "licenseTextSha256": null,
+      "consentRecord": null,
       "notes": "Do not infer one licence for every component or source programme."
     }
   ]

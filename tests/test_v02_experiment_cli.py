@@ -92,7 +92,13 @@ def test_experiment_cli_partition_score_calibrate_and_apply() -> None:
             == 0
         )
         partition = json.loads((split_dir / "partition.json").read_text(encoding="utf-8"))
-        assert partition["counts"] == {"train": 1, "calibration": 1, "test": 1}
+        assert partition["counts"] == {
+            "train": 1,
+            "dev": 0,
+            "calibration": 1,
+            "test": 1,
+            "regression-exposed": 0,
+        }
 
         ranker = root / "ranker.json"
         _ranker_profile(ranker)
@@ -227,7 +233,7 @@ def test_partition_and_rerank_round_trip_preserves_unsafe_annotation_metadata() 
             == 0
         )
 
-        for split in ("train", "calibration", "test"):
+        for split in ("train", "dev", "calibration", "test", "regression-exposed"):
             split_rows = [
                 json.loads(line)
                 for line in (split_dir / f"{split}.jsonl").read_text(encoding="utf-8").splitlines()

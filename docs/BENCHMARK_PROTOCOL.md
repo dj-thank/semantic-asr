@@ -2,15 +2,17 @@
 
 ## Splits
 
-Use disjoint:
+Use five disjoint roles:
 
 ```text
-training
+train
+dev
 calibration
 test
+regression-exposed
 ```
 
-Speakers, source recordings and near-duplicate utterances must not cross splits.
+Only `test` supports a fresh publication-evaluation claim. `regression-exposed` contains examples already viewed or published and is evaluation-only. Speakers, sessions, source recordings, raw/PCM hashes, parent lineage, derivation groups and near-duplicate utterances must not cross roles. Unknown speakers must be reported as unknown rather than described as speaker-disjoint. See [`DATA_LINEAGE_AND_RIGHTS.md`](DATA_LINEAGE_AND_RIGHTS.md).
 
 ## Baselines
 

@@ -1,11 +1,21 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://semantic-asr.local/schemas/v02-experiment-manifest.schema.json",
-  "title": "Semantic ASR v0.2 experiment manifest",
+  "title": "Semantic ASR v0.2 five-role dataset manifest",
   "type": "object",
   "additionalProperties": false,
-  "required": ["datasetName", "datasetRevision", "records"],
+  "required": [
+    "schemaVersion",
+    "datasetName",
+    "datasetRevision",
+    "rightsRegistryDigest",
+    "splitPolicy",
+    "splitSeed",
+    "exclusions",
+    "records"
+  ],
   "properties": {
+    "schemaVersion": { "const": "2.0.0" },
     "datasetName": {
       "type": "string",
       "minLength": 1
@@ -15,7 +25,37 @@
       "minLength": 1
     },
     "rightsRegistryDigest": {
-      "type": ["string", "null"]
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "splitPolicy": {
+      "type": "string",
+      "minLength": 1
+    },
+    "splitSeed": {
+      "type": "integer"
+    },
+    "exclusions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sampleIds", "audioSha256", "referenceSha256"],
+      "properties": {
+        "sampleIds": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "audioSha256": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "uniqueItems": true
+        },
+        "referenceSha256": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "uniqueItems": true
+        }
+      }
     },
     "records": {
       "type": "array",
@@ -27,7 +67,18 @@
           "sampleId",
           "split",
           "audioSha256",
-          "reference"
+          "pcmSha256",
+          "reference",
+          "speakerId",
+          "sessionId",
+          "sourceRecordingId",
+          "referenceLineageId",
+          "derivationGroupId",
+          "nearDuplicateId",
+          "rightsAssetId",
+          "sourceDatasetRevision",
+          "parentSampleIds",
+          "metadata"
         ],
         "properties": {
           "sampleId": {
@@ -35,9 +86,13 @@
             "minLength": 1
           },
           "split": {
-            "enum": ["train", "calibration", "test"]
+            "enum": ["train", "dev", "calibration", "test", "regression-exposed"]
           },
           "audioSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "pcmSha256": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
           },
@@ -48,8 +103,33 @@
           "speakerId": {
             "type": ["string", "null"]
           },
+          "sessionId": {
+            "type": ["string", "null"]
+          },
           "sourceRecordingId": {
             "type": ["string", "null"]
+          },
+          "referenceLineageId": {
+            "type": ["string", "null"]
+          },
+          "derivationGroupId": {
+            "type": ["string", "null"]
+          },
+          "nearDuplicateId": {
+            "type": ["string", "null"]
+          },
+          "rightsAssetId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sourceDatasetRevision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "parentSampleIds": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
           },
           "durationSeconds": {
             "type": ["number", "null"],

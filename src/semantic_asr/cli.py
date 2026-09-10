@@ -350,7 +350,12 @@ def build_parser() -> argparse.ArgumentParser:
         "operation",
         choices=[
             "train",
+            "evaluate",
             "derive_features",
+            "publish_text",
+            "publish_features",
+            "publish_weights",
+            "redistribute_audio",
             "redistribute_raw",
             "export_speaker_id",
         ],

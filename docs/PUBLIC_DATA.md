@@ -8,7 +8,7 @@ Each exact asset/version declares:
 ```text
 train              allow / deny / review
 derive_features    allow / deny / review
-redistribute_raw   allow / deny / review
+redistribute_audio allow / deny / review
 export_speaker_id  allow / deny / review
 ```
 
@@ -52,7 +52,7 @@ python scripts/prepare_public_manifest.py reazonspeech-test \
   --allow-raw-export
 ```
 
-When a registry is supplied, both `derive_features` and `redistribute_raw` must be
+When a registry is supplied, both `derive_features` and `redistribute_audio` must be
 `allow`; a CLI `allow` cannot override a registry `review` or `deny`.  The manifest keeps
 the registry asset ID in `rightsAssetId` and the operation decision in `rightsDecision`.
 

@@ -4,7 +4,7 @@ import json
 import math
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .contracts import CandidateEvidence
 from .mbr import semantic_loss
@@ -31,11 +31,15 @@ def ranker_example_from_row(
     row: Mapping[str, Any],
     *,
     line_number: int = 0,
-    require_train_split: bool = True,
+    require_train_split: Literal[True] = True,
 ) -> RankerExample:
-    split = str(row.get("split") or "train")
-    if require_train_split and split != "train":
-        raise ValueError(f"ranker training row {line_number} belongs to forbidden split {split!r}")
+    if require_train_split is not True:
+        raise ValueError("ranker training split isolation cannot be disabled")
+    raw_split = row.get("split")
+    if not isinstance(raw_split, str) or raw_split != "train":
+        raise ValueError(
+            f"ranker training row {line_number} belongs to forbidden split {raw_split!r}"
+        )
     raw_candidates = row.get("candidates")
     if not isinstance(raw_candidates, list):
         raise ValueError(f"ranker row {line_number} has no candidates array")
@@ -78,7 +82,7 @@ def ranker_example_from_row(
 def load_ranker_examples(
     path: str | Path,
     *,
-    require_train_split: bool = True,
+    require_train_split: Literal[True] = True,
 ) -> list[RankerExample]:
     output: list[RankerExample] = []
     for line_number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
