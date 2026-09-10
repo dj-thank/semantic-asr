@@ -107,9 +107,7 @@ def read_json(path: Path) -> Any:
 
 def rows(path: Path) -> list[dict[str, Any]]:
     return [
-        strict_json(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        strict_json(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
 
 
@@ -352,19 +350,22 @@ def evaluate(output: Path, config: dict[str, Any]) -> None:
         raise ValueError("evaluation configuration differs from frozen policy")
     decisions = rows(output / "decisions.jsonl")
     expected = frozen["expected_sample_ids"]
-    if any(not isinstance(row, dict) for row in decisions) or [
-        row.get("sampleId") for row in decisions
-    ] != expected:
+    if (
+        any(not isinstance(row, dict) for row in decisions)
+        or [row.get("sampleId") for row in decisions] != expected
+    ):
         raise ValueError("evaluation cohort or order changed")
     # Membership alone is insufficient: a different valid candidate could replace
     # the policy's selection. Replay the existing selector before parsing
     # evaluation references.
     replayed = selection_rows(output)
-    if any(
-        not isinstance(row, dict)
-        or type(row.get("requires_additional_evidence")) is not bool
-        for row in decisions
-    ) or decisions != replayed:
+    if (
+        any(
+            not isinstance(row, dict) or type(row.get("requires_additional_evidence")) is not bool
+            for row in decisions
+        )
+        or decisions != replayed
+    ):
         raise ValueError("saved decisions do not match the frozen candidate-only policy")
     references = rows(output / "test-reference.jsonl")
     if [r["sampleId"] for r in references] != expected:

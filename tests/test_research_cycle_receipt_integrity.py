@@ -88,9 +88,7 @@ def completed_case(cycle, tmp_path_factory):
 
 def snapshot(directory):
     return {
-        str(p.relative_to(directory)): p.read_bytes()
-        for p in directory.rglob("*")
-        if p.is_file()
+        str(p.relative_to(directory)): p.read_bytes() for p in directory.rglob("*") if p.is_file()
     }
 
 
@@ -303,9 +301,7 @@ def test_unsafe_stage_output_leaves_terminal_failure_without_following_links(
 
 
 @pytest.mark.parametrize("name", ["cycle.json", "config.json", "ranker.json", "cycle.json.tmp"])
-def test_resume_rejects_file_aliases_before_any_output_write(
-    cycle, completed_case, tmp_path, name
-):
+def test_resume_rejects_file_aliases_before_any_output_write(cycle, completed_case, tmp_path, name):
     source, completed = completed_case
     output = tmp_path / "resume-alias"
     shutil.copytree(completed, output)
@@ -405,9 +401,7 @@ def test_inventory_error_does_not_mask_original_failure(
 
 
 @pytest.mark.parametrize("mutation", ["schema", "empty-cohort", "reordered-cohort"])
-def test_freeze_binds_schema_and_exact_inference_cohort(
-    cycle, completed_case, tmp_path, mutation
-):
+def test_freeze_binds_schema_and_exact_inference_cohort(cycle, completed_case, tmp_path, mutation):
     _, completed = completed_case
     output = tmp_path / "bad-freeze"
     shutil.copytree(completed, output)
@@ -498,9 +492,7 @@ def test_evaluation_replays_frozen_policy_before_reference_evaluation(
     assert {name: (output / name).read_bytes() for name in before} == before
 
 
-def test_recovered_active_step_remains_valid_on_subsequent_resume(
-    cycle, completed_case, tmp_path
-):
+def test_recovered_active_step_remains_valid_on_subsequent_resume(cycle, completed_case, tmp_path):
     source, output, before = report_prefix(cycle, completed_case, tmp_path)
     before["status"] = "running"
     before["active_started_at"] = time.time()
