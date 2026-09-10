@@ -1,0 +1,69 @@
+name: Apply dataset lineage and rights v2 patch
+
+on:
+  push:
+    branches:
+      - codex/dataset-lineage-rights-v2
+    paths:
+      - ".patch-bootstrap/dataset-lineage-rights-v2.READY"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-dataset-lineage-rights-v2
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/dataset-lineage-rights-v2
+          fetch-depth: 0
+      - name: Verify and apply the pinned patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="af6c94ed6ae32a7ef370f522612e35c117823cf6"
+          base_tree="ff4d81d64afee08bffbf930ec77c730ac985e530"
+          final_tree="e225bf41f57a80ee3efa805b27f915f289bba5dd"
+          test "$(git rev-parse "$base^{tree}")" = "$base_tree"
+          test "$(git merge-base HEAD "$base")" = "$base"
+          expected_bootstrap="$({
+            printf '%s\n' '.github/workflows/apply-dataset-lineage-rights-v2.yml'
+            printf '%s\n' '.patch-bootstrap/dataset-lineage-rights-v2.READY'
+            printf '%s\n' '.patch-bootstrap/dataset-lineage-rights-v2.part-00'
+            printf '%s\n' '.patch-bootstrap/dataset-lineage-rights-v2.part-01'
+            printf '%s\n' '.patch-bootstrap/dataset-lineage-rights-v2.part-02'
+            printf '%s\n' '.patch-bootstrap/dataset-lineage-rights-v2.part-03'
+            printf '%s\n' '.patch-bootstrap/dataset-lineage-rights-v2.part-04'
+            printf '%s\n' '.patch-bootstrap/dataset-lineage-rights-v2.part-05'
+          } | sort)"
+          actual_bootstrap="$(git diff --name-only "$base"..HEAD | sort)"
+          test "$actual_bootstrap" = "$expected_bootstrap"
+          cat .patch-bootstrap/dataset-lineage-rights-v2.part-* > /tmp/patch.gz.b64
+          echo "83d5af11a3bfac89f289f1585effe51e0989bd7e313f7d460476a52d45a2d8ad  /tmp/patch.gz.b64" | sha256sum -c -
+          base64 --decode /tmp/patch.gz.b64 | gzip -dc > /tmp/dataset-lineage-rights-v2.patch
+          echo "e708f244bae36ca92689284829739defcbc307a6271f180d3a988400ce234d85  /tmp/dataset-lineage-rights-v2.patch" | sha256sum -c -
+          git apply --check --binary /tmp/dataset-lineage-rights-v2.patch
+          git apply --binary /tmp/dataset-lineage-rights-v2.patch
+          git rm -f \
+            .github/workflows/apply-dataset-lineage-rights-v2.yml \
+            .patch-bootstrap/dataset-lineage-rights-v2.READY \
+            .patch-bootstrap/dataset-lineage-rights-v2.part-00 \
+            .patch-bootstrap/dataset-lineage-rights-v2.part-01 \
+            .patch-bootstrap/dataset-lineage-rights-v2.part-02 \
+            .patch-bootstrap/dataset-lineage-rights-v2.part-03 \
+            .patch-bootstrap/dataset-lineage-rights-v2.part-04 \
+            .patch-bootstrap/dataset-lineage-rights-v2.part-05
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$final_tree"
+          python -m compileall -q src tests scripts
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat: enforce five-role dataset lineage and operation rights"
+          git push origin HEAD:codex/dataset-lineage-rights-v2
