@@ -1,0 +1,69 @@
+name: Apply frozen paired evaluation v3 patch
+
+on:
+  push:
+    branches:
+      - codex/evaluation-v3-contract-29
+    paths:
+      - ".patch-bootstrap/evaluation-v3.READY"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-evaluation-v3-contract-29
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/evaluation-v3-contract-29
+          fetch-depth: 0
+      - name: Verify and apply pinned evaluation v3 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="130345d91f5d5a352cbb484e883edd93badc00d6"
+          base_tree="96ab3580a99a32143922ec98da0986302d70429c"
+          final_tree="9d8130127b08f84895fdedef339381f54410c914"
+          test "$(git rev-parse "$base^{tree}")" = "$base_tree"
+          test "$(git merge-base HEAD "$base")" = "$base"
+          expected_bootstrap="$({
+            printf '%s\n' '.github/workflows/apply-evaluation-v3-contract.yml'
+            printf '%s\n' '.patch-bootstrap/evaluation-v3.READY'
+            printf '%s\n' '.patch-bootstrap/evaluation-v3.part-00'
+            printf '%s\n' '.patch-bootstrap/evaluation-v3.part-01'
+            printf '%s\n' '.patch-bootstrap/evaluation-v3.part-02'
+            printf '%s\n' '.patch-bootstrap/evaluation-v3.part-03'
+            printf '%s\n' '.patch-bootstrap/evaluation-v3.part-04'
+            printf '%s\n' '.patch-bootstrap/evaluation-v3.part-05'
+          } | sort)"
+          actual_bootstrap="$(git diff --name-only "$base"..HEAD | sort)"
+          test "$actual_bootstrap" = "$expected_bootstrap"
+          cat .patch-bootstrap/evaluation-v3.part-* > /tmp/evaluation-v3.patch.gz.b64
+          echo "c7312245d10df6cdafbc42b1c64b87511ebfa1564b511070425801e6b29cee11  /tmp/evaluation-v3.patch.gz.b64" | sha256sum -c -
+          base64 --decode /tmp/evaluation-v3.patch.gz.b64 | gzip -dc > /tmp/evaluation-v3.patch
+          echo "79003f6bcbae4a6fc15ca22ce47e1d2eb724469e6e10da85d471688126ce3162  /tmp/evaluation-v3.patch" | sha256sum -c -
+          git apply --check --binary /tmp/evaluation-v3.patch
+          git apply --binary /tmp/evaluation-v3.patch
+          git rm -f \
+            .github/workflows/apply-evaluation-v3-contract.yml \
+            .patch-bootstrap/evaluation-v3.READY \
+            .patch-bootstrap/evaluation-v3.part-00 \
+            .patch-bootstrap/evaluation-v3.part-01 \
+            .patch-bootstrap/evaluation-v3.part-02 \
+            .patch-bootstrap/evaluation-v3.part-03 \
+            .patch-bootstrap/evaluation-v3.part-04 \
+            .patch-bootstrap/evaluation-v3.part-05
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$final_tree"
+          python -m compileall -q src tests scripts
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat: add frozen paired evaluation v3"
+          git push origin HEAD:codex/evaluation-v3-contract-29
