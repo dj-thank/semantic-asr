@@ -1,0 +1,96 @@
+name: Apply lint fixes for PR 62
+
+on:
+  push:
+    branches:
+      - codex/dataset-lineage-rights-v2
+    paths:
+      - ".github/workflows/apply-lint-fixes-pr62.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-lint-fixes-pr62
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/dataset-lineage-rights-v2
+          fetch-depth: 0
+      - name: Apply exact Ruff lint fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="4c1216e3168c8d66da99e304d07fd622765d4fb2"
+          base_tree="b24a336f09f5b60d7daeb85f6e2f8549ec8401de"
+          final_tree="96ab3581b818a2e58a1aa7201380ebb2315a7d48"
+          helper=".github/workflows/apply-lint-fixes-pr62.yml"
+
+          test "$(git rev-parse HEAD^)" = "$base"
+          test "$(git rev-parse "$base^{tree}")" = "$base_tree"
+          test "$(git diff --name-only "$base"..HEAD)" = "$helper"
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/validate_v02_manifest.py")
+          source = path.read_text(encoding="utf-8")
+          old = "from typing import Any, cast\n"
+          new = "from typing import cast\n"
+          if source.count(old) != 1:
+              raise SystemExit("unexpected validate_v02_manifest import state")
+          path.write_text(source.replace(old, new), encoding="utf-8")
+
+          path = Path("tests/test_v02_manifest_validator.py")
+          source = path.read_text(encoding="utf-8")
+          old = (
+              "import json\n"
+              "from pathlib import Path\n"
+              "from types import ModuleType\n"
+              "from typing import Any, Callable\n"
+          )
+          new = (
+              "import json\n"
+              "from collections.abc import Callable\n"
+              "from pathlib import Path\n"
+              "from types import ModuleType\n"
+              "from typing import Any\n"
+          )
+          if source.count(old) != 1:
+              raise SystemExit("unexpected test validator import state")
+          path.write_text(source.replace(old, new), encoding="utf-8")
+          PY
+
+          git rm -f "$helper"
+          git add -A
+          git diff --cached --check
+          expected="$({
+            printf '%s\n' "$helper"
+            printf '%s\n' 'scripts/validate_v02_manifest.py'
+            printf '%s\n' 'tests/test_v02_manifest_validator.py'
+          } | sort)"
+          actual="$(git diff --cached --name-only | sort)"
+          test "$actual" = "$expected"
+          test "$(git hash-object scripts/validate_v02_manifest.py)" = "7cc859357abbbf11f9828d554b8d45e5ac6d50ef"
+          test "$(git hash-object tests/test_v02_manifest_validator.py)" = "7096b28b08ec0ee18fa8393bdc4c292e12b8cb82"
+          test "$(git write-tree)" = "$final_tree"
+
+          python -m ruff format --check src tests scripts
+          python -m ruff check src tests scripts
+          python -m compileall -q src tests scripts
+          python -m pytest -q \
+            tests/test_v02_manifest_validator.py \
+            tests/test_dataset_lineage_contract.py \
+            tests/test_v02_schemas.py \
+            tests/test_dataset_manifest_contract.py
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: satisfy dataset lineage lint contract"
+          git push origin HEAD:codex/dataset-lineage-rights-v2
