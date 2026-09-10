@@ -115,7 +115,8 @@ def test_five_roles_are_canonical_and_model_visible_paths_fail_closed() -> None:
         dataset.model_visible_records(("test",), purpose="context")  # type: ignore[arg-type]
     with pytest.raises(PermissionError, match="forbids split"):
         dataset.model_visible_records(
-            ("regression-exposed",), purpose="training"  # type: ignore[arg-type]
+            ("regression-exposed",),
+            purpose="training",  # type: ignore[arg-type]
         )
 
 
@@ -152,9 +153,7 @@ def test_normalized_reference_and_parent_lineage_cannot_cross_roles() -> None:
 
 
 def test_missing_and_cyclic_parents_are_reported_not_silently_skipped() -> None:
-    missing = manifest(
-        utterance("child", "train", "1", parent_sample_ids=("not-present",))
-    )
+    missing = manifest(utterance("child", "train", "1", parent_sample_ids=("not-present",)))
     assert missing.integrity_report()["missingParentRelations"] == [
         {"sampleId": "child", "parentSampleId": "not-present"}
     ]
@@ -334,7 +333,7 @@ def test_legacy_rights_registry_migrates_missing_operations_to_review(tmp_path: 
                         "attribution": "Legacy",
                         "reviewedAt": "2026-08-29",
                     }
-                ]
+                ],
             }
         ),
         encoding="utf-8",
@@ -356,9 +355,7 @@ def test_manifest_requires_matching_registry_and_known_assets() -> None:
     )
     assert dataset.require_operation_rights(registry, "evaluate") == dataset.records
     with pytest.raises(ValueError, match="rights_registry_digest is required"):
-        replace(dataset, rights_registry_digest=None).require_operation_rights(
-            registry, "evaluate"
-        )
+        replace(dataset, rights_registry_digest=None).require_operation_rights(registry, "evaluate")
     with pytest.raises(PermissionError, match="review"):
         dataset.require_operation_rights(registry, "publish_weights")
     with pytest.raises(ValueError, match="digest"):

@@ -131,15 +131,11 @@ def _record(row: dict[str, object], *, index: int) -> UtteranceRecord:
         speaker_id=_optional_string(row, "speakerId", context=context),
         session_id=_optional_string(row, "sessionId", context=context),
         source_recording_id=_optional_string(row, "sourceRecordingId", context=context),
-        reference_lineage_id=_optional_string(
-            row, "referenceLineageId", context=context
-        ),
+        reference_lineage_id=_optional_string(row, "referenceLineageId", context=context),
         derivation_group_id=_optional_string(row, "derivationGroupId", context=context),
         near_duplicate_id=_optional_string(row, "nearDuplicateId", context=context),
         rights_asset_id=_required_string(row, "rightsAssetId", context=context),
-        source_dataset_revision=_required_string(
-            row, "sourceDatasetRevision", context=context
-        ),
+        source_dataset_revision=_required_string(row, "sourceDatasetRevision", context=context),
         parent_sample_ids=_string_array(
             row["parentSampleIds"],
             name=f"{context} field parentSampleIds",
@@ -158,9 +154,7 @@ def manifest_from_payload(payload: object) -> DatasetManifest:
         raise ValueError("schemaVersion must be exactly 2.0.0")
 
     raw_records = _required_value(payload, "records", context="manifest")
-    if not isinstance(raw_records, list) or any(
-        not isinstance(row, dict) for row in raw_records
-    ):
+    if not isinstance(raw_records, list) or any(not isinstance(row, dict) for row in raw_records):
         raise ValueError("manifest field records must be an array of objects")
     records = tuple(_record(row, index=index) for index, row in enumerate(raw_records))
 
@@ -182,9 +176,7 @@ def manifest_from_payload(payload: object) -> DatasetManifest:
     return DatasetManifest(
         records=records,
         dataset_name=_required_string(payload, "datasetName", context="manifest"),
-        dataset_revision=_required_string(
-            payload, "datasetRevision", context="manifest"
-        ),
+        dataset_revision=_required_string(payload, "datasetRevision", context="manifest"),
         rights_registry_digest=_required_string(
             payload, "rightsRegistryDigest", context="manifest"
         ),
@@ -245,9 +237,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         require_known_speakers=args.require_known_speakers,
         require_known_rights=args.require_known_rights,
     )
-    report = manifest.integrity_report(
-        reference_near_duplicate=not args.allow_reference_duplicates
-    )
+    report = manifest.integrity_report(reference_near_duplicate=not args.allow_reference_duplicates)
     report.update(
         {
             "schemaVersion": payload.get("schemaVersion"),

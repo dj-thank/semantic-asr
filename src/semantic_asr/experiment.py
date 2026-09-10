@@ -41,8 +41,10 @@ def _require_split(value: Any, *, name: str = "split") -> SplitName:
 
 
 def _require_sha256(value: Any, *, name: str) -> str:
-    if not isinstance(value, str) or len(value) != 64 or any(
-        character not in _LOWERCASE_HEX for character in value
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in _LOWERCASE_HEX for character in value)
     ):
         raise ValueError(f"{name} must be a lowercase hexadecimal SHA-256 digest")
     return value
@@ -76,9 +78,7 @@ def _canonical_string_tuple(
 
 def _normalized_reference_digest(value: str) -> str:
     normalized = "".join(
-        character
-        for character in unicodedata.normalize("NFKC", value)
-        if not character.isspace()
+        character for character in unicodedata.normalize("NFKC", value) if not character.isspace()
     )
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
@@ -428,9 +428,7 @@ class DatasetManifest:
                     cyclic.update(path[path.index(parent) :])
         return tuple(sorted(cyclic))
 
-    def integrity_report(
-        self, *, reference_near_duplicate: bool = True
-    ) -> dict[str, Any]:
+    def integrity_report(self, *, reference_near_duplicate: bool = True) -> dict[str, Any]:
         sample_ids = {record.sample_id for record in self.records}
         missing_parents = sorted(
             (
@@ -451,9 +449,7 @@ class DatasetManifest:
             record.sample_id for record in self.records if record.rights_asset_id is None
         )
         unknown_source_revisions = sorted(
-            record.sample_id
-            for record in self.records
-            if record.source_dataset_revision is None
+            record.sample_id for record in self.records if record.source_dataset_revision is None
         )
         revision_mismatches = sorted(
             record.sample_id
@@ -461,9 +457,7 @@ class DatasetManifest:
             if record.source_dataset_revision is not None
             and record.source_dataset_revision != self.dataset_revision
         )
-        leakage = self.leakage_findings(
-            reference_near_duplicate=reference_near_duplicate
-        )
+        leakage = self.leakage_findings(reference_near_duplicate=reference_near_duplicate)
         speaker_leakage = any(finding.kind == "speaker-id" for finding in leakage)
         test_isolation = not any("test" in finding.splits for finding in leakage)
         cycles = self._cyclic_sample_ids()
@@ -498,9 +492,7 @@ class DatasetManifest:
         require_known_speakers: bool = False,
         require_known_rights: bool = False,
     ) -> None:
-        report = self.integrity_report(
-            reference_near_duplicate=reference_near_duplicate
-        )
+        report = self.integrity_report(reference_near_duplicate=reference_near_duplicate)
         hard_failures = (
             report["leakageFindings"],
             report["missingParentRelations"],

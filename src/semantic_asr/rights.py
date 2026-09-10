@@ -245,9 +245,7 @@ class RightsRegistry:
         if strict_v2:
             unknown_root = sorted(set(payload) - _V2_ROOT_KEYS)
             if unknown_root:
-                raise ValueError(
-                    f"unknown rights registry field(s): {', '.join(unknown_root)}"
-                )
+                raise ValueError(f"unknown rights registry field(s): {', '.join(unknown_root)}")
 
         rows = payload.get("assets")
         if not isinstance(rows, list):
