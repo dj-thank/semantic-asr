@@ -1,0 +1,42 @@
+name: Apply research-cycle integrity v2 patch
+
+on:
+  push:
+    branches:
+      - codex/research-cycle-integrity-v2
+    paths:
+      - ".patch-bootstrap/READY"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-research-cycle-integrity-v2
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/research-cycle-integrity-v2
+          fetch-depth: 0
+      - name: Verify and apply pinned patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 --decode .patch-bootstrap/integrity-v2.patch.gz.b64 | gzip -dc > /tmp/integrity-v2.patch
+          echo "e42897e36833fc669c25d66b97269a43b8ab17427b32e0fb15599ef6e55cd253  /tmp/integrity-v2.patch" | sha256sum -c -
+          git apply --check /tmp/integrity-v2.patch
+          git apply /tmp/integrity-v2.patch
+          echo "96c0ab449069a0e357e5cdcafda2947e989e3f4dcd495aaaba972145311192fd  scripts/research_cycle.py" | sha256sum -c -
+          echo "6dfdf5841adae212bb2e0c53407a665714124cbc6543ebfa040b4de2a4bef512  tests/test_research_cycle_receipt_integrity.py" | sha256sum -c -
+          python -m compileall -q scripts/research_cycle.py tests/test_research_cycle_receipt_integrity.py
+          git add scripts/research_cycle.py tests/test_research_cycle_receipt_integrity.py
+          test "$(git diff --cached --name-only)" = $'scripts/research_cycle.py\ntests/test_research_cycle_receipt_integrity.py'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: harden research-cycle receipt integrity"
+          git push origin HEAD:codex/research-cycle-integrity-v2
