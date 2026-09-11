@@ -1,6 +1,6 @@
 # Grouped realtime refine scheduler (Issue #66)
 
-Status: **stacked engineering slice on PR #65**. This document specifies grouping and evidence binding only. It does not promote a second-pass model or claim a Semantic ASR accuracy improvement.
+Status: **main-based engineering slice in PR #68, after PR #65**. This document specifies grouping and evidence binding only. It does not promote a second-pass model or claim a Semantic ASR accuracy improvement.
 
 ## Motivation
 
@@ -76,7 +76,7 @@ No reference transcript, gold text, candidate-derived dictionary, network lookup
 
 ## Next integration slice
 
-Once this scheduler is green on the exact stacked source:
+Once this scheduler is green on the exact PR #68 source:
 
 1. bind PR #65 `final` events to `RefineParentFinal` without changing their immutable evidence;
 2. feed the same raw 16 kHz PCM chunks into `BoundedPcmHistory` once;
