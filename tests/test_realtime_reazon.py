@@ -281,7 +281,7 @@ def test_invalid_chunks_fail_closed_without_advancing_time():
 def test_decode_input_rejects_digest_or_bounds_mismatch():
     data = pcm(10)
     digest = hashlib.sha256(data).hexdigest()
-    with pytest.raises(ValueError, match="digest"):
+    with pytest.raises(ValueError, match="audio_sha256"):
         RealtimeDecodeInput("s", "u", "final", data, 16_000, 0, 160, "0" * 64)
     with pytest.raises(ValueError, match="bounds"):
         RealtimeDecodeInput("s", "u", "final", data, 16_000, 0, 159, digest)
