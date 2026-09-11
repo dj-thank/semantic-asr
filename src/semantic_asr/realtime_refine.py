@@ -448,13 +448,19 @@ class GroupedRefineScheduler:
 
         if not isinstance(parent, RefineParentFinal):
             raise TypeError("parent must be RefineParentFinal")
-        if parent.start_sample < self.history.start_sample or parent.end_sample > self.history.end_sample:
+        if (
+            parent.start_sample < self.history.start_sample
+            or parent.end_sample > self.history.end_sample
+        ):
             raise ValueError("parent final audio is outside retained continuous PCM history")
 
         output: list[GroupedRefineRequest] = []
         if self._pending:
             previous = self._pending[-1]
-            if parent.start_sample < previous.start_sample or parent.end_sample <= previous.end_sample:
+            if (
+                parent.start_sample < previous.start_sample
+                or parent.end_sample <= previous.end_sample
+            ):
                 raise ValueError("parent finals must arrive in strictly advancing timeline order")
             if parent.start_sample - previous.end_sample >= self.config.idle_gap_samples:
                 output.append(self._close("idle-gap"))
@@ -468,7 +474,9 @@ class GroupedRefineScheduler:
             output.append(self._close("max-duration"))
         return tuple(output)
 
-    def force(self, trigger: Literal["eof", "reset", "manual"] = "manual") -> tuple[GroupedRefineRequest, ...]:
+    def force(
+        self, trigger: Literal["eof", "reset", "manual"] = "manual"
+    ) -> tuple[GroupedRefineRequest, ...]:
         if trigger not in {"eof", "reset", "manual"}:
             raise ValueError("force trigger must be eof, reset, or manual")
         if not self._pending:
