@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1",
+  "encoder": {
+    "modelId": "replace-with-frozen-audio-encoder",
+    "modelRevision": "0000000000000000000000000000000000000000",
+    "modelArtifactSha256": null,
+    "revisionPolicy": "exact-commit",
+    "layerIndex": 9,
+    "sampleRate": 16000,
+    "featureDimension": 768,
+    "frameStrideMs": 20.0,
+    "device": "cpu",
+    "localFilesOnly": true
+  },
+  "pronunciationPolicy": {
+    "schemaVersion": "1",
+    "blankSymbol": "<blk>",
+    "nasalSymbol": "N",
+    "sokuonSymbol": "q",
+    "longVowelSymbol": ":",
+    "ignorePunctuation": true,
+    "mappingRevision": "ja-kana-mora-phone-v1"
+  },
+  "export": {
+    "schemaVersion": "1",
+    "featureDtype": "float32",
+    "featureSubdirectory": "features",
+    "maximumCachedRecordings": 2,
+    "fsyncEachRow": true
+  },
+  "resources": {
+    "maximumItems": 2000000,
+    "maximumReadingCharacters": 20000,
+    "maximumSegmentDurationMs": 120000,
+    "maximumTotalAudioSamples": 100000000000,
+    "maximumRecordingSamples": 2000000000
+  }
+}
