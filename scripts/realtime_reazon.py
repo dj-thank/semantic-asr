@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 import wave
 from pathlib import Path
@@ -37,7 +38,17 @@ VAD_BUFFER_S = 30.0
 VAD_NUM_THREADS = 1
 
 
-def _require_probability(value: float, *, name: str) -> float:
+def _require_finite_number(value: object, *, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be a number")
+    value = float(value)
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+    return value
+
+
+def _require_probability(value: object, *, name: str) -> float:
+    value = _require_finite_number(value, name=name)
     if not 0 < value <= 1:
         raise ValueError(f"{name} must be > 0 and <= 1")
     return value
@@ -53,7 +64,15 @@ def build_vad(
 ):
     """Construct the bounded Silero VAD used by this runner."""
 
-    _require_probability(threshold, name="threshold")
+    threshold = _require_probability(threshold, name="threshold")
+    min_silence_seconds = _require_finite_number(
+        min_silence_seconds,
+        name="min_silence_seconds",
+    )
+    max_speech_seconds = _require_finite_number(
+        max_speech_seconds,
+        name="max_speech_seconds",
+    )
     if min_silence_seconds <= 0:
         raise ValueError("min_silence_seconds must be positive")
     if not 0 < max_speech_seconds <= 30:
