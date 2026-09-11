@@ -390,6 +390,7 @@ class GroupedRefineScheduler:
         )
         self._pending: list[RefineParentFinal] = []
         self._sequence = 0
+        self._idle_silence_samples = 0
 
     @property
     def pending(self) -> tuple[RefineParentFinal, ...]:
@@ -406,6 +407,7 @@ class GroupedRefineScheduler:
         self._sequence += 1
         parents = tuple(self._pending)
         self._pending.clear()
+        self._idle_silence_samples = 0
         duration = end_sample - start_sample
         eligible = duration >= self.config.min_group_samples
         return GroupedRefineRequest(
@@ -423,25 +425,34 @@ class GroupedRefineScheduler:
             skip_reason=None if eligible else "group-too-short",
         )
 
-    def _close_if_idle(self, now_sample: int) -> list[GroupedRefineRequest]:
-        if not self._pending:
-            return []
-        if now_sample < self._pending[-1].end_sample:
-            raise ValueError("now_sample cannot precede the latest pending final")
-        if now_sample - self._pending[-1].end_sample < self.config.idle_gap_samples:
-            return []
-        return [self._close("idle-gap")]
-
     def feed_pcm16(
         self,
         pcm16le: bytes,
         *,
+        speech: bool = False,
         start_sample: int | None = None,
     ) -> tuple[GroupedRefineRequest, ...]:
-        """Append exact raw stream PCM and close a pending group after true idle."""
+        """Append raw PCM and count only VAD-confirmed silence toward idle close.
 
+        Callers integrating the realtime VAD path must pass its speech decision for
+        every chunk.  The default remains non-speech for deterministic/offline
+        scheduler fixtures, but live integration must not infer idle from wall-clock
+        distance alone.
+        """
+
+        if not isinstance(speech, bool):
+            raise TypeError("speech must be bool")
         self.history.append(pcm16le, start_sample=start_sample)
-        return tuple(self._close_if_idle(self.history.end_sample))
+        if not self._pending:
+            self._idle_silence_samples = 0
+            return ()
+        if speech:
+            self._idle_silence_samples = 0
+            return ()
+        self._idle_silence_samples += len(pcm16le) // 2
+        if self._idle_silence_samples < self.config.idle_gap_samples:
+            return ()
+        return (self._close("idle-gap"),)
 
     def add_final(self, parent: RefineParentFinal) -> tuple[GroupedRefineRequest, ...]:
         """Register one immutable first-pass final in chronological order."""
@@ -470,6 +481,7 @@ class GroupedRefineScheduler:
                 output.append(self._close("parent-limit"))
 
         self._pending.append(parent)
+        self._idle_silence_samples = 0
         if parent.end_sample - self._pending[0].start_sample >= self.config.max_group_samples:
             output.append(self._close("max-duration"))
         return tuple(output)
@@ -508,5 +520,6 @@ class GroupedRefineScheduler:
         if not self.session_id:
             raise ValueError("new_session_id cannot be empty")
         self._sequence = 0
+        self._idle_silence_samples = 0
         self.history.clear(start_sample=0)
         return flushed, discarded
