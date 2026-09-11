@@ -443,7 +443,9 @@ class RealtimeReazonSession:
             audio_sha256=audio_sha256,
             final_digest=event.evidence_digest,
         )
-        evicted = self._history[0].utterance_id if len(self._history) == self._history.maxlen else None
+        evicted = (
+            self._history[0].utterance_id if len(self._history) == self._history.maxlen else None
+        )
         self._history.append(final)
         if evicted is not None and all(item.utterance_id != evicted for item in self._history):
             self._refined.discard(evicted)
