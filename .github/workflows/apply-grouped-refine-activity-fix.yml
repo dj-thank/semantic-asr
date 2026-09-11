@@ -1,0 +1,171 @@
+name: Apply grouped refine activity fix
+
+on:
+  push:
+    branches:
+      - codex/grouped-realtime-refine-66-clean
+    paths:
+      - ".patch-bootstrap/grouped-refine-activity.READY"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-grouped-refine-activity-66
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/grouped-realtime-refine-66-clean
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Apply activity-aware idle patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("src/semantic_asr/realtime_refine.py")
+          text = path.read_text(encoding="utf-8")
+
+          old = """        self._pending: list[RefineParentFinal] = []
+                  self._sequence = 0
+          """
+          new = """        self._pending: list[RefineParentFinal] = []
+                  self._sequence = 0
+                  self._idle_silence_samples = 0
+          """
+          if old not in text:
+              raise SystemExit("init anchor not found")
+          text = text.replace(old, new, 1)
+
+          old = """        parents = tuple(self._pending)
+                  self._pending.clear()
+                  duration = end_sample - start_sample
+          """
+          new = """        parents = tuple(self._pending)
+                  self._pending.clear()
+                  self._idle_silence_samples = 0
+                  duration = end_sample - start_sample
+          """
+          if old not in text:
+              raise SystemExit("close anchor not found")
+          text = text.replace(old, new, 1)
+
+          old = """    def _close_if_idle(self, now_sample: int) -> list[GroupedRefineRequest]:
+                  if not self._pending:
+                      return []
+                  if now_sample < self._pending[-1].end_sample:
+                      raise ValueError(\"now_sample cannot precede the latest pending final\")
+                  if now_sample - self._pending[-1].end_sample < self.config.idle_gap_samples:
+                      return []
+                  return [self._close(\"idle-gap\")]
+
+              def feed_pcm16(
+                  self,
+                  pcm16le: bytes,
+                  *,
+                  start_sample: int | None = None,
+              ) -> tuple[GroupedRefineRequest, ...]:
+                  \"\"\"Append exact raw stream PCM and close a pending group after true idle.\"\"\"
+
+                  self.history.append(pcm16le, start_sample=start_sample)
+                  return tuple(self._close_if_idle(self.history.end_sample))
+          """
+          new = """    def feed_pcm16(
+                  self,
+                  pcm16le: bytes,
+                  *,
+                  speech: bool = False,
+                  start_sample: int | None = None,
+              ) -> tuple[GroupedRefineRequest, ...]:
+                  \"\"\"Append raw PCM and count only VAD-confirmed silence toward idle close.
+
+                  Callers integrating the realtime VAD path must pass its speech decision for
+                  every chunk.  The default remains non-speech for deterministic/offline
+                  scheduler fixtures, but live integration must not infer idle from wall-clock
+                  distance alone.
+                  \"\"\"
+
+                  if not isinstance(speech, bool):
+                      raise TypeError(\"speech must be bool\")
+                  self.history.append(pcm16le, start_sample=start_sample)
+                  if not self._pending:
+                      self._idle_silence_samples = 0
+                      return ()
+                  if speech:
+                      self._idle_silence_samples = 0
+                      return ()
+                  self._idle_silence_samples += len(pcm16le) // 2
+                  if self._idle_silence_samples < self.config.idle_gap_samples:
+                      return ()
+                  return (self._close(\"idle-gap\"),)
+          """
+          if old not in text:
+              raise SystemExit("feed anchor not found")
+          text = text.replace(old, new, 1)
+
+          old = """        self._pending.append(parent)
+                  if parent.end_sample - self._pending[0].start_sample >= self.config.max_group_samples:
+          """
+          new = """        self._pending.append(parent)
+                  self._idle_silence_samples = 0
+                  if parent.end_sample - self._pending[0].start_sample >= self.config.max_group_samples:
+          """
+          if old not in text:
+              raise SystemExit("add-final anchor not found")
+          text = text.replace(old, new, 1)
+
+          old = """        self._sequence = 0
+                  self.history.clear(start_sample=0)
+                  return flushed, discarded
+          """
+          new = """        self._sequence = 0
+                  self._idle_silence_samples = 0
+                  self.history.clear(start_sample=0)
+                  return flushed, discarded
+          """
+          if old not in text:
+              raise SystemExit("reset anchor not found")
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
+
+          test_path = Path("tests/test_realtime_refine_activity.py")
+          test_path.write_text(
+              '''import hashlib\n\nimport pytest\n\nfrom semantic_asr.realtime_refine import GroupedRefineScheduler, RefineParentFinal\n\nSR = 16_000\n\n\ndef pcm(milliseconds: int, *, value: int = 1) -> bytes:\n    count = round(SR * milliseconds / 1000)\n    return int(value).to_bytes(2, "little", signed=True) * count\n\n\ndef parent() -> RefineParentFinal:\n    return RefineParentFinal(\n        utterance_id="u1",\n        final_digest=hashlib.sha256(b"final").hexdigest(),\n        audio_sha256=hashlib.sha256(b"audio").hexdigest(),\n        start_sample=0,\n        end_sample=SR,\n        observed_text="first",\n    )\n\n\ndef test_active_speech_never_counts_toward_idle_gap():\n    scheduler = GroupedRefineScheduler(session_id="s")\n    scheduler.feed_pcm16(pcm(1_000), speech=True)\n    scheduler.add_final(parent())\n\n    for _ in range(3):\n        assert scheduler.feed_pcm16(pcm(1_000), speech=True) == ()\n    assert [item.utterance_id for item in scheduler.pending] == ["u1"]\n\n    assert scheduler.feed_pcm16(pcm(1_999, value=0), speech=False) == ()\n    events = scheduler.feed_pcm16(pcm(1, value=0), speech=False)\n    assert len(events) == 1\n    assert events[0].trigger == "idle-gap"\n\n\ndef test_new_speech_resets_accumulated_silence():\n    scheduler = GroupedRefineScheduler(session_id="s")\n    scheduler.feed_pcm16(pcm(1_000), speech=True)\n    scheduler.add_final(parent())\n\n    assert scheduler.feed_pcm16(pcm(1_500, value=0), speech=False) == ()\n    assert scheduler.feed_pcm16(pcm(100), speech=True) == ()\n    assert scheduler.feed_pcm16(pcm(1_999, value=0), speech=False) == ()\n    events = scheduler.feed_pcm16(pcm(1, value=0), speech=False)\n    assert len(events) == 1\n    assert events[0].trigger == "idle-gap"\n\n\ndef test_activity_flag_fails_closed_on_non_bool():\n    scheduler = GroupedRefineScheduler(session_id="s")\n    with pytest.raises(TypeError, match="speech must be bool"):\n        scheduler.feed_pcm16(pcm(10), speech=1)\n    assert scheduler.history.end_sample == 0\n''',
+              encoding="utf-8",
+          )
+      - name: Format and validate targeted files
+        run: |
+          python -m pip install "ruff>=0.8" pytest
+          python -m ruff format \
+            src/semantic_asr/realtime_refine.py \
+            tests/test_realtime_refine.py \
+            tests/test_realtime_refine_activity.py
+          python -m ruff check \
+            src/semantic_asr/realtime_refine.py \
+            tests/test_realtime_refine.py \
+            tests/test_realtime_refine_activity.py
+          PYTHONPATH=src pytest -q \
+            tests/test_realtime_refine.py \
+            tests/test_realtime_refine_activity.py
+          git diff --check
+      - name: Remove one-shot workflow and commit
+        run: |
+          git rm -f \
+            .github/workflows/apply-grouped-refine-activity-fix.yml \
+            .patch-bootstrap/grouped-refine-activity.READY
+          git add \
+            src/semantic_asr/realtime_refine.py \
+            tests/test_realtime_refine_activity.py
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: require activity-aware grouped refine idle"
+          git push origin HEAD:codex/grouped-realtime-refine-66-clean
