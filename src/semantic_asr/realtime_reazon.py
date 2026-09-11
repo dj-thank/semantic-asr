@@ -188,14 +188,13 @@ class RealtimeEvent:
             raise ValueError(f"{self.kind} requires audio_sha256")
         if self.kind == "refine" and self.parent_final_digest is None:
             raise ValueError("refine requires parent_final_digest")
-        if self.decode_duration_ms is not None:
-            if (
-                isinstance(self.decode_duration_ms, bool)
-                or not isinstance(self.decode_duration_ms, (int, float))
-                or not math.isfinite(float(self.decode_duration_ms))
-                or self.decode_duration_ms < 0
-            ):
-                raise ValueError("decode_duration_ms must be finite and non-negative")
+        if self.decode_duration_ms is not None and (
+            isinstance(self.decode_duration_ms, bool)
+            or not isinstance(self.decode_duration_ms, (int, float))
+            or not math.isfinite(float(self.decode_duration_ms))
+            or self.decode_duration_ms < 0
+        ):
+            raise ValueError("decode_duration_ms must be finite and non-negative")
 
     @property
     def evidence_digest(self) -> str:
