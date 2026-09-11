@@ -1,0 +1,58 @@
+name: Apply grouped refine Ruff cleanup
+
+on:
+  push:
+    branches:
+      - codex/grouped-realtime-refine-66-clean
+    paths:
+      - ".patch-bootstrap/grouped-refine-ruff.READY"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-grouped-refine-ruff-66
+  cancel-in-progress: false
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/grouped-realtime-refine-66-clean
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install Ruff
+        run: python -m pip install "ruff>=0.8"
+      - name: Format and lint only grouped-refine files
+        run: |
+          python -m ruff format \
+            src/semantic_asr/realtime_refine.py \
+            tests/test_realtime_refine.py
+          python -m ruff check --fix --unsafe-fixes \
+            src/semantic_asr/realtime_refine.py \
+            tests/test_realtime_refine.py
+          python -m ruff format \
+            src/semantic_asr/realtime_refine.py \
+            tests/test_realtime_refine.py
+          python -m ruff check \
+            src/semantic_asr/realtime_refine.py \
+            tests/test_realtime_refine.py
+          git diff --check
+      - name: Remove one-shot workflow and commit cleanup
+        run: |
+          git rm -f \
+            .github/workflows/apply-grouped-refine-ruff.yml \
+            .patch-bootstrap/grouped-refine-ruff.READY
+          git add \
+            src/semantic_asr/realtime_refine.py \
+            tests/test_realtime_refine.py
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "style: format grouped realtime refine slice"
+          git push origin HEAD:codex/grouped-realtime-refine-66-clean
