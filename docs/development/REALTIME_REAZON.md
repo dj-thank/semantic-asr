@@ -79,6 +79,8 @@ The first runner intentionally bridges each partial/final PCM buffer through a t
 
 The runner uses sherpa-onnx Silero with the same core shape as Hayamimi: 512-sample windows, threshold 0.5, 0.25 s minimum speech, 0.35 s silence and a 12 s maximum segment. Silero therefore owns the main endpoint. `RealtimeReazonSession` closes on the first non-speech chunk after that transition instead of adding another 350 ms endpoint delay.
 
+sherpa-onnx also keeps completed VAD segments in an internal queue until the caller pops them. Semantic ASR keeps its own exact PCM evidence buffer, so retaining those duplicate VAD-owned segments would only grow process state on long recordings. The runner therefore drains every completed VAD segment after each input step and again after `vad.flush()`, matching Hayamimi's queue lifecycle while keeping transcript evidence bound only to Semantic ASR's PCM buffer. The run summary records `drainedVadSegments` so this lifecycle is visible during evaluation.
+
 No model is downloaded automatically. The runner verifies the exact local VAD file and Reazon model directory before inference.
 
 ## Evidence and failure rules
@@ -89,6 +91,7 @@ No model is downloaded automatically. The runner verifies the exact local VAD fi
 - A refine event requires the matching final ID/digest and matching audio digest.
 - Refiner failure emits a warning and leaves the final untouched.
 - Chunks larger than the configured bound, malformed PCM, unsupported sample rate and invalid timing/config values fail closed.
+- VAD numeric controls reject booleans, NaN, infinity and out-of-range values before constructing sherpa-onnx state.
 - Session reset clears PCM history, final history, refine state and sequence identity.
 - No transcript correctness probability is fabricated from native Reazon output.
 
@@ -112,7 +115,7 @@ A latency optimization is accepted only if the same quality/evidence contract st
 
 ## Next bounded patches
 
-1. Run CI/model-free contract tests for this slice.
+1. Keep the model-free realtime contract green across the full repository CI matrix.
 2. Add a characterization test for the existing temporary-WAV Reazon bridge.
 3. Measure bridge overhead vs decoder time on fixed local audio.
 4. Only if material, add an in-memory Reazon decode path with byte-identical preprocessing/evidence tests.
