@@ -75,6 +75,23 @@ def build_vad(
     return sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=VAD_BUFFER_S)
 
 
+def _drain_vad_queue(vad) -> int:
+    """Discard completed VAD-owned segments after our PCM session has consumed them.
+
+    sherpa-onnx retains completed segments until callers pop them.  Semantic ASR owns
+    its own exact PCM evidence buffer, so keeping the duplicate VAD segments only
+    grows queued state during long sessions.  Hayamimi drains the same queue after
+    every input step; this helper mirrors that lifecycle without treating VAD-owned
+    audio as transcript evidence.
+    """
+
+    drained = 0
+    while not vad.empty():
+        vad.pop()
+        drained += 1
+    return drained
+
+
 def validate_wave(path: Path) -> tuple[int, int]:
     with wave.open(str(path), "rb") as handle:
         if handle.getnchannels() != 1:
@@ -177,6 +194,7 @@ def run(args: argparse.Namespace) -> int:
 
     started = time.perf_counter()
     accepted_samples = 0
+    drained_vad_segments = 0
     try:
         with wave.open(str(source), "rb") as handle:
             while True:
@@ -189,10 +207,12 @@ def run(args: argparse.Namespace) -> int:
                 vad.accept_waveform(samples)
                 speech = bool(vad.is_speech_detected())
                 _emit(session.feed_pcm16(raw, speech=speech), output=output_handle)
+                drained_vad_segments += _drain_vad_queue(vad)
                 accepted_samples += len(samples)
                 if args.realtime:
                     time.sleep(len(samples) / SAMPLE_RATE)
         vad.flush()
+        drained_vad_segments += _drain_vad_queue(vad)
         _emit(session.flush(), output=output_handle)
         elapsed = time.perf_counter() - started
         summary = {
@@ -206,6 +226,7 @@ def run(args: argparse.Namespace) -> int:
             "rtf": elapsed / (total_frames / SAMPLE_RATE) if total_frames else None,
             "modelArtifactSha256": adapter.model_artifact_sha256,
             "vadArtifactSha256": args.vad_model_sha256.lower(),
+            "drainedVadSegments": drained_vad_segments,
             "vad": {
                 "threshold": args.vad_threshold,
                 "minSilenceSeconds": args.vad_min_silence,
