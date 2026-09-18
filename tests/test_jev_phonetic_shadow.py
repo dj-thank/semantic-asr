@@ -314,3 +314,40 @@ def test_joined_is_only_a_serialization_change(record, arm):
 def test_duplicate_main_arms_are_rejected():
     with pytest.raises(SystemExit):
         m.parse_args(["--probe-dir", "a", "--output-dir", "b", "--main-arms", "joined", "joined"])
+
+
+@pytest.mark.parametrize("bad", [None, [], "not-an-object"])
+def test_response_must_be_an_object(bad):
+    with pytest.raises(ValueError):
+        m.validate_answer(bad, {"c00": "a", "c01": "b"})
+
+
+def test_empty_observation_is_explicitly_unavailable(record):
+    record["phone_greedy"] = []
+    request, _ = m.build_request(record, [], "greedy")
+    assert not request["state"]["audio_observation"]["available"]
+
+
+def test_unexecuted_model_has_no_measured_cer():
+    row = {
+        "candidate_count": 1,
+        "oracle_exact_in_candidates": True,
+        "duration_seconds": 1,
+        "reference_characters": 10,
+        "baseline_errors": 2,
+        "arms": {
+            "baseline": {"errors": 2},
+            "greedy": {
+                "errors": 2,
+                "raw_choice": None,
+                "gate_reason": "not-executed",
+                "response": {"status": "not-executed"},
+            },
+        },
+    }
+    report = m.summarize([row], {"status": "offline-only"})
+    assert report["arms"]["baseline"]["cer"] == 0.2
+    assert report["arms"]["greedy"]["cer"] is None
+    assert report["arms"]["greedy"]["fallback_cer"] == 0.2
+    assert report["arms"]["greedy"]["validated_model_decisions"] == 0
+    assert report["arms"]["greedy"]["evaluation_status"] == "no-valid-model-decisions"

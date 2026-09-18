@@ -145,7 +145,7 @@ def build_request(
     ]
     observation = {
         "greedy_phones": [] if arm == "no_observation" else list(record["phone_greedy"]),
-        "available": arm != "no_observation",
+        "available": arm != "no_observation" and bool(record["phone_greedy"]),
     }
     if arm == "paths":
         observation["valid_ctc_prefix_alternatives"] = alternatives
@@ -187,9 +187,15 @@ def build_request(
 
 
 def validate_answer(response: dict[str, Any], aliases: dict[str, str]) -> dict[str, Any]:
+    if not isinstance(response, dict):
+        raise ValueError("response must be an object")
     if response.get("model") != MODEL:
         raise ValueError("returned model is not the pinned model")
+    if not isinstance(response.get("answers"), dict):
+        raise ValueError("answers must be an object")
     answer = response["answers"]["supported_utterance"]
+    if not isinstance(answer, dict) or not isinstance(response.get("usage"), dict):
+        raise ValueError("answer and usage must be objects")
     allowed = set(aliases) | {"abstain"}
     if answer.get("type") != "choice" or answer.get("choice") not in allowed:
         raise ValueError("invalid choice contract")
@@ -437,19 +443,26 @@ def summarize(rows: list[dict[str, Any]], receipt: dict[str, Any]) -> dict[str, 
             "tied": 0,
             "accepted": 0,
             "abstained_or_blocked": 0,
+            "validated_model_decisions": 0,
         }
     )
     for row in rows:
         for arm, result in row["arms"].items():
             total = totals[arm]
             total["records"] += 1
+            total["validated_model_decisions"] += result.get("raw_choice") is not None
             total["reference_characters"] += row["reference_characters"]
             total["errors"] += result["errors"]
             difference = result["errors"] - row["baseline_errors"]
             total["improved" if difference < 0 else "harmed" if difference > 0 else "tied"] += 1
             total["accepted" if result.get("gate_reason") is None else "abstained_or_blocked"] += 1
-    for total in totals.values():
-        total["cer"] = total["errors"] / max(1, total["reference_characters"])
+    for arm, total in totals.items():
+        total["fallback_cer"] = total["errors"] / max(1, total["reference_characters"])
+        executed = (
+            arm in {"baseline", "local_ctc", "oracle"} or total["validated_model_decisions"] > 0
+        )
+        total["evaluation_status"] = "evaluated" if executed else "no-valid-model-decisions"
+        total["cer"] = total["fallback_cer"] if executed else None
     diagnostics = {
         "raw_no_observation_nonabstain": 0,
         "no_observation_responses": 0,
@@ -609,7 +622,10 @@ def run(args: argparse.Namespace, key: str | None = None) -> dict[str, Any]:
                     try:
                         answer = validate_answer(response["response"], aliases)
                         selected, reason = selected_or_baseline(
-                            record, answer["choice"], aliases, arm != "no_observation"
+                            record,
+                            answer["choice"],
+                            aliases,
+                            arm != "no_observation" and bool(record["phone_greedy"]),
                         )
                     except (ValueError, KeyError, TypeError):
                         reason = "malformed-response"

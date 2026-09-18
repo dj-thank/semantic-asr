@@ -3,6 +3,7 @@
 No API or new model download. Corrupted recordings retain parent identity. Gaussian
 noise is synthetic; this is NOT a naturally noisy conversation benchmark.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -36,10 +37,14 @@ def corrupt(audio, snr_db: float, seed: int):
     waveform = (pcm.astype("float32") / 32768).astype("float32")
     actual_noise = waveform.astype("float64") - signal
     achieved = float(10 * np.log10(power / np.mean(actual_noise * actual_noise)))
-    return waveform, {"target_snr_db": snr_db, "achieved_snr_db": achieved,
-                      "seed": seed, "clipped_samples": clipped,
-                      "pcm16_sha256": hashlib.sha256(pcm.tobytes()).hexdigest(),
-                      "float_pcm_sha256": hashlib.sha256(waveform.astype("<f4").tobytes()).hexdigest()}
+    return waveform, {
+        "target_snr_db": snr_db,
+        "achieved_snr_db": achieved,
+        "seed": seed,
+        "clipped_samples": clipped,
+        "pcm16_sha256": hashlib.sha256(pcm.tobytes()).hexdigest(),
+        "float_pcm_sha256": hashlib.sha256(waveform.astype("<f4").tobytes()).hexdigest(),
+    }
 
 
 def run(args):
@@ -49,7 +54,11 @@ def run(args):
     if out.exists():
         raise FileExistsError("do not overwrite an experiment")
     manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
-    if not manifest.get("complete") or manifest.get("dataset") != "google/fleurs" or manifest.get("data_license") != "CC-BY-4.0":
+    if (
+        not manifest.get("complete")
+        or manifest.get("dataset") != "google/fleurs"
+        or manifest.get("data_license") != "CC-BY-4.0"
+    ):
         raise ValueError("requires the completed reviewed public FLEURS collection")
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -65,7 +74,7 @@ def run(args):
 
     from semantic_asr.api import load_transcriber, transcribe
 
-    entries = [r for r in manifest["records"] if r["split"] == "validation"][:args.parent_records]
+    entries = [r for r in manifest["records"] if r["split"] == "validation"][: args.parent_records]
     parents = {}
     for entry in entries:
         file = source / (entry["id"] + ".json")
@@ -75,27 +84,48 @@ def run(args):
         parents[parent["source_id"]] = parent
     torch.set_num_threads(2)
     torch.manual_seed(17)
-    extractor = Wav2Vec2FeatureExtractor.from_pretrained(manifest["phone_model"],
-        revision=manifest["phone_revision"], local_files_only=True)
-    phone_model = HubertForCTC.from_pretrained(manifest["phone_model"],
-        revision=manifest["phone_revision"], local_files_only=True, use_safetensors=True).eval()
+    extractor = Wav2Vec2FeatureExtractor.from_pretrained(
+        manifest["phone_model"], revision=manifest["phone_revision"], local_files_only=True
+    )
+    phone_model = HubertForCTC.from_pretrained(
+        manifest["phone_model"],
+        revision=manifest["phone_revision"],
+        local_files_only=True,
+        use_safetensors=True,
+    ).eval()
     vocab = json.loads((source / "vocab.json").read_text(encoding="utf-8"))
     inverse = {index: symbol for symbol, index in vocab.items()}
     blank = phone_model.config.pad_token_id
     warm = load_transcriber("cpu-ja-v1")
-    parquet = hf_hub_download("google/fleurs", "parquet-data/ja_jp/validation-00000-of-00001.parquet",
-        repo_type="dataset", revision=manifest["dataset_revision"], local_files_only=True)
+    parquet = hf_hub_download(
+        "google/fleurs",
+        "parquet-data/ja_jp/validation-00000-of-00001.parquet",
+        repo_type="dataset",
+        revision=manifest["dataset_revision"],
+        local_files_only=True,
+    )
     out.mkdir(parents=True)
-    receipt = {"schema": "jev-offline-noise-v1", "status": "running",
+    receipt = {
+        "schema": "jev-offline-noise-v1",
+        "status": "running",
         "source_manifest_sha256": file_digest(source / "manifest.json"),
-        "runner_sha256": file_digest(Path(__file__)), "dataset_revision": manifest["dataset_revision"],
-        "phone_model": manifest["phone_model"], "phone_revision": manifest["phone_revision"],
-        "whisper_revision": manifest["whisper_revision"], "data_license": "CC-BY-4.0",
+        "runner_sha256": file_digest(Path(__file__)),
+        "dataset_revision": manifest["dataset_revision"],
+        "phone_model": manifest["phone_model"],
+        "phone_revision": manifest["phone_revision"],
+        "whisper_revision": manifest["whisper_revision"],
+        "data_license": "CC-BY-4.0",
         "attribution": "Google / Conneau et al., FLEURS (2022)",
-        "synthetic_corruption_of_recorded_speech": True, "new_independent_recordings": 0,
-        "reference_used_during_inference": False, "api_calls": 0, "audio_uploaded": False,
-        "model_downloads_allowed": False, "max_derived_conditions": 2 * len(parents),
-        "max_wall_seconds": args.max_wall_seconds, "evaluation_role": "development-exposed"}
+        "synthetic_corruption_of_recorded_speech": True,
+        "new_independent_recordings": 0,
+        "reference_used_during_inference": False,
+        "api_calls": 0,
+        "audio_uploaded": False,
+        "model_downloads_allowed": False,
+        "max_derived_conditions": 2 * len(parents),
+        "max_wall_seconds": args.max_wall_seconds,
+        "evaluation_role": "development-exposed",
+    }
     save(out / "receipt.json", receipt)
     results, completed = [], set()
     start = time.monotonic()
@@ -122,8 +152,11 @@ def run(args):
                     with torch.inference_mode():
                         logs = phone_model(**inputs).logits[0].float().log_softmax(-1).cpu().numpy()
                     phones = logs.argmax(-1)
-                    greedy = [inverse[int(p)] for i, p in enumerate(phones)
-                              if (i == 0 or p != phones[i - 1]) and int(p) != blank]
+                    greedy = [
+                        inverse[int(p)]
+                        for i, p in enumerate(phones)
+                        if (i == 0 or p != phones[i - 1]) and int(p) != blank
+                    ]
                     phone_seconds = time.monotonic() - began
                     began = time.monotonic()
                     asr = transcribe(waveform, transcriber=warm)
@@ -137,36 +170,68 @@ def run(args):
                     reference = normalized(parent["reference"])
                     ref_phones = parent["reference_phones"]
                     predicted_phones = pyopenjtalk.g2p(observed.text).split()
-                    result = {"id": label, "parent_id": parent["id"], "parent_pcm_sha256": parent_hash,
-                        "source_id": sid, "duration_seconds": len(audio) / rate, "corruption": corruption,
-                        "reference_characters": len(reference), "clean_errors": edits(reference, normalized(parent["baseline_text"])),
+                    result = {
+                        "id": label,
+                        "parent_id": parent["id"],
+                        "parent_pcm_sha256": parent_hash,
+                        "source_id": sid,
+                        "duration_seconds": len(audio) / rate,
+                        "corruption": corruption,
+                        "reference_characters": len(reference),
+                        "clean_errors": edits(reference, normalized(parent["baseline_text"])),
                         "noisy_errors": edits(reference, normalized(observed.text)),
-                        "clean_text": parent["baseline_text"], "noisy_text": observed.text,
-                        "phone_greedy": greedy, "candidate_count": len(observed.candidates),
+                        "clean_text": parent["baseline_text"],
+                        "noisy_text": observed.text,
+                        "phone_greedy": greedy,
+                        "candidate_count": len(observed.candidates),
                         "observed_phone_changes_from_clean": edits(parent["phone_greedy"], greedy),
                         "g2p_reference_proxy_phone_count": len(ref_phones),
-                        "clean_g2p_proxy_errors": edits(ref_phones, pyopenjtalk.g2p(parent["baseline_text"]).split()),
+                        "clean_g2p_proxy_errors": edits(
+                            ref_phones, pyopenjtalk.g2p(parent["baseline_text"]).split()
+                        ),
                         "noisy_g2p_proxy_errors": edits(ref_phones, predicted_phones),
                         "g2p_proxy_is_not_gold_phonetic_annotation": True,
-                        "phone_seconds": phone_seconds, "asr_seconds": asr_seconds,
+                        "phone_seconds": phone_seconds,
+                        "asr_seconds": asr_seconds,
                         "asr_source_audio_sha256": asr.source_audio_sha256,
-                        "posterior_sha256": file_digest(out / (label + ".npz"))}
+                        "posterior_sha256": file_digest(out / (label + ".npz")),
+                    }
                     save(out / (label + ".json"), result)
                     results.append(result)
                     save(out / "results.json", results)
-                    print(json.dumps({"id": label, "clean_errors": result["clean_errors"],
-                        "noisy_errors": result["noisy_errors"], "completed": len(results)}), flush=True)
+                    print(
+                        json.dumps(
+                            {
+                                "id": label,
+                                "clean_errors": result["clean_errors"],
+                                "noisy_errors": result["noisy_errors"],
+                                "completed": len(results),
+                            }
+                        ),
+                        flush=True,
+                    )
                 completed.add(sid)
             if len(completed) == len(parents):
                 break
-        receipt["status"] = "completed" if len(completed) == len(parents) else "partial-missing-parent"
+        receipt["status"] = (
+            "completed" if len(completed) == len(parents) else "partial-missing-parent"
+        )
     except Exception as exc:
-        receipt.update({"status": "partial" if isinstance(exc, TimeoutError) else "failed",
-                        "error_type": type(exc).__name__})
+        receipt.update(
+            {
+                "status": "partial" if isinstance(exc, TimeoutError) else "failed",
+                "error_type": type(exc).__name__,
+            }
+        )
         raise
     finally:
-        receipt.update({"completed_conditions": len(results), "completed_parents": len(completed),
-                        "wall_seconds": time.monotonic() - start})
+        receipt.update(
+            {
+                "completed_conditions": len(results),
+                "completed_parents": len(completed),
+                "wall_seconds": time.monotonic() - start,
+            }
+        )
         save(out / "receipt.json", receipt)
     return receipt
 
