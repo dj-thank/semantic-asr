@@ -125,10 +125,18 @@ def build_request(
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """Strict allowlist projection: deliberately never copies the input record."""
     validate_record(record)
-    if arm not in {"greedy", "paths", "reordered", "no_observation", "repeat"}:
+    if arm not in {
+        "greedy",
+        "paths",
+        "reordered",
+        "no_observation",
+        "repeat",
+        "joined",
+        "joined_reordered",
+    }:
         raise ValueError("unknown experiment arm")
     candidates = list(record["candidates"])
-    if arm == "reordered":
+    if arm in {"reordered", "joined_reordered"}:
         candidates.reverse()
     aliases = {f"c{i:02d}": candidate["id"] for i, candidate in enumerate(candidates)}
     hypotheses = [
@@ -148,6 +156,10 @@ def build_request(
             "exhaustive": False,
             "independent_votes": False,
         }
+    if arm in {"joined", "joined_reordered"}:
+        observation["greedy_phones"] = " ".join(record["phone_greedy"])
+        for hypothesis in hypotheses:
+            hypothesis["phones"] = " ".join(hypothesis["phones"])
     state = {
         "audio_observation": observation,
         "candidate_pronunciation_hypotheses": hypotheses,
@@ -536,6 +548,7 @@ def run(args: argparse.Namespace, key: str | None = None) -> dict[str, Any]:
         "raw_requests_and_responses_saved_locally": True,
         "new_asr_inference_in_this_runner": False,
         "requested_records": len(entries),
+        "main_arms": args.main_arms,
         "status": "running",
     }
     save(output / "receipt.json", receipt)
@@ -583,7 +596,7 @@ def run(args: argparse.Namespace, key: str | None = None) -> dict[str, Any]:
                     "oracle": {"errors": min(errors.values())},
                 },
             }
-            arms = ["greedy", "paths", "reordered"]
+            arms = list(args.main_arms)
             if index < args.diagnostic_records:
                 arms += ["no_observation", "repeat"]
             for arm in arms:
@@ -626,8 +639,7 @@ def run(args: argparse.Namespace, key: str | None = None) -> dict[str, Any]:
                         "sample": sample,
                         "completed": len(rows),
                         "baseline_errors": errors[baseline],
-                        "greedy_errors": row["arms"]["greedy"]["errors"],
-                        "paths_errors": row["arms"]["paths"]["errors"],
+                        "arm_errors": {name: row["arms"][name]["errors"] for name in arms},
                         "calls": client.calls if client else 0,
                     }
                 ),
@@ -675,7 +687,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-input-tokens", type=int, default=4000000)
     parser.add_argument("--max-wall-seconds", type=int, default=3600)
     parser.add_argument("--diagnostic-records", type=int, default=12)
+    parser.add_argument(
+        "--main-arms",
+        nargs="+",
+        choices=["greedy", "paths", "reordered", "joined", "joined_reordered"],
+        default=["greedy", "paths", "reordered"],
+    )
     args = parser.parse_args(argv)
+    if len(args.main_arms) != len(set(args.main_arms)):
+        parser.error("main arms must not contain duplicates")
     for name, lower, upper in [
         ("max_records", 1, 96),
         ("max_calls", 1, 600),

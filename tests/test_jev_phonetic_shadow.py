@@ -286,3 +286,31 @@ def test_baseline_mismatch_rejected(record):
     record["baseline_text"] = "not its candidate"
     with pytest.raises(ValueError):
         m.build_request(record, [], "greedy")
+
+
+@pytest.mark.parametrize("arm", ["joined", "joined_reordered"])
+def test_joined_is_only_a_serialization_change(record, arm):
+    original_arm = "reordered" if arm.endswith("reordered") else "greedy"
+    original, aliases = m.build_request(record, [], original_arm)
+    joined, joined_aliases = m.build_request(record, [], arm)
+    assert aliases == joined_aliases
+    assert original["questions"] == joined["questions"]
+    a = original["state"]
+    b = joined["state"]
+    assert (
+        b["audio_observation"]["greedy_phones"].split() == a["audio_observation"]["greedy_phones"]
+    )
+    for left, right in zip(
+        a["candidate_pronunciation_hypotheses"],
+        b["candidate_pronunciation_hypotheses"],
+        strict=True,
+    ):
+        assert left["id"] == right["id"]
+        assert left["phones"] == right["phones"].split()
+    encoded = json.dumps(joined, ensure_ascii=False)
+    assert "NEVER_SEND" not in encoded and "食べれる" not in encoded
+
+
+def test_duplicate_main_arms_are_rejected():
+    with pytest.raises(SystemExit):
+        m.parse_args(["--probe-dir", "a", "--output-dir", "b", "--main-arms", "joined", "joined"])
