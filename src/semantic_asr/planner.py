@@ -258,9 +258,10 @@ def plan_evidence(
         raise TypeError("candidate expansion switches must be booleans")
     if not ranked:
         return EvidencePlan((), (), budget.total_cost_ms, 0, 0.0, "no-ranked-candidates")
-    if expand_collapsed_candidates and len(
-        {lenient_surface_key(row.candidate.text) for row in ranked}
-    ) == 1:
+    if (
+        expand_collapsed_candidates
+        and len({lenient_surface_key(row.candidate.text) for row in ranked}) == 1
+    ):
         # This intentionally precedes the conditional-confidence/contradiction gates.
         return _plan_candidate_expansion(
             budget=budget,

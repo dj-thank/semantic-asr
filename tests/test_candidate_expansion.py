@@ -47,9 +47,7 @@ def test_characterize_singleton_posterior_is_not_search_coverage() -> None:
     assert ranked[0].gate.posterior == {"only": 1.0}
     assert ranked[0].gate.needs_relisten is False
     assert not lattice.contradiction_islands
-    plan = plan_evidence(
-        ranked, lattice, whole_window_start_ms=1_000, whole_window_end_ms=3_000
-    )
+    plan = plan_evidence(ranked, lattice, whole_window_start_ms=1_000, whole_window_end_ms=3_000)
     assert plan.selected == ()
     assert plan.stopping_reason == "observation-already-confident"
 
@@ -74,8 +72,11 @@ def test_opt_in_explores_confident_singleton_without_a_contradiction() -> None:
 def test_duplicate_or_format_only_paths_are_not_search_diversity(text: str) -> None:
     ranked, lattice = _inputs([_candidate(), _candidate("duplicate", text)])
     plan = plan_evidence(
-        ranked, lattice, expand_collapsed_candidates=True,
-        whole_window_start_ms=1_000, whole_window_end_ms=3_000,
+        ranked,
+        lattice,
+        expand_collapsed_candidates=True,
+        whole_window_start_ms=1_000,
+        whole_window_end_ms=3_000,
     )
     assert len(plan.selected) == 1
     assert plan.stopping_reason == "candidate-pool-expansion"
@@ -91,14 +92,22 @@ def test_noncollapsed_pool_keeps_existing_localized_plan() -> None:
 
 @pytest.mark.parametrize(
     "budget",
-    [EvidenceBudget(0, 1), EvidenceBudget(12_000, 0), EvidenceBudget(479, 1),
-     EvidenceBudget(12_000, 1, minimum_utility=1.0)],
+    [
+        EvidenceBudget(0, 1),
+        EvidenceBudget(12_000, 0),
+        EvidenceBudget(479, 1),
+        EvidenceBudget(12_000, 1, minimum_utility=1.0),
+    ],
 )
 def test_expansion_respects_budget_actions_and_utility(budget: EvidenceBudget) -> None:
     ranked, lattice = _inputs()
     plan = plan_evidence(
-        ranked, lattice, expand_collapsed_candidates=True, budget=budget,
-        whole_window_start_ms=1_000, whole_window_end_ms=3_000,
+        ranked,
+        lattice,
+        expand_collapsed_candidates=True,
+        budget=budget,
+        whole_window_start_ms=1_000,
+        whole_window_end_ms=3_000,
     )
     assert not plan.selected
     assert plan.rejected
@@ -108,8 +117,12 @@ def test_expansion_respects_budget_actions_and_utility(budget: EvidenceBudget) -
 def test_expensive_second_ear_falls_back_to_admissible_wider_primary() -> None:
     ranked, lattice = _inputs()
     plan = plan_evidence(
-        ranked, lattice, expand_collapsed_candidates=True, budget=EvidenceBudget(480, 1),
-        whole_window_start_ms=1_000, whole_window_end_ms=3_000,
+        ranked,
+        lattice,
+        expand_collapsed_candidates=True,
+        budget=EvidenceBudget(480, 1),
+        whole_window_start_ms=1_000,
+        whole_window_end_ms=3_000,
     )
     assert len(plan.selected) == 1
     assert plan.selected[0].kind == "whisper-relisten"
@@ -121,21 +134,28 @@ def test_expensive_second_ear_falls_back_to_admissible_wider_primary() -> None:
 def test_missing_window_does_not_fabricate_span(start, end) -> None:
     ranked, lattice = _inputs()
     plan = plan_evidence(
-        ranked, lattice, expand_collapsed_candidates=True,
-        whole_window_start_ms=start, whole_window_end_ms=end,
+        ranked,
+        lattice,
+        expand_collapsed_candidates=True,
+        whole_window_start_ms=start,
+        whole_window_end_ms=end,
     )
     assert not plan.selected
     assert plan.stopping_reason == "expansion-missing-window"
 
 
-@pytest.mark.parametrize("start,end", [(-1, 2_000), (2_000, 2_000), (3_000, 2_000),
-                                         (False, 2_000), (0, 2.5)])
+@pytest.mark.parametrize(
+    "start,end", [(-1, 2_000), (2_000, 2_000), (3_000, 2_000), (False, 2_000), (0, 2.5)]
+)
 def test_invalid_window_is_rejected(start, end) -> None:
     ranked, lattice = _inputs()
     with pytest.raises((TypeError, ValueError)):
         plan_evidence(
-            ranked, lattice, expand_collapsed_candidates=True,
-            whole_window_start_ms=start, whole_window_end_ms=end,
+            ranked,
+            lattice,
+            expand_collapsed_candidates=True,
+            whole_window_start_ms=start,
+            whole_window_end_ms=end,
         )
 
 
@@ -196,11 +216,14 @@ def test_default_does_not_add_model_calls_or_change_singleton_decision(tmp_path:
 
 @pytest.mark.parametrize("balanced", [False, True])
 def test_whole_window_second_ear_adds_alternative_without_erasing_primary(
-    tmp_path: Path, balanced: bool,
+    tmp_path: Path,
+    balanced: bool,
 ) -> None:
     second = _Decoder(name="secondary")
     primary, result = _run(
-        tmp_path, second_ear=second, expand_collapsed_candidates=True,
+        tmp_path,
+        second_ear=second,
+        expand_collapsed_candidates=True,
         balanced_router=balanced,
     )
     assert len(primary.requests) == len(second.requests) == 1
@@ -208,7 +231,10 @@ def test_whole_window_second_ear_adds_alternative_without_erasing_primary(
     assert (request.start_ms, request.end_ms) == (0, 2_000)
     assert (request.beam_size, request.hypotheses) == (1, 1)
     segment = result.segments[0]
-    assert {row.text for row in segment.observed.candidates} == {"明日は行きます", "明日は行きません"}
+    assert {row.text for row in segment.observed.candidates} == {
+        "明日は行きます",
+        "明日は行きません",
+    }
     assert segment.observed.decision == "provisional"
     assert segment.observed.force_provisional is True
     receipt = segment.diagnostics["candidateExpansion"]
@@ -232,11 +258,15 @@ def test_primary_only_expands_search_once(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("beam,hypotheses", [(5, 5), (4, 4), (12, 4)])
 def test_identical_or_narrower_search_is_not_counted_as_expansion(
-    tmp_path: Path, beam: int, hypotheses: int,
+    tmp_path: Path,
+    beam: int,
+    hypotheses: int,
 ) -> None:
     primary, result = _run(
-        tmp_path, expand_collapsed_candidates=True,
-        relisten_beam_size=beam, relisten_hypotheses=hypotheses,
+        tmp_path,
+        expand_collapsed_candidates=True,
+        relisten_beam_size=beam,
+        relisten_hypotheses=hypotheses,
     )
     assert len(primary.requests) == 1
     segment = result.segments[0]
@@ -246,7 +276,8 @@ def test_identical_or_narrower_search_is_not_counted_as_expansion(
 
 @pytest.mark.parametrize("kwargs", [{"fail": True}, {"empty": True}, {"same": True}])
 def test_failed_empty_or_redundant_probe_preserves_original_and_is_not_pool_growth(
-    tmp_path: Path, kwargs,
+    tmp_path: Path,
+    kwargs,
 ) -> None:
     second = _Decoder(name="secondary", **kwargs)
     primary, result = _run(tmp_path, second_ear=second, expand_collapsed_candidates=True)
@@ -262,7 +293,9 @@ def test_failed_empty_or_redundant_probe_preserves_original_and_is_not_pool_grow
 
 def test_budget_blocked_expansion_is_not_completion_or_acceptance(tmp_path: Path) -> None:
     primary, result = _run(
-        tmp_path, expand_collapsed_candidates=True, evidence_budget=EvidenceBudget(0, 0),
+        tmp_path,
+        expand_collapsed_candidates=True,
+        evidence_budget=EvidenceBudget(0, 0),
     )
     assert len(primary.requests) == 1
     segment = result.segments[0]
@@ -277,7 +310,10 @@ def test_expansion_reuses_separate_decode_cache_and_preserves_evidence(tmp_path:
     path.write_bytes(b"fixture")
     with EvidenceCache(tmp_path / "cache.sqlite3") as cache:
         transcriber = SemanticASRTranscriber(
-            primary, second_ear=second, cache=cache, expand_collapsed_candidates=True,
+            primary,
+            second_ear=second,
+            cache=cache,
+            expand_collapsed_candidates=True,
         )
         first = transcriber.transcribe(path, duration_ms=2_000)
         repeat = transcriber.transcribe(path, duration_ms=2_000)
