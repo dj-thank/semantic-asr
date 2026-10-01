@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .audio import require_integer
+from .candidate_pool import lenient_surface_key
 from .contracts import RankedCandidate
 from .semantic_lattice import SemanticIsland, SemanticLattice
 
@@ -172,6 +173,65 @@ def _candidate_actions(
     return output
 
 
+def _plan_candidate_expansion(
+    *,
+    budget: EvidenceBudget,
+    enabled: Sequence[ActionKind],
+    allow_primary_expansion: bool,
+    start_ms: int | None,
+    end_ms: int | None,
+) -> EvidencePlan:
+    """Plan one acoustic probe, not an estimate of missing posterior mass.
+
+    The fixed gain is a routing heuristic. A singleton conditional posterior
+    contains no information about hypotheses the decoder did not retrieve.
+    """
+    if start_ms is None or end_ms is None:
+        return EvidencePlan((), (), budget.total_cost_ms, 0, 0.0, "expansion-missing-window")
+    require_integer(start_ms, name="whole_window_start_ms")
+    require_integer(end_ms, name="whole_window_end_ms", minimum=1)
+    if end_ms <= start_ms:
+        raise ValueError("whole-window expansion requires end_ms > start_ms")
+    kinds: list[ActionKind] = []
+    if "qwen-second-ear" in enabled:
+        kinds.append("qwen-second-ear")
+    if allow_primary_expansion and "whisper-relisten" in enabled:
+        kinds.append("whisper-relisten")
+    rejected: list[EvidenceAction] = []
+    reason = "expansion-no-eligible-backend"
+    for kind in kinds:
+        cost = _cost(kind, max(160, end_ms - start_ms))
+        action = EvidenceAction(
+            action_id=f"candidate-expansion:{kind}",
+            kind=kind,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            estimated_cost_ms=cost,
+            expected_information_gain=0.5,
+            semantic_criticality=0.0,
+            utility=0.5 / max(1, cost),
+            reasons=(
+                "collapsed-candidate-pool",
+                "whole-window-candidate-expansion",
+                "secondary-decoder" if kind == "qwen-second-ear" else "wider-primary-search",
+                "heuristic-gain-not-probability",
+            ),
+            affects_observed_decision=True,
+        )
+        if budget.max_actions < 1 or cost > budget.total_cost_ms:
+            rejected.append(action)
+            reason = "budget-exhausted"
+            continue
+        if action.utility < budget.minimum_utility:
+            rejected.append(action)
+            reason = "utility-frontier-reached"
+            continue
+        return EvidencePlan(
+            (action,), tuple(rejected), budget.total_cost_ms, cost, 0.5, "candidate-pool-expansion"
+        )
+    return EvidencePlan((), tuple(rejected), budget.total_cost_ms, 0, 0.0, reason)
+
+
 def plan_evidence(
     ranked: Sequence[RankedCandidate],
     lattice: SemanticLattice,
@@ -188,10 +248,28 @@ def plan_evidence(
     whole_window_start_ms: int | None = None,
     whole_window_end_ms: int | None = None,
     minimum_evidence_coverage: float = 0.55,
+    expand_collapsed_candidates: bool = False,
+    allow_primary_expansion: bool = True,
 ) -> EvidencePlan:
     budget = budget or EvidenceBudget()
+    if not isinstance(expand_collapsed_candidates, bool) or not isinstance(
+        allow_primary_expansion, bool
+    ):
+        raise TypeError("candidate expansion switches must be booleans")
     if not ranked:
         return EvidencePlan((), (), budget.total_cost_ms, 0, 0.0, "no-ranked-candidates")
+    if (
+        expand_collapsed_candidates
+        and len({lenient_surface_key(row.candidate.text) for row in ranked}) == 1
+    ):
+        # This intentionally precedes the conditional-confidence/contradiction gates.
+        return _plan_candidate_expansion(
+            budget=budget,
+            enabled=enabled,
+            allow_primary_expansion=allow_primary_expansion,
+            start_ms=whole_window_start_ms,
+            end_ms=whole_window_end_ms,
+        )
     if not ranked[0].gate.needs_relisten:
         return EvidencePlan((), (), budget.total_cost_ms, 0, 0.0, "observation-already-confident")
     if not lattice.contradiction_islands:
