@@ -149,7 +149,6 @@ def make_reazon_decoder(adapter: ReazonSpeechK2Adapter):
     return decode
 
 
-
 def make_reazon_session(adapter: ReazonSpeechK2Adapter, args: argparse.Namespace):
     """Keep the existing default; opt in to a separately owned warm second pass."""
     decoder = make_reazon_decoder(adapter)
@@ -189,6 +188,7 @@ def make_reazon_session(adapter: ReazonSpeechK2Adapter, args: argparse.Namespace
         max_outstanding_groups=args.max_pending_groups,
     )
 
+
 def _emit(events, *, output) -> None:
     for event in events:
         line = json.dumps(event.as_dict(), ensure_ascii=False, allow_nan=False)
@@ -204,9 +204,7 @@ def run(args: argparse.Namespace) -> int:
     grouped = getattr(args, "grouped_refine", False)
     shutdown_timeout = getattr(args, "refine_shutdown_timeout", 5.0)
     if grouped:
-        shutdown_timeout = _require_finite_number(
-            shutdown_timeout, name="refine_shutdown_timeout"
-        )
+        shutdown_timeout = _require_finite_number(shutdown_timeout, name="refine_shutdown_timeout")
         if shutdown_timeout < 0:
             raise ValueError("refine_shutdown_timeout must be non-negative")
         capacity = args.max_pending_groups
@@ -264,7 +262,8 @@ def run(args: argparse.Namespace) -> int:
             if isinstance(event, GroupedRefineOutcome):
                 outcome_counts[event.status] = outcome_counts.get(event.status, 0) + 1
                 if event.status in {"error", "empty"} or event.reason in {
-                    "queue-capacity", "shutdown-timeout"
+                    "queue-capacity",
+                    "shutdown-timeout",
                 }:
                     refine_incomplete = True
         _emit(events, output=output_handle)
@@ -359,7 +358,8 @@ def main() -> int:
     parser.add_argument("--refine-idle-ms", type=int, default=2000)
     parser.add_argument("--max-history-utterances", type=int, default=16)
     parser.add_argument(
-        "--grouped-refine", action="store_true",
+        "--grouped-refine",
+        action="store_true",
         help="opt in to longer-context candidates on a separate bounded worker (not auto-applied)",
     )
     parser.add_argument("--max-pending-groups", type=int, default=2)

@@ -30,27 +30,42 @@ def request(number=1, *, milliseconds=500):
     digest = hashlib.sha256(data).hexdigest()
     scheduler = GroupedRefineScheduler(session_id=f"s{number}")
     scheduler.feed_pcm16(data, speech=True)
-    scheduler.add_final(RefineParentFinal(
-        utterance_id=f"u{number}", final_digest="a" * 64, audio_sha256=digest,
-        start_sample=0, end_sample=len(data) // 2, observed_text="ええ、買わない、買わない。",
-    ))
+    scheduler.add_final(
+        RefineParentFinal(
+            utterance_id=f"u{number}",
+            final_digest="a" * 64,
+            audio_sha256=digest,
+            start_sample=0,
+            end_sample=len(data) // 2,
+            observed_text="ええ、買わない、買わない。",
+        )
+    )
     return scheduler.force("eof")[0]
 
 
 def worker(factory, *, capacity=2, max_text_chars=100):
-    return _FifoRefiner(factory, decoder_id="pinned-test-decoder", capacity=capacity,
-                        max_text_chars=max_text_chars)
+    return _FifoRefiner(
+        factory, decoder_id="pinned-test-decoder", capacity=capacity, max_text_chars=max_text_chars
+    )
 
 
 def runtime(factory, **kwargs):
     return GroupedRealtimeReazon(
         kwargs.pop("decoder", lambda _: "ええ、買わない、買わない。"),
-        refine_decoder_factory=factory, refine_decoder_id="pinned-test-decoder",
-        config=RealtimeReazonConfig(partial_interval_ms=100, min_silence_ms=100,
-                                   max_speech_ms=600, preroll_ms=100, max_chunk_ms=100),
-        group_config=GroupedRefineConfig(idle_gap_ms=300, max_group_ms=2000,
-                                        min_group_ms=200, history_keep_ms=2300),
-        session_id="test-session", **kwargs,
+        refine_decoder_factory=factory,
+        refine_decoder_id="pinned-test-decoder",
+        config=RealtimeReazonConfig(
+            partial_interval_ms=100,
+            min_silence_ms=100,
+            max_speech_ms=600,
+            preroll_ms=100,
+            max_chunk_ms=100,
+        ),
+        group_config=GroupedRefineConfig(
+            idle_gap_ms=300, max_group_ms=2000, min_group_ms=200, history_keep_ms=2300
+        ),
+        session_id="test-session",
+        **kwargs,
     )
 
 
@@ -79,11 +94,13 @@ def test_factory_is_lazy_and_audio_only_decoder_is_warm_and_fifo():
 
     def factory():
         creations.append(threading.get_ident())
+
         def decode(item):
             assert isinstance(item, RealtimeDecodeInput)
             assert not hasattr(item, "parents")
             calls.append(item)
             return f"候補:{item.session_id}"
+
         return decode
 
     w = worker(factory)
@@ -102,9 +119,11 @@ def test_factory_is_lazy_and_audio_only_decoder_is_warm_and_fifo():
 
 def test_completed_but_unconsumed_work_also_uses_queue_capacity():
     entered = threading.Event()
+
     def decode(_):
         entered.set()
         return "候補"
+
     w = worker(lambda: decode, capacity=1)
     try:
         w.submit(request(1))
@@ -122,6 +141,7 @@ def test_completed_but_unconsumed_work_also_uses_queue_capacity():
 def test_ineligible_short_group_never_initializes_model():
     def forbidden():
         raise AssertionError("must not load a model")
+
     w = worker(forbidden)
     result = w.submit(request(milliseconds=100))
     assert result.status == "skipped" and result.reason == "group-too-short"
@@ -137,10 +157,15 @@ def test_non_text_decoder_return_becomes_sanitized_error(bad):
     assert result.reason == "decode-failed:TypeError"
 
 
-@pytest.mark.parametrize("text,status,reason", [
-    ("", "empty", "empty-decode"), (" \n", "empty", "empty-decode"),
-    ("a" * 101, "error", "text-limit"), (" ええ、買わない。 ", "candidate", None),
-])
+@pytest.mark.parametrize(
+    "text,status,reason",
+    [
+        ("", "empty", "empty-decode"),
+        (" \n", "empty", "empty-decode"),
+        ("a" * 101, "error", "text-limit"),
+        (" ええ、買わない。 ", "candidate", None),
+    ],
+)
 def test_empty_large_and_verbatim_text(text, status, reason):
     w = worker(lambda: lambda _: text)
     w.submit(request())
@@ -151,12 +176,14 @@ def test_empty_large_and_verbatim_text(text, status, reason):
 
 def test_exception_message_is_not_published_and_worker_keeps_running():
     count = 0
+
     def decode(_):
         nonlocal count
         count += 1
         if count == 1:
             raise RuntimeError("PRIVATE_PATH PRIVATE_SPEECH")
         return "二番目"
+
     w = worker(lambda: decode)
     w.submit(request(1))
     w.submit(request(2))
@@ -167,9 +194,11 @@ def test_exception_message_is_not_published_and_worker_keeps_running():
 
 def test_failed_factory_runs_once_per_epoch_without_retry_storm():
     calls = []
+
     def factory():
         calls.append(1)
         raise FileNotFoundError("PRIVATE_PATH")
+
     w = worker(factory)
     w.submit(request(1))
     w.submit(request(2))
@@ -181,10 +210,12 @@ def test_failed_factory_runs_once_per_epoch_without_retry_storm():
 
 def test_blocked_refine_does_not_block_fast_finals_and_close_reports_timeout():
     entered, release = threading.Event(), threading.Event()
+
     def decode(_):
         entered.set()
         assert release.wait(5)
         return "遅い再認識"
+
     rt = runtime(lambda: decode, max_outstanding_groups=1)
     try:
         events = utterance(rt)
@@ -209,14 +240,24 @@ def test_blocked_refine_does_not_block_fast_finals_and_close_reports_timeout():
 
 def test_grouped_audio_exactly_matches_continuous_stream_with_overlapping_preroll():
     calls = []
+
     def decode(item):
         calls.append(item)
         return "ええ、買わない。"
+
     rt = runtime(lambda: decode)
     raw = []
     events = []
-    for value, speech in [(0, False), (1, True), (1, True), (1, True),
-                          (0, False), (2, True), (2, True), (0, False)]:
+    for value, speech in [
+        (0, False),
+        (1, True),
+        (1, True),
+        (1, True),
+        (0, False),
+        (2, True),
+        (2, True),
+        (0, False),
+    ]:
         raw.append(pcm(value=value))
         events.extend(rt.feed_pcm16(raw[-1], speech=speech))
     parents_before = rt.session.finals
@@ -226,7 +267,7 @@ def test_grouped_audio_exactly_matches_continuous_stream_with_overlapping_prerol
     req = result[0].request
     assert len(req.parents) == 2
     assert req.parents[0].end_sample > req.parents[1].start_sample
-    expected = b"".join(raw)[req.start_sample * 2:req.end_sample * 2]
+    expected = b"".join(raw)[req.start_sample * 2 : req.end_sample * 2]
     assert calls[0].pcm16le == req.pcm16le == expected
     assert sum(len(p.pcm16le) for p in parents_before) > len(expected)
     assert rt.session.finals == parents_before
@@ -272,9 +313,11 @@ def test_no_idle_group_during_active_speech_and_long_stream_survives_history_rol
 @pytest.mark.parametrize("flush", [False, True])
 def test_reset_isolates_pending_groups_and_recreates_decoder_on_owner_thread(flush):
     creations = []
+
     def factory():
         creations.append(threading.get_ident())
         return lambda _: "候補"
+
     rt = runtime(factory)
     events = utterance(rt)
     old_id = rt.session.session_id
@@ -294,10 +337,12 @@ def test_reset_isolates_pending_groups_and_recreates_decoder_on_owner_thread(flu
 
 def test_reset_drops_inflight_old_result_and_counts_it_toward_capacity():
     entered, release = threading.Event(), threading.Event()
+
     def decode(_):
         entered.set()
         assert release.wait(5)
         return "旧セッション"
+
     rt = runtime(lambda: decode, max_outstanding_groups=1)
     try:
         utterance(rt)
@@ -318,11 +363,17 @@ def test_reset_drops_inflight_old_result_and_counts_it_toward_capacity():
         rt._worker.close(5)
 
 
-@pytest.mark.parametrize("pcm_value,speech,error", [
-    (b"", True, ValueError), (b"x", True, ValueError),
-    (bytearray(b"xx"), True, TypeError), (pcm(101), True, ValueError),
-    (pcm(), 1, TypeError), (pcm(), None, TypeError),
-])
+@pytest.mark.parametrize(
+    "pcm_value,speech,error",
+    [
+        (b"", True, ValueError),
+        (b"x", True, ValueError),
+        (bytearray(b"xx"), True, TypeError),
+        (pcm(101), True, ValueError),
+        (pcm(), 1, TypeError),
+        (pcm(), None, TypeError),
+    ],
+)
 def test_invalid_input_does_not_advance_either_timeline(pcm_value, speech, error):
     rt = runtime(lambda: lambda _: "候補")
     try:
@@ -347,8 +398,9 @@ def test_bad_timeout_does_not_close_or_reset_session(value):
         rt.close(timeout_seconds=5)
 
 
-@pytest.mark.parametrize("field,value", [("final_digest", "b" * 64),
-                                        ("text", "改変"), ("audio_sha256", "c" * 64)])
+@pytest.mark.parametrize(
+    "field,value", [("final_digest", "b" * 64), ("text", "改変"), ("audio_sha256", "c" * 64)]
+)
 def test_tampered_parent_proof_rejected_before_registration(field, value):
     rt = runtime(lambda: lambda _: "候補")
     data = pcm(300)
@@ -386,19 +438,25 @@ def test_tampered_continuous_pcm_is_rejected_even_with_valid_parent_digest():
 
 def test_outcome_digest_excludes_latency_but_binds_candidate_and_request():
     result = GroupedRefineOutcome(request(), "decoder", "candidate", "候補", None, 1.0)
-    assert result.as_dict()["evidenceDigest"] == replace(
-        result, decode_duration_ms=2.0).as_dict()["evidenceDigest"]
-    assert result.as_dict()["evidenceDigest"] != replace(
-        result, text="違う候補").as_dict()["evidenceDigest"]
+    assert (
+        result.as_dict()["evidenceDigest"]
+        == replace(result, decode_duration_ms=2.0).as_dict()["evidenceDigest"]
+    )
+    assert (
+        result.as_dict()["evidenceDigest"]
+        != replace(result, text="違う候補").as_dict()["evidenceDigest"]
+    )
     with pytest.raises(FrozenInstanceError):
         result.text = "変更"
 
 
 def test_abort_does_not_retry_failed_fast_decoder():
     calls = []
+
     def fail(_):
         calls.append(1)
         raise RuntimeError("decode")
+
     rt = runtime(lambda: lambda _: "候補", decoder=fail)
     with pytest.raises(RuntimeError):
         rt.feed_pcm16(pcm(100), speech=True)
