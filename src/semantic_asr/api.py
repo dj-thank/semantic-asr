@@ -608,6 +608,7 @@ def _confidence_eligible(
         and transcriber.evidence_budget.total_cost_ms == 0
         and transcriber.evidence_budget.max_actions == 0
         and transcriber.evidence_enricher is None
+        and not transcriber.expand_collapsed_candidates
         and transcriber.second_ear is None
         and transcriber.teacher is None
         and transcriber.forced_aligner is None

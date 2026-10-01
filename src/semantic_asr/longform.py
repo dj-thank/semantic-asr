@@ -576,7 +576,11 @@ class SemanticASRTranscriber:
         relisten_beam_size: int = 12,
         relisten_hypotheses: int = 8,
         surface_policy: SurfacePolicy = "lenient",
+        expand_collapsed_candidates: bool = False,
     ) -> None:
+        if not isinstance(expand_collapsed_candidates, bool):
+            raise TypeError("expand_collapsed_candidates must be a boolean")
+        self.expand_collapsed_candidates = expand_collapsed_candidates
         self.base_adapter = base_adapter
         self.runtime_profile_name: str | None = None
         self.runtime_profile_digest: str | None = None
@@ -793,6 +797,8 @@ class SemanticASRTranscriber:
             candidates = aggregate_surface_candidates(
                 candidates, id_prefix="window", policy=self.surface_policy
             )
+        initial_surface_keys = {lenient_surface_key(row.text) for row in candidates}
+        expansion_requested = self.expand_collapsed_candidates and len(initial_surface_keys) == 1
         unscored_primary = any(
             candidate.metadata.get("scoreKind") == "unscored-transcript" for candidate in candidates
         )
@@ -825,9 +831,20 @@ class SemanticASRTranscriber:
             whole_window_start_ms=window.start_ms,
             whole_window_end_ms=window.end_ms,
             minimum_evidence_coverage=self.fusion_config.minimum_evidence_coverage,
+            expand_collapsed_candidates=self.expand_collapsed_candidates,
+            allow_primary_expansion=(
+                self.relisten_beam_size >= self.beam_size
+                and self.relisten_hypotheses >= self.hypotheses
+                and (
+                    self.relisten_beam_size > self.beam_size
+                    or self.relisten_hypotheses > self.hypotheses
+                )
+            ),
         )
         routing_diagnostics: dict[str, Any] = {"enabled": False}
-        if self.balanced_router and (plan.selected or plan.rejected):
+        if expansion_requested and self.balanced_router:
+            routing_diagnostics["bypassedReason"] = "single-expansion-limit"
+        if not expansion_requested and self.balanced_router and (plan.selected or plan.rejected):
             routed = route_evidence_actions(
                 (*plan.selected, *plan.rejected),
                 budget=self.evidence_budget,
@@ -936,7 +953,9 @@ class SemanticASRTranscriber:
 
         # An independent transcript is useful support, but not calibrated
         # acceptance evidence. Agreement must not remove this abstention.
-        force_provisional = unscored_primary
+        # Pool expansion changes the selection distribution. Neither successful
+        # retrieval nor a failed/budget-blocked probe establishes calibration.
+        force_provisional = unscored_primary or expansion_requested
 
         teacher_result: TeacherResult | None = None
         teacher_cache_hit = False
@@ -1035,6 +1054,21 @@ class SemanticASRTranscriber:
             "unscoredPrimary": unscored_primary,
             "forcedProvisional": force_provisional,
         }
+        if self.expand_collapsed_candidates:
+            final_surface_keys = {lenient_surface_key(row.text) for row in candidates}
+            diagnostics["candidateExpansion"] = {
+                "enabled": True,
+                "requested": expansion_requested,
+                "initialDistinctSurfaceCount": len(initial_surface_keys),
+                "finalDistinctSurfaceCount": len(final_surface_keys),
+                "addedDistinctSurfaceCount": len(final_surface_keys - initial_surface_keys),
+                "attempted": expansion_requested and execution.attempted > 0,
+                "completed": expansion_requested
+                and any(row["status"] in {"completed", "cache-hit"} for row in execution.records),
+                "reason": plan.stopping_reason if expansion_requested else "pool-not-collapsed",
+                "calibrationStatus": "not-established",
+                "gainSemantics": "routing-heuristic-not-probability",
+            }
         return LongformSegment(
             window=window,
             observed=observed,
