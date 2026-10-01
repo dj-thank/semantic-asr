@@ -58,7 +58,9 @@ def test_second_identical_word_uses_offsets_not_find_or_global_replace():
     assert result.drafts[0].text == "えー、歯垢原品、手工芸品を売る、いや売らない。"
 
 
-@pytest.mark.parametrize("replacement", ["しゅこうげいひん", "工芸品", " 手工芸品 ", "手工芸品、手工芸品"])
+@pytest.mark.parametrize(
+    "replacement", ["しゅこうげいひん", "工芸品", " 手工芸品 ", "手工芸品、手工芸品"]
+)
 def test_replacement_length_and_surface_are_not_normalized(replacement):
     parent = window()
     result = generate(parent, [anchor(parent)], texts=[replacement])
