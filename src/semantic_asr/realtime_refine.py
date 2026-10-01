@@ -442,10 +442,27 @@ class GroupedRefineScheduler:
 
         if not isinstance(speech, bool):
             raise TypeError("speech must be bool")
+        # Validate before closing a group: malformed/discontinuous input must not
+        # mutate pending evidence. Close old finals before a long active utterance
+        # can push their PCM out of the rolling history (no VAD idle is implied).
+        if not isinstance(pcm16le, bytes):
+            raise TypeError("pcm16le must be bytes")
+        if not pcm16le or len(pcm16le) % 2:
+            raise ValueError("pcm16le must contain non-empty whole int16 samples")
+        if start_sample is not None:
+            _strict_int(start_sample, name="start_sample", minimum=0)
+            if start_sample != self.history.end_sample:
+                raise ValueError("PCM history must be contiguous")
+        next_end = self.history.end_sample + len(pcm16le) // 2
+        output: tuple[GroupedRefineRequest, ...] = ()
+        if self._pending and (
+            next_end - self._pending[0].start_sample > self.config.max_group_samples
+        ):
+            output = (self._close("max-duration"),)
         self.history.append(pcm16le, start_sample=start_sample)
         if not self._pending:
             self._idle_silence_samples = 0
-            return ()
+            return output
         if speech:
             self._idle_silence_samples = 0
             return ()
