@@ -123,6 +123,7 @@ class _FifoRefiner:
         self._active: tuple[int, str] | None = None
         self._thread: threading.Thread | None = None
         self._closed = False
+        self._terminal_error: str | None = None
         self.peak_outstanding = 0
 
     def receipt(self, request: GroupedRefineRequest, reason: str) -> GroupedRefineOutcome:
@@ -145,6 +146,10 @@ class _FifoRefiner:
         with self._condition:
             if self._closed:
                 raise RuntimeError("refine worker is closed")
+            if self._terminal_error is not None:
+                return GroupedRefineOutcome(
+                    request, self.decoder_id, "error", reason=self._terminal_error
+                )
             if not request.eligible_for_decode:
                 return self.receipt(request, request.skip_reason or "ineligible")
             if self._count() >= self.capacity:
@@ -231,6 +236,19 @@ class _FifoRefiner:
                     self._condition.notify_all()
                 # Do not retain the previous group's PCM while the worker is idle.
                 del request, outcome
+        except BaseException as exc:
+            # A callback can terminate this thread without raising Exception.
+            # Account for every accepted group and keep the worker terminal;
+            # retrying the factory would hide the failure or repeat side effects.
+            with self._condition:
+                self._terminal_error = f"worker-terminated:{type(exc).__name__}"
+                self._queue.clear()
+                for group_id, pending in self._outstanding.items():
+                    if group_id not in self._ready:
+                        self._ready[group_id] = GroupedRefineOutcome(
+                            pending, self.decoder_id, "error", reason=self._terminal_error
+                        )
+                self._condition.notify_all()
         finally:
             decoder = None
             with self._condition:
@@ -323,6 +341,8 @@ class GroupedRealtimeReazon:
         )
         self._ended = False
         self._closed = False
+        self._failed = False
+        self._failed_requests: list[GroupedRefineRequest] = []
 
     @property
     def closed(self) -> bool:
@@ -385,6 +405,8 @@ class GroupedRealtimeReazon:
     ) -> tuple[RealtimeEvent | GroupedRefineOutcome, ...]:
         if self._closed or self._ended:
             raise RuntimeError("cannot feed a closed or flushed session")
+        if self._failed:
+            raise RuntimeError("failed session requires abort or close")
         if not isinstance(speech, bool):
             raise TypeError("speech must be bool")
         if not isinstance(pcm16le, bytes):
@@ -398,8 +420,15 @@ class GroupedRealtimeReazon:
                 pcm16le, speech=speech, start_sample=self.session.sample_cursor
             )
         )
-        events = self.session.feed_pcm16(pcm16le, speech=speech)
-        requests.extend(self._register(events))
+        try:
+            events = self.session.feed_pcm16(pcm16le, speech=speech)
+            requests.extend(self._register(events))
+        except BaseException:
+            # The scheduler may have closed parents before the fast decoder
+            # failed. Keep those requests until abort can publish their receipts.
+            self._failed_requests.extend(requests)
+            self._failed = True
+            raise
         return (*events, *self._submit(requests))
 
     def _finish(
@@ -407,9 +436,17 @@ class GroupedRealtimeReazon:
     ) -> tuple[tuple[RealtimeEvent, ...], list[GroupedRefineRequest]]:
         if self._ended:
             return (), []
-        events = self.session.flush()
-        requests = self._register(events)
-        requests.extend(self.scheduler.force(trigger))
+        if self._failed:
+            raise RuntimeError("failed session requires abort or close")
+        requests: list[GroupedRefineRequest] = []
+        try:
+            events = self.session.flush()
+            requests.extend(self._register(events))
+            requests.extend(self.scheduler.force(trigger))
+        except BaseException:
+            self._failed_requests.extend(requests)
+            self._failed = True
+            raise
         self._ended = True
         return events, requests
 
@@ -446,6 +483,8 @@ class GroupedRealtimeReazon:
         timeout_seconds = _timeout(timeout_seconds)
         if self._closed:
             return ()
+        if self._failed:
+            return self.abort()
         events = self.flush()
         self._closed = True
         return (*events, *self._worker.close(timeout_seconds))
@@ -455,7 +494,9 @@ class GroupedRealtimeReazon:
         if self._closed:
             return ()
         self._closed = True
-        output = [self._worker.receipt(item, "aborted") for item in self.scheduler.force("reset")]
+        requests = [*self._failed_requests, *self.scheduler.force("reset")]
+        self._failed_requests.clear()
+        output = [self._worker.receipt(item, "aborted") for item in requests]
         output.extend(self._worker.discard("aborted"))
         output.extend(self._worker.close(0))
         return tuple(output)

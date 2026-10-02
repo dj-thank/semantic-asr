@@ -163,6 +163,18 @@ a completed run with an explicit skip, not a measured recognition result.
 Exception messages may contain private paths/speech and are not published; only
 failure categories and exception class names are emitted.
 
+If a factory or decoder unexpectedly terminates the worker (including
+`SystemExit` or `KeyboardInterrupt` on that thread), every accepted unfinished
+group receives an error outcome. Already completed outcomes remain intact.
+Later submissions receive the same terminal error without restarting the model;
+the owner must create a new runtime to resume refinement. These error outcomes
+make the WAV runner report `partial`, even though the failed thread has exited.
+
+A synchronous fast-decoder failure still raises the original exception. Groups
+already closed by the scheduler are retained for `abort()` discard receipts.
+The failed coordinator rejects further feed/flush/reset calls; `close()` aborts
+without retrying that decoder. Immutable first-pass finals remain available.
+
 `reset(flush_pending=True, timeout_seconds=...)` flushes/drains old work within
 the deadline. `False` explicitly discards it. Both invalidate old results and
 emit receipts before starting a new session ID. An old in-flight call still
@@ -188,6 +200,8 @@ New model-free tests cover exact PCM and overlapping pre-roll, parent tampering,
 history rollover, blocked refine while fast finals continue, FIFO/capacity,
 lazy/warm decoder ownership, failure/empty/oversized text, reset isolation,
 deadline receipts, EOF, default-off and synthetic-WAV runner integration.
+Failure-receipt regressions additionally cover a fast partial/final exception
+immediately after maximum-duration closure and terminal worker interruptions.
 These are software tests, not real Reazon inference, training or CER evidence.
 Exact commands, source identities, failures/skips and results belong in the PR.
 
