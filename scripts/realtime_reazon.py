@@ -28,6 +28,8 @@ from semantic_asr.realtime_reazon import (
     RealtimeReazonConfig,
     RealtimeReazonSession,
 )
+from semantic_asr.realtime_refine import GroupedRefineConfig
+from semantic_asr.realtime_refine_runtime import GroupedRealtimeReazon, GroupedRefineOutcome
 from semantic_asr.reazon_adapter import ReazonSpeechK2Adapter
 from semantic_asr.revisions import verify_artifact_sha256
 
@@ -147,6 +149,46 @@ def make_reazon_decoder(adapter: ReazonSpeechK2Adapter):
     return decode
 
 
+def make_reazon_session(adapter: ReazonSpeechK2Adapter, args: argparse.Namespace):
+    """Keep the existing default; opt in to a separately owned warm second pass."""
+    decoder = make_reazon_decoder(adapter)
+    # Silero already owns endpointing. Do not add another 350 ms here.
+    config = RealtimeReazonConfig(
+        partial_interval_ms=args.partial_interval_ms,
+        min_silence_ms=32,
+        max_speech_ms=round(args.max_speech * 1000),
+        preroll_ms=args.preroll_ms,
+        refine_idle_ms=args.refine_idle_ms,
+        max_chunk_ms=32,
+        max_history_utterances=args.max_history_utterances,
+    )
+    if not getattr(args, "grouped_refine", False):
+        return RealtimeReazonSession(decoder, partial_decoder=decoder, config=config)
+
+    # Snapshot arguments. The native recognizer is constructed and used ONLY on
+    # its worker thread, never concurrently shared with the first-pass decoder.
+    model_dir = Path(args.model_dir).expanduser().resolve()
+    artifact_sha256 = args.model_sha256
+    threads = args.threads
+
+    def factory():
+        owned_adapter = ReazonSpeechK2Adapter(
+            model_dir, artifact_sha256=artifact_sha256, cpu_threads=threads
+        )
+        return make_reazon_decoder(owned_adapter)
+
+    return GroupedRealtimeReazon(
+        decoder,
+        refine_decoder_factory=factory,
+        refine_decoder_id=(
+            f"reazon:{adapter.model_artifact_sha256}:sherpa:{adapter.runtime_revision}"
+        ),
+        config=config,
+        group_config=GroupedRefineConfig(idle_gap_ms=args.refine_idle_ms),
+        max_outstanding_groups=args.max_pending_groups,
+    )
+
+
 def _emit(events, *, output) -> None:
     for event in events:
         line = json.dumps(event.as_dict(), ensure_ascii=False, allow_nan=False)
@@ -159,6 +201,19 @@ def _emit(events, *, output) -> None:
 def run(args: argparse.Namespace) -> int:
     if not args.allow_local_research:
         raise ValueError("realtime execution requires --allow-local-research")
+    grouped = getattr(args, "grouped_refine", False)
+    shutdown_timeout = getattr(args, "refine_shutdown_timeout", 5.0)
+    if grouped:
+        shutdown_timeout = _require_finite_number(shutdown_timeout, name="refine_shutdown_timeout")
+        if shutdown_timeout < 0:
+            raise ValueError("refine_shutdown_timeout must be non-negative")
+        capacity = args.max_pending_groups
+        if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 1:
+            raise ValueError("max_pending_groups must be a positive integer")
+        max_speech = _require_finite_number(args.max_speech, name="max_speech")
+        if not 0 < max_speech <= 24.968:
+            raise ValueError("grouped refine requires max_speech in (0, 24.968]")
+        GroupedRefineConfig(idle_gap_ms=args.refine_idle_ms)
     source = Path(args.audio).expanduser().resolve()
     model_dir = Path(args.model_dir).expanduser().resolve()
     vad_model = Path(args.vad_model).expanduser().resolve()
@@ -185,23 +240,7 @@ def run(args: argparse.Namespace) -> int:
         min_silence_seconds=args.vad_min_silence,
         max_speech_seconds=args.max_speech,
     )
-    decoder = make_reazon_decoder(adapter)
-    # Silero already owns endpointing.  Once it transitions to non-speech, one
-    # 512-sample chunk is enough for the evidence session to close its utterance;
-    # adding another 350 ms here would double-count endpointing latency.
-    session = RealtimeReazonSession(
-        decoder,
-        partial_decoder=decoder,
-        config=RealtimeReazonConfig(
-            partial_interval_ms=args.partial_interval_ms,
-            min_silence_ms=32,
-            max_speech_ms=round(args.max_speech * 1000),
-            preroll_ms=args.preroll_ms,
-            refine_idle_ms=args.refine_idle_ms,
-            max_chunk_ms=32,
-            max_history_utterances=args.max_history_utterances,
-        ),
-    )
+    session = make_reazon_session(adapter, args)
 
     output_handle = None
     if args.events_jsonl is not None:
@@ -214,6 +253,21 @@ def run(args: argparse.Namespace) -> int:
     started = time.perf_counter()
     accepted_samples = 0
     drained_vad_segments = 0
+    outcome_counts: dict[str, int] = {}
+    refine_incomplete = False
+
+    def emit(events):
+        nonlocal refine_incomplete
+        for event in events:
+            if isinstance(event, GroupedRefineOutcome):
+                outcome_counts[event.status] = outcome_counts.get(event.status, 0) + 1
+                if event.status in {"error", "empty"} or event.reason in {
+                    "queue-capacity",
+                    "shutdown-timeout",
+                }:
+                    refine_incomplete = True
+        _emit(events, output=output_handle)
+
     try:
         with wave.open(str(source), "rb") as handle:
             while True:
@@ -225,18 +279,22 @@ def run(args: argparse.Namespace) -> int:
                 samples = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
                 vad.accept_waveform(samples)
                 speech = bool(vad.is_speech_detected())
-                _emit(session.feed_pcm16(raw, speech=speech), output=output_handle)
+                emit(session.feed_pcm16(raw, speech=speech))
                 drained_vad_segments += _drain_vad_queue(vad)
                 accepted_samples += len(samples)
                 if args.realtime:
                     time.sleep(len(samples) / SAMPLE_RATE)
         vad.flush()
         drained_vad_segments += _drain_vad_queue(vad)
-        _emit(session.flush(), output=output_handle)
+        # Publish the last fast final BEFORE waiting for the second pass.
+        emit(session.flush())
+        if isinstance(session, GroupedRealtimeReazon):
+            emit(session.close(timeout_seconds=shutdown_timeout))
+            refine_incomplete = refine_incomplete or session.worker_alive
         elapsed = time.perf_counter() - started
         summary = {
             "schema": "semantic-asr-realtime-run-summary-v1",
-            "status": "completed",
+            "status": "partial" if refine_incomplete else "completed",
             "audio": source.name,
             "inputSamples": total_frames,
             "acceptedSamples": accepted_samples,
@@ -258,13 +316,29 @@ def run(args: argparse.Namespace) -> int:
                 "not a latency-optimized production path."
             ),
         }
+        if isinstance(session, GroupedRealtimeReazon):
+            summary["groupedRefine"] = {
+                "enabled": True,
+                "outcomes": outcome_counts,
+                "peakPendingGroups": session.peak_pending_groups,
+                "workerStillRunning": session.worker_alive,
+                "shutdownTimeoutSeconds": shutdown_timeout,
+                "automaticallyApplied": False,
+            }
         print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
         if output_handle is not None:
             output_handle.write(json.dumps(summary, ensure_ascii=False, allow_nan=False) + "\n")
+    except BaseException as exc:
+        if isinstance(session, GroupedRealtimeReazon) and not session.closed:
+            try:
+                emit(session.abort())
+            except Exception as cleanup_error:
+                exc.add_note(f"grouped cleanup also failed: {type(cleanup_error).__name__}")
+        raise
     finally:
         if output_handle is not None:
             output_handle.close()
-    return 0
+    return 2 if refine_incomplete else 0
 
 
 def main() -> int:
@@ -283,6 +357,13 @@ def main() -> int:
     parser.add_argument("--preroll-ms", type=int, default=800)
     parser.add_argument("--refine-idle-ms", type=int, default=2000)
     parser.add_argument("--max-history-utterances", type=int, default=16)
+    parser.add_argument(
+        "--grouped-refine",
+        action="store_true",
+        help="opt in to longer-context candidates on a separate bounded worker (not auto-applied)",
+    )
+    parser.add_argument("--max-pending-groups", type=int, default=2)
+    parser.add_argument("--refine-shutdown-timeout", type=float, default=5.0)
     parser.add_argument("--realtime", action="store_true", help="sleep between chunks")
     parser.add_argument("--allow-local-research", action="store_true")
     args = parser.parse_args()
