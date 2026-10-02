@@ -15,14 +15,20 @@ without changing evidence semantics.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib
 import json
 import math
+import platform
 import time
 import wave
+from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from semantic_asr.adapters import DecodeRequest
+from semantic_asr.contracts import sha256_json
+from semantic_asr.realtime_metrics import TimingSummary
 from semantic_asr.realtime_reazon import (
     RealtimeDecodeInput,
     RealtimeReazonConfig,
@@ -31,13 +37,33 @@ from semantic_asr.realtime_reazon import (
 from semantic_asr.realtime_refine import GroupedRefineConfig
 from semantic_asr.realtime_refine_runtime import GroupedRealtimeReazon, GroupedRefineOutcome
 from semantic_asr.reazon_adapter import ReazonSpeechK2Adapter
-from semantic_asr.revisions import verify_artifact_sha256
+from semantic_asr.revisions import sha256_artifact, verify_artifact_sha256
 
 SAMPLE_RATE = 16_000
 WINDOW_SIZE = 512
 VAD_MIN_SPEECH_S = 0.25
 VAD_BUFFER_S = 30.0
 VAD_NUM_THREADS = 1
+
+
+def _implementation_identity() -> dict[str, str]:
+    """Identify local implementation files without publishing absolute paths."""
+    identities = {"scripts/realtime_reazon.py": sha256_artifact(Path(__file__))}
+    for name in (
+        "adapters",
+        "audio",
+        "benchmark",
+        "contracts",
+        "realtime_metrics",
+        "realtime_reazon",
+        "realtime_refine",
+        "realtime_refine_runtime",
+        "reazon_adapter",
+        "revisions",
+    ):
+        module = importlib.import_module(f"semantic_asr.{name}")
+        identities[f"semantic_asr/{name}.py"] = sha256_artifact(Path(module.__file__))
+    return identities
 
 
 def _require_finite_number(value: object, *, name: str) -> float:
@@ -202,6 +228,21 @@ def run(args: argparse.Namespace) -> int:
     if not args.allow_local_research:
         raise ValueError("realtime execution requires --allow-local-research")
     grouped = getattr(args, "grouped_refine", False)
+    measure_runtime = getattr(args, "measure_runtime", False)
+    timing_limit = getattr(args, "timing_max_samples", 10_000)
+    timings = {}
+    if measure_runtime:
+        timings = {
+            name: TimingSummary(max_samples=timing_limit)
+            for name in (
+                "fastFinalDecodeMs",
+                "finalEmittingCallMs",
+                "refineQueueWaitMs",
+                "refineWorkerMs",
+                "refineFactoryMs",
+                "refineCompletionAfterSubmitMs",
+            )
+        }
     shutdown_timeout = getattr(args, "refine_shutdown_timeout", 5.0)
     if grouped:
         shutdown_timeout = _require_finite_number(shutdown_timeout, name="refine_shutdown_timeout")
@@ -221,6 +262,10 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError(f"audio does not exist: {source}")
     total_frames, _ = validate_wave(source)
     verify_artifact_sha256(vad_model, args.vad_model_sha256, identifier="VAD model")
+    input_identity = sha256_artifact(source) if measure_runtime else None
+    implementation_identity = _implementation_identity() if measure_runtime else None
+    pcm_digest = hashlib.sha256()
+    vad_trace_digest = hashlib.sha256(b"semantic-asr-vad-trace-v1\0")
 
     try:
         import numpy as np
@@ -228,6 +273,7 @@ def run(args: argparse.Namespace) -> int:
     except ImportError as exc:
         raise RuntimeError("install semantic-asr[sherpa] for realtime Reazon execution") from exc
 
+    setup_started = time.perf_counter() if measure_runtime else None
     adapter = ReazonSpeechK2Adapter(
         model_dir,
         artifact_sha256=args.model_sha256,
@@ -241,6 +287,7 @@ def run(args: argparse.Namespace) -> int:
         max_speech_seconds=args.max_speech,
     )
     session = make_reazon_session(adapter, args)
+    setup_ms = (time.perf_counter() - setup_started) * 1000 if measure_runtime else None
 
     output_handle = None
     if args.events_jsonl is not None:
@@ -255,10 +302,17 @@ def run(args: argparse.Namespace) -> int:
     drained_vad_segments = 0
     outcome_counts: dict[str, int] = {}
     refine_incomplete = False
+    untimed_refine_outcomes = 0
 
     def emit(events):
-        nonlocal refine_incomplete
+        nonlocal refine_incomplete, untimed_refine_outcomes
         for event in events:
+            if (
+                measure_runtime
+                and getattr(event, "kind", None) == "final"
+                and event.decode_duration_ms is not None
+            ):
+                timings["fastFinalDecodeMs"].add(event.decode_duration_ms)
             if isinstance(event, GroupedRefineOutcome):
                 outcome_counts[event.status] = outcome_counts.get(event.status, 0) + 1
                 if event.status in {"error", "empty"} or event.reason in {
@@ -266,7 +320,25 @@ def run(args: argparse.Namespace) -> int:
                     "shutdown-timeout",
                 }:
                     refine_incomplete = True
+                if measure_runtime:
+                    for name, duration in (
+                        ("refineQueueWaitMs", event.queue_wait_ms),
+                        ("refineWorkerMs", event.decode_duration_ms),
+                        ("refineFactoryMs", event.decoder_factory_duration_ms),
+                        ("refineCompletionAfterSubmitMs", event.completion_after_submit_ms),
+                    ):
+                        if duration is not None:
+                            timings[name].add(duration)
+                    if event.completion_after_submit_ms is None:
+                        untimed_refine_outcomes += 1
         _emit(events, output=output_handle)
+
+    def call_and_emit(callback, *positional, **keywords):
+        call_started = time.perf_counter() if measure_runtime else None
+        events = callback(*positional, **keywords)
+        if measure_runtime and any(getattr(event, "kind", None) == "final" for event in events):
+            timings["finalEmittingCallMs"].add((time.perf_counter() - call_started) * 1000)
+        emit(events)
 
     try:
         with wave.open(str(source), "rb") as handle:
@@ -279,7 +351,11 @@ def run(args: argparse.Namespace) -> int:
                 samples = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
                 vad.accept_waveform(samples)
                 speech = bool(vad.is_speech_detected())
-                emit(session.feed_pcm16(raw, speech=speech))
+                if measure_runtime:
+                    pcm_digest.update(raw)
+                    vad_trace_digest.update((len(raw) // 2).to_bytes(8, "big"))
+                    vad_trace_digest.update(bytes([speech]))
+                call_and_emit(session.feed_pcm16, raw, speech=speech)
                 drained_vad_segments += _drain_vad_queue(vad)
                 accepted_samples += len(samples)
                 if args.realtime:
@@ -287,11 +363,18 @@ def run(args: argparse.Namespace) -> int:
         vad.flush()
         drained_vad_segments += _drain_vad_queue(vad)
         # Publish the last fast final BEFORE waiting for the second pass.
-        emit(session.flush())
+        call_and_emit(session.flush)
         if isinstance(session, GroupedRealtimeReazon):
             emit(session.close(timeout_seconds=shutdown_timeout))
             refine_incomplete = refine_incomplete or session.worker_alive
         elapsed = time.perf_counter() - started
+        if measure_runtime:
+            if accepted_samples != total_frames:
+                raise ValueError("streamed PCM sample count does not match the WAV header")
+            if sha256_artifact(source) != input_identity:
+                raise ValueError("input audio changed during measured execution")
+            if _implementation_identity() != implementation_identity:
+                raise ValueError("implementation changed during measured execution")
         summary = {
             "schema": "semantic-asr-realtime-run-summary-v1",
             "status": "partial" if refine_incomplete else "completed",
@@ -324,6 +407,55 @@ def run(args: argparse.Namespace) -> int:
                 "workerStillRunning": session.worker_alive,
                 "shutdownTimeoutSeconds": shutdown_timeout,
                 "automaticallyApplied": False,
+            }
+        if measure_runtime:
+            first_pass = session.session if grouped else session
+            identity = {
+                "inputArtifactSha256": input_identity,
+                "inputPcmSha256": pcm_digest.hexdigest(),
+                "vadTraceSha256": vad_trace_digest.hexdigest(),
+                "modelArtifactSha256": adapter.model_artifact_sha256,
+                "vadArtifactSha256": args.vad_model_sha256.lower(),
+                "runtimeRevision": adapter.runtime_revision,
+                "numpyRevision": getattr(np, "__version__", None),
+                "cpuThreads": args.threads,
+                "vadThreads": VAD_NUM_THREADS,
+                "firstPassConfig": asdict(first_pass.config),
+                "vadConfig": summary["vad"],
+                "asrDecode": {
+                    "language": "ja",
+                    "beamSize": 4,
+                    "hypotheses": 1,
+                    "returnTimestamps": False,
+                    "initialPrompt": None,
+                    "hotwords": [],
+                },
+                "realtime": args.realtime,
+                "implementationFiles": implementation_identity,
+            }
+            durations = {name: metric.as_dict() for name, metric in timings.items()}
+            summary["runtimeMetrics"] = {
+                "schema": "semantic-asr-realtime-metrics-v1",
+                "identity": identity,
+                "comparisonIdentitySha256": sha256_json(identity),
+                "groupConfig": asdict(session.scheduler.config) if grouped else None,
+                "groupCapacity": args.max_pending_groups if grouped else None,
+                "timingMaxSamples": timing_limit,
+                "complete": all(metric["complete"] for metric in durations.values()),
+                "durations": durations,
+                "setupMs": setup_ms,
+                "rtfIncludesRealtimeSleep": bool(args.realtime),
+                "untimedRefineOutcomes": untimed_refine_outcomes,
+                "environment": {
+                    "python": platform.python_version(),
+                    "system": platform.system(),
+                    "machine": platform.machine(),
+                },
+                "note": (
+                    "Final-emitting call time excludes JSON output; worker completion time "
+                    "excludes owner polling/output. Worker service includes decoder factory. "
+                    "These are not speech-end or UI-delivery latencies."
+                ),
             }
         print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
         if output_handle is not None:
@@ -364,6 +496,12 @@ def main() -> int:
     )
     parser.add_argument("--max-pending-groups", type=int, default=2)
     parser.add_argument("--refine-shutdown-timeout", type=float, default=5.0)
+    parser.add_argument(
+        "--measure-runtime",
+        action="store_true",
+        help="record bounded engineering timings and source/config identities for paired runs",
+    )
+    parser.add_argument("--timing-max-samples", type=int, default=10_000)
     parser.add_argument("--realtime", action="store_true", help="sleep between chunks")
     parser.add_argument("--allow-local-research", action="store_true")
     args = parser.parse_args()
