@@ -207,6 +207,10 @@ Exact commands, source identities, failures/skips and results belong in the PR.
 
 ### Remaining experiment / promotion boundary
 
+For opt-in queue/service/factory timing and source/config identity capture, see
+[grouped runtime measurement](GROUPED_RUNTIME_MEASUREMENT.md). This preparation
+does not supply real-audio results or a transcript-quality evaluator.
+
 Compare first-pass-only and grouped decode on identical, authorized,
 source/speaker-disjoint recordings with pinned artifacts. Measure candidate
 coverage/oracle CER separately from selected CER, false corrections, negation,

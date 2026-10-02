@@ -52,6 +52,9 @@ class GroupedRefineOutcome:
     text: str | None = None
     reason: str | None = None
     decode_duration_ms: float | None = None
+    queue_wait_ms: float | None = None
+    decoder_factory_duration_ms: float | None = None
+    completion_after_submit_ms: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.request, GroupedRefineRequest):
@@ -65,8 +68,14 @@ class GroupedRefineOutcome:
                 raise ValueError("candidate requires non-empty text and no failure reason")
         elif self.text is not None or not isinstance(self.reason, str) or not self.reason:
             raise ValueError("non-candidate requires a reason and no text")
-        if self.decode_duration_ms is not None:
-            _timeout(self.decode_duration_ms)
+        for duration in (
+            self.decode_duration_ms,
+            self.queue_wait_ms,
+            self.decoder_factory_duration_ms,
+            self.completion_after_submit_ms,
+        ):
+            if duration is not None:
+                _timeout(duration)
 
     def as_dict(self) -> dict[str, object]:
         payload = {
@@ -88,6 +97,9 @@ class GroupedRefineOutcome:
             **payload,
             "evidenceDigest": hashlib.sha256(encoded).hexdigest(),
             "decodeDurationMs": self.decode_duration_ms,
+            "queueWaitMs": self.queue_wait_ms,
+            "decoderFactoryDurationMs": self.decoder_factory_duration_ms,
+            "completionAfterSubmitMs": self.completion_after_submit_ms,
         }
 
 
@@ -117,7 +129,7 @@ class _FifoRefiner:
         self.max_text_chars = max_text_chars
         self._condition = threading.Condition()
         self._epoch = 0
-        self._queue: deque[tuple[int, GroupedRefineRequest]] = deque()
+        self._queue: deque[tuple[int, GroupedRefineRequest, float]] = deque()
         self._outstanding: dict[str, GroupedRefineRequest] = {}
         self._ready: dict[str, GroupedRefineOutcome] = {}
         self._active: tuple[int, str] | None = None
@@ -157,7 +169,7 @@ class _FifoRefiner:
             if request.group_id in self._outstanding:
                 raise ValueError("duplicate outstanding group")
             self._outstanding[request.group_id] = request
-            self._queue.append((self._epoch, request))
+            self._queue.append((self._epoch, request, time.perf_counter()))
             self.peak_outstanding = max(self.peak_outstanding, self._count())
             if self._thread is None:
                 self._thread = threading.Thread(
@@ -181,24 +193,28 @@ class _FifoRefiner:
                         self._condition.wait()
                     if not self._queue:
                         return
-                    epoch, request = self._queue.popleft()
+                    epoch, request, submitted_at = self._queue.popleft()
                     self._active = (epoch, request.group_id)
                 started = time.perf_counter()
                 text = None
                 reason = None
                 status = "candidate"
+                factory_duration_ms = None
                 try:
                     if decoder_epoch != epoch:
                         # Release any previous session's model on its owner thread.
                         decoder = None
                         decoder_epoch = epoch
                         initialization_error = None
+                        factory_started = time.perf_counter()
                         try:
                             decoder = self._factory()
                             if not callable(decoder):
                                 raise TypeError("decoder factory must return a callable")
                         except Exception as exc:
                             initialization_error = f"decoder-initialization:{type(exc).__name__}"
+                        finally:
+                            factory_duration_ms = (time.perf_counter() - factory_started) * 1000
                     if initialization_error is not None:
                         status, reason = "error", initialization_error
                     else:
@@ -225,9 +241,18 @@ class _FifoRefiner:
                 except Exception as exc:
                     # Exception messages may contain paths or speech: emit only the class.
                     status, reason, text = "error", f"decode-failed:{type(exc).__name__}", None
-                elapsed = (time.perf_counter() - started) * 1000
+                completed_at = time.perf_counter()
+                elapsed = (completed_at - started) * 1000
                 outcome = GroupedRefineOutcome(
-                    request, self.decoder_id, status, text, reason, elapsed
+                    request,
+                    self.decoder_id,
+                    status,
+                    text,
+                    reason,
+                    elapsed,
+                    queue_wait_ms=(started - submitted_at) * 1000,
+                    decoder_factory_duration_ms=factory_duration_ms,
+                    completion_after_submit_ms=(completed_at - submitted_at) * 1000,
                 )
                 with self._condition:
                     if epoch == self._epoch and request.group_id in self._outstanding:
