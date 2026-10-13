@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from collections.abc import Mapping
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +43,8 @@ def render_vtt(result: LongformResult, *, normalized: bool = True) -> str:
             [
                 f"{_timecode(segment.window.start_ms, vtt=True)} --> "
                 f"{_timecode(segment.window.end_ms, vtt=True)}",
-                text.strip(),
+                # Transcripts are literal text, not WebVTT tags or character references.
+                escape(text.strip(), quote=False),
                 "",
             ]
         )
