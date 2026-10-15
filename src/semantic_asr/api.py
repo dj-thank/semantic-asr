@@ -492,7 +492,7 @@ class TranscriptResult:
         overwrite: bool = False,
         formats: set[str] | None = None,
     ) -> dict[str, str]:
-        """Write the standard artifact set plus an utterance-level SRT and facade JSON."""
+        """Write the selected artifacts and a hash-bound completion manifest last."""
 
         self.verify()
         documents = render_output_documents(self.longform, output_dir, formats=formats)
@@ -508,7 +508,12 @@ class TranscriptResult:
                 root / f"{stem}.transcript.json",
                 json.dumps(self.as_dict(), ensure_ascii=False, indent=2, allow_nan=False) + "\n",
             )
-        return publish_output_documents(documents, overwrite=overwrite)
+        return publish_output_documents(
+            documents,
+            overwrite=overwrite,
+            manifest_path=root / f"{stem}.semantic-asr.bundle.json",
+            evidence_sha256=self.evidence_sha256,
+        )
 
 
 def build_adapter(profile: RuntimeProfile) -> ASRAdapter:

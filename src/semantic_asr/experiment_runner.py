@@ -6,11 +6,11 @@ import os
 import time
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from ._file_lock import exclusive_file_lock
 from .adapters import ASRAdapter, DecodeRequest
 from .candidate_pool import aggregate_surface_candidates
 from .contracts import CandidateEvidence, canonical_json
@@ -382,44 +382,12 @@ def _load_checkpoint_rows(
     return rows
 
 
-@contextmanager
 def _checkpoint_writer_lock(checkpoint: Path):
     """Hold an OS-released advisory lock for one checkpoint writer/finalizer."""
-
-    lock_path = Path(str(checkpoint) + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = lock_path.open("a+b")
-    try:
-        if handle.seek(0, os.SEEK_END) == 0:
-            handle.write(b"\0")
-            handle.flush()
-            os.fsync(handle.fileno())
-        handle.seek(0)
-        try:
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            raise RuntimeError(f"checkpoint already has an active writer: {checkpoint}") from exc
-        try:
-            yield
-        finally:
-            handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    finally:
-        handle.close()
+    return exclusive_file_lock(
+        Path(str(checkpoint) + ".lock"),
+        conflict_message=f"checkpoint already has an active writer: {checkpoint}",
+    )
 
 
 def _validate_checkpoint_prefix(
