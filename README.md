@@ -481,9 +481,14 @@ meeting.txt                別レイヤーの読みやすい文章
 meeting.md                 監査情報とtimeline
 meeting.srt                字幕
 meeting.vtt                Web字幕
+meeting.semantic-asr.bundle.json  選択した出力全体の完了記録・ファイルhash
 ```
 
 絶対入力pathは既定で出力しません。
+
+保存結果の返却値には`manifest`も含まれます。`verify_output_bundle()`で各ファイルの
+hashを照合してから利用してください。中断時の部分出力、同時保存、上書きと既存出力の
+扱いは[出力bundle契約](docs/OUTPUT_BUNDLES.md)を参照してください。
 
 ## 評価
 
